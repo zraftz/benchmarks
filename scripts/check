@@ -17,4 +17,6 @@ if [[ "$mode" != tooling ]]; then
   cargo fmt --all -- --check
   cargo clippy --workspace --all-targets --locked -- -D warnings
   cargo test --workspace --locked
+  cargo fmt --manifest-path microbench/Cargo.toml -- --check
+  cargo test --manifest-path microbench/Cargo.toml --locked
 fi

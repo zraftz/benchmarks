@@ -7,6 +7,7 @@ import subprocess
 import uuid
 
 from .evidence import ROOT, capture, digest, source_digest, write_json
+from .selection import check_resolution
 
 IMPLEMENTATIONS = ("rafter", "raft-rs", "openraft")
 
@@ -18,6 +19,8 @@ def build() -> None:
     (dist / "build.json").unlink(missing_ok=True)
     if not (ROOT / "Cargo.lock").is_file():
         raise RuntimeError("Cargo.lock is missing; restore the checked-in lockfile before building")
+    pins = json.loads((ROOT / "implementations.lock.json").read_text())
+    check_resolution(ROOT, pins["rafter"]["rev"])
     for tool in ("cargo", "rustc", "go", "protoc", "git"):
         if not shutil.which(tool):
             raise RuntimeError(f"{tool} is missing; see README prerequisites")
@@ -38,7 +41,7 @@ def build() -> None:
     subprocess.run(["go", "build", "-trimpath", "-o", str(dist / "raft-bench-load"), "."],
                    cwd=ROOT / "loadgen", check=True)
     record = {
-        "schema": 1, "source_digest": source_digest(),
+        "schema": 1, "source_digest": source_digest(), "implementations": pins,
         "cargo_lock_sha256": digest(ROOT / "Cargo.lock"), "rust_tests_passed": True,
         "rustc": capture(["rustc", "-Vv"]), "cargo": capture(["cargo", "-V"]),
         "go": capture(["go", "version"]), "protoc": capture(["protoc", "--version"]),

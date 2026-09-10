@@ -1,0 +1,21 @@
+{
+  "repository": "https://github.com/zsumz/rafter",
+  "revision": "518aefd767dc0ef2c1f1ccc5f970c96456cfd109",
+  "original_git_blobs": {
+    "bench-compare/src/bin/bench-openraft.rs": "a264ebc664c215586765fb4108a2e19d16dfcb1c",
+    "bench-compare/src/bin/bench-raft-rs.rs": "1f30b7a13427346504119d55dc88a93943e7210c",
+    "bench-compare/src/bin/bench-rafter-codec.rs": "3362893f22295cb75c53e25129cc965bf55c0aa0",
+    "bench-compare/src/bin/bench-rafter-multiraft.rs": "1fa9e24f836348aad968f25e9c41a4cd89b3aa92",
+    "bench-compare/src/bin/bench-rafter-profile.rs": "ba1feb37406338dee5a3dc27cd2f511f9136b125",
+    "bench-compare/src/bin/bench-rafter-service.rs": "20fc2dcf6517f2915f4099db7b008ce1baef7e62",
+    "bench-compare/src/bin/bench-rafter.rs": "3bcb5b71251cf0ab2a3ca98bd15565a96cd9b338",
+    "bench-compare/src/bin/check-transport-receive-memory.rs": "3a3818da392623052a823292b2c88c5cda6c7482",
+    "bench-compare/src/lib.rs": "8e47674cbe05bca8cfe188d8cf4a14c92a4c0c83"
+  },
+  "changes": [
+    "Rafter path dependencies replaced with exact Git dependencies; lockfile refreshed for source IDs",
+    "Explicit OpenRaft snapshot data type for builds without serde",
+    "Formatting normalized with the pinned Rust toolchain"
+  ],
+  "note": "Benchmark sources are maintained here. Selected Rafter library revision is recorded separately in each run."
+}

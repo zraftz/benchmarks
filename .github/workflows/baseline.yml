@@ -2,13 +2,20 @@ name: Baseline benchmark
 on:
   workflow_dispatch:
     inputs:
-      scenario:
-        description: Workload scenario
+      rafter_ref:
+        description: 'Rafter branch, tag, or full SHA (blank uses checked-in pin)'
+        type: string
+        default: ''
+      suite:
+        description: Benchmark suite
         type: choice
-        options:
-          - durable-kv
-          - leader-loss
-          - follower-catchup
+        options: [both, durable, microbench, rafter-only]
+        default: both
+        required: true
+      scenario:
+        description: Durable workload scenario
+        type: choice
+        options: [durable-kv, leader-loss, follower-catchup]
         default: durable-kv
         required: true
 permissions:
@@ -21,13 +28,14 @@ defaults:
     shell: bash
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
   RUST_BACKTRACE: '1'
   GOTOOLCHAIN: local
 jobs:
   baseline:
-    name: Three-engine baseline
+    name: Selected Rafter baseline
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,35 +53,45 @@ jobs:
           sudo apt-get install -y protobuf-compiler build-essential
           toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
           rustup toolchain install "$toolchain" --profile minimal
-      - name: Locked build and tests
-        run: |
-          mkdir -p results
-          ./raft-bench build 2>&1 | tee results/baseline-build.log
-      - name: Record experiment scope
+      - name: Select Rafter revision
+        id: select
         env:
+          RAFTER_REF: ${{ inputs.rafter_ref }}
+          SUITE: ${{ inputs.suite }}
           SCENARIO: ${{ inputs.scenario }}
         run: |
-          cat > results/BASELINE.md <<EOF
-          # Initial baseline on a shared GitHub runner
-
-          Commit: $GITHUB_SHA
-          Scenario: $SCENARIO
-          Implementations: Rafter, raft-rs, OpenRaft
-          Offered rates: closed loop, 100/s, 1000/s
-          Repetitions: 3, with rotating implementation order
-          Per case: 60 seconds measured, 10 seconds warmup
-          Workload: writes, 512-byte values, 64 concurrent clients
-          Storage: runner disk under $RUNNER_TEMP/raft-bench-data
-
-          This is an initial reference from shared GitHub hardware. Results describe
-          these complete service integrations. Controlled hardware and review are
-          required before publishing a general performance ranking.
-
-          Open baseline/report.html for the comparison and inspect each case's
-          evidence and logs. Failed cases remain visible and fail the workflow.
-          EOF
-          cat results/BASELINE.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Run 27 benchmark cases
+          mkdir -p results
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'SUITE', 'SCENARIO', 'GITHUB_SHA')}, indent=2))
+          PY
+          if [[ -n "$RAFTER_REF" ]]; then
+            ./raft-bench select-rafter "$RAFTER_REF" 2>&1 | tee results/selection.log
+          fi
+          cp implementations.lock.json results/implementations.lock.json
+          python3 - <<'PY'
+          import json, os
+          with open('implementations.lock.json') as stream:
+              pin = json.load(stream)['rafter']
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write(f"Rafter: `{pin['rev']}`\n\nSuite: {os.environ['SUITE']}\n\nShared GitHub runner; compare all engines in the same run.\n")
+          PY
+      - name: In-memory benchmarks
+        if: inputs.suite != 'durable'
+        env:
+          SUITE: ${{ inputs.suite }}
+        run: |
+          mode=full
+          if [[ "$SUITE" == rafter-only ]]; then mode=rafter-only; fi
+          ./raft-bench microbench --mode "$mode" --runs 3 --output results/microbench
+          ./raft-bench verify results/microbench
+      - name: Locked durable build and tests
+        id: durable_build
+        if: ${{ !cancelled() && (inputs.suite == 'both' || inputs.suite == 'durable') && steps.select.outcome == 'success' }}
+        run: ./raft-bench build 2>&1 | tee results/baseline-build.log
+      - name: Run 27 durable cases
+        if: ${{ !cancelled() && steps.durable_build.outcome == 'success' }}
         env:
           SCENARIO: ${{ inputs.scenario }}
         run: |
@@ -83,18 +101,16 @@ jobs:
             --concurrency 64 --payload 512 \
             --data-root "$RUNNER_TEMP/raft-bench-data" \
             --output results/baseline 2>&1 | tee results/baseline-run.log
-      - name: Retain report and evidence
+      - name: Retain reports and evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: baseline-${{ inputs.scenario }}-${{ github.run_id }}
+          name: benchmarks-${{ github.run_id }}
           path: |
             Cargo.lock
+            microbench/Cargo.lock
             dist/build.json
             dist/rust-tests.log
-            results/BASELINE.md
-            results/baseline-build.log
-            results/baseline-run.log
-            results/baseline/
+            results/
           if-no-files-found: error
           retention-days: 30

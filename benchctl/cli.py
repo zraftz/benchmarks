@@ -100,11 +100,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="raft-bench: protocol diagnostics and durable networked embedding baselines")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="show required tools; makes no installations")
-    sub.add_parser("build", help="test and build all three Rust adapters and native load generator with the locked dependencies")
-    sub.add_parser("import-protocol", help="extract exact historical sources from the pinned upstream commit")
-    p = sub.add_parser("protocol", help="run the retained in-memory comparison, not the durable-service suite")
+    p = sub.add_parser("build", help="test and build all durable adapters with locked dependencies")
+    p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
+    p = sub.add_parser("select-rafter", help="resolve a ref and update both local manifests and lockfiles")
+    p.add_argument("ref")
+    p = sub.add_parser("microbench", help="run the in-memory benchmark suite")
     p.add_argument("--mode", choices=("full", "rafter-only"), default="full")
-    p.add_argument("--runs", type=int, default=5)
+    p.add_argument("--runs", type=int, default=3)
+    p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
+    p.add_argument("--output", type=Path)
     p = sub.add_parser("run")
     p.add_argument("--implementations", default=",".join(IMPLEMENTATIONS))
     p.add_argument("--scenario", choices=("durable-kv", "leader-loss", "follower-catchup"), default="durable-kv")
@@ -137,14 +141,18 @@ def main() -> None:
     try:
         if args.command == "doctor":
             print(json.dumps({t: shutil.which(t) for t in ("cargo", "rustc", "go", "protoc", "git", "python3")}, indent=2))
-        elif args.command == "build":
-            build()
-        elif args.command in ("import-protocol", "protocol"):
-            from .legacy import import_protocol, run_protocol
-            if args.command == "import-protocol":
-                import_protocol()
+        elif args.command == "select-rafter":
+            from .selection import select_rafter
+            select_rafter(args.ref)
+        elif args.command in ("build", "microbench"):
+            if args.rafter_ref:
+                from .selection import select_rafter
+                select_rafter(args.rafter_ref)
+            if args.command == "build":
+                build()
             else:
-                run_protocol(args.mode, args.runs)
+                from .microbench import run_microbench
+                run_microbench(args.mode, args.runs, args.output)
         elif args.command == "run":
             run(args)
         elif args.command == "verify":

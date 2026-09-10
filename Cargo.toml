@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/common", "adapters/rafter", "adapters/raft-rs", "adapters/openraft"]
-exclude = ["protocol/upstream"]
+exclude = ["microbench"]
 
 [workspace.package]
 version = "0.1.0"

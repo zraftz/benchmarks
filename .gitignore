@@ -17,3 +17,5 @@ __pycache__/
 /loadgen/loadgen
 *.prof
 /deploy/generated/
+
+/microbench/target/

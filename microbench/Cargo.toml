@@ -1,0 +1,83 @@
+[package]
+name = "bench-compare"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone package: deliberately NOT a member of the frozen root workspace.
+# The empty [workspace] table stops cargo from attaching this package to the
+# parent workspace, so the root Cargo.toml/Cargo.lock stay untouched.
+[workspace]
+
+[dependencies]
+rafter = { git = "https://github.com/zsumz/rafter", rev = "518aefd767dc0ef2c1f1ccc5f970c96456cfd109" }
+rafter-app = { git = "https://github.com/zsumz/rafter", rev = "518aefd767dc0ef2c1f1ccc5f970c96456cfd109" }
+rafter-codec = { git = "https://github.com/zsumz/rafter", rev = "518aefd767dc0ef2c1f1ccc5f970c96456cfd109" }
+rafter-multiraft = { git = "https://github.com/zsumz/rafter", rev = "518aefd767dc0ef2c1f1ccc5f970c96456cfd109" }
+rafter-runtime = { git = "https://github.com/zsumz/rafter", rev = "518aefd767dc0ef2c1f1ccc5f970c96456cfd109" }
+rafter-service = { git = "https://github.com/zsumz/rafter", rev = "518aefd767dc0ef2c1f1ccc5f970c96456cfd109" }
+rafter-storage = { git = "https://github.com/zsumz/rafter", rev = "518aefd767dc0ef2c1f1ccc5f970c96456cfd109" }
+rafter-transport-tls = { git = "https://github.com/zsumz/rafter", rev = "518aefd767dc0ef2c1f1ccc5f970c96456cfd109" }
+
+# tikv/raft-rs. prost-codec instead of the default protobuf-codec: the
+# protobuf codec's build script rejects modern protoc (>= 21.x) and its
+# bundled fallback has no macOS/aarch64 binary, while prost-build 0.11
+# accepts a system or script-selected PROTOC without that version ceiling.
+raft = { version = "=0.7.0", default-features = false, features = [
+    "prost-codec",
+], optional = true }
+slog = { version = "2.7", optional = true }
+
+# storage-v2 unseals RaftLogStorage/RaftStateMachine so the in-memory
+# stores can be implemented directly (the v2 storage API).
+openraft = { version = "=0.9.24", default-features = false, features = [
+    "storage-v2",
+], optional = true }
+tokio = { version = "1", default-features = false, features = [
+    "rt",
+    "macros",
+    "sync",
+    "time",
+], optional = true }
+
+[features]
+default = ["raft-rs", "openraft"]
+raft-rs = ["dep:raft", "dep:slog"]
+openraft = ["dep:openraft", "dep:tokio"]
+
+[[bin]]
+name = "bench-rafter"
+path = "src/bin/bench-rafter.rs"
+
+[[bin]]
+name = "bench-rafter-service"
+path = "src/bin/bench-rafter-service.rs"
+
+[[bin]]
+name = "bench-rafter-codec"
+path = "src/bin/bench-rafter-codec.rs"
+
+[[bin]]
+name = "bench-rafter-multiraft"
+path = "src/bin/bench-rafter-multiraft.rs"
+
+[[bin]]
+name = "bench-rafter-profile"
+path = "src/bin/bench-rafter-profile.rs"
+
+[[bin]]
+name = "check-transport-receive-memory"
+path = "src/bin/check-transport-receive-memory.rs"
+
+[[bin]]
+name = "bench-raft-rs"
+path = "src/bin/bench-raft-rs.rs"
+required-features = ["raft-rs"]
+
+[[bin]]
+name = "bench-openraft"
+path = "src/bin/bench-openraft.rs"
+required-features = ["openraft"]
+
+[profile.release]
+debug = false

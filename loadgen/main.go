@@ -43,6 +43,7 @@ type Second struct {
 type stats struct {
 	Attempted, OK, InWindow, Unknown, Errors, Attempts uint64
 	Latency, AllLatency, Lateness                      Histogram
+	Execution, AllExecution                            Histogram
 	Seconds                                            map[int]*Second
 	Events                                             []Event
 }
@@ -52,6 +53,8 @@ func (s *stats) record(e Event, window time.Duration, history bool) {
 	s.Attempts += uint64(e.Attempts)
 	latency := uint64(max64(e.EndNS-e.ScheduledNS, 1))
 	s.AllLatency.Add(latency)
+	execution := uint64(max64(e.EndNS-e.StartNS, 1))
+	s.AllExecution.Add(execution)
 	s.Lateness.Add(uint64(max64(e.StartNS-e.ScheduledNS, 1)))
 	sec := int(e.EndNS / int64(time.Second))
 	if s.Seconds[sec] == nil {
@@ -63,6 +66,7 @@ func (s *stats) record(e Event, window time.Duration, history bool) {
 			s.InWindow++
 		}
 		s.Latency.Add(latency)
+		s.Execution.Add(execution)
 		s.Seconds[sec].OK++
 		if latency > s.Seconds[sec].MaximumNS {
 			s.Seconds[sec].MaximumNS = latency
@@ -183,6 +187,8 @@ func run(o options, nodes map[uint64]string) (map[string]any, []Event, error) {
 		total.Attempts += s.Attempts
 		total.Latency.Merge(s.Latency)
 		total.AllLatency.Merge(s.AllLatency)
+		total.Execution.Merge(s.Execution)
+		total.AllExecution.Merge(s.AllExecution)
 		total.Lateness.Merge(s.Lateness)
 		for sec, v := range s.Seconds {
 			if total.Seconds[sec] == nil {
@@ -217,11 +223,13 @@ func run(o options, nodes map[uint64]string) (map[string]any, []Event, error) {
 		v := total.Seconds[sec]
 		seconds = append(seconds, map[string]any{"second": sec, "ok": v.OK, "unknown": v.Unknown, "errors": v.Errors, "max_latency_ms": float64(v.MaximumNS) / 1e6})
 	}
-	result := map[string]any{"schema": 1, "kind": "networked-kv", "contract": "durable-log+durable-application-v1/logged-reads",
+	result := map[string]any{"schema": 2, "kind": "networked-kv", "contract": "durable-log+durable-application-v1/logged-reads",
 		"generator":     map[string]any{"go": runtime.Version(), "gomaxprocs": runtime.GOMAXPROCS(0), "logical_cpus": runtime.NumCPU(), "history_enabled": o.history != ""},
 		"config":        map[string]any{"nodes": nodes, "concurrency": o.concurrency, "rate": o.rate, "duration_seconds": o.duration.Seconds(), "timeout_seconds": o.timeout.Seconds(), "payload_bytes": o.payload, "keyspace": o.keyspace, "read_percent": o.readPercent, "cas_percent": o.casPercent, "seed": o.seed, "session": o.session, "namespace": o.namespace, "operation_limit": o.operations},
 		"start_unix_ns": start.UnixNano(), "measurement_seconds": measure.Seconds(), "wall_seconds": wall.Seconds(), "offered": offered, "attempted": total.Attempted, "not_issued": dropped, "ok": total.OK, "completed_in_window": total.InWindow, "unknown": total.Unknown, "errors": total.Errors, "network_attempts": total.Attempts,
-		"successful_ops_per_second": float64(total.InWindow) / measure.Seconds(), "success_latency": total.Latency.Summary(), "all_dispatched_latency": total.AllLatency.Summary(), "worker_start_lateness": total.Lateness.Summary(), "scheduler_lateness": dispatchLateness.Summary(),
+		"successful_ops_per_second": float64(total.InWindow) / measure.Seconds(), "success_execution_latency": total.Execution.Summary(), "all_dispatched_execution_latency": total.AllExecution.Summary(),
+		"success_execution_histogram": total.Execution, "all_execution_histogram": total.AllExecution,
+		"success_latency": total.Latency.Summary(), "all_dispatched_latency": total.AllLatency.Summary(), "worker_start_lateness": total.Lateness.Summary(), "scheduler_lateness": dispatchLateness.Summary(),
 		"success_histogram": total.Latency, "all_histogram": total.AllLatency, "seconds": seconds}
 	return result, events, nil
 }

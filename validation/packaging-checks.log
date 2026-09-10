@@ -1,8 +1,0 @@
-All TOML manifests parsed.
-All Python source modules parsed.
-All local Markdown links resolve.
-Shell scripts pass bash -n.
-CLI help succeeds.
-Example inventory produces three valid-shaped node configuration files.
-CI YAML parsed; workflow NOT executed.
-No owned integration-fixture processes remain.

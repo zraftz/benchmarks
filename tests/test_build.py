@@ -27,12 +27,14 @@ class BuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "Cargo.lock").write_text("locked")
+            (root / "implementations.lock.json").write_text(json.dumps({"rafter": {"rev": "a" * 40}}))
             (root / "dist").mkdir()
             (root / "dist/build.json").write_text("old receipt")
             def fail(command, **kwargs):
                 kwargs["stdout"].write("compiler failure")
                 raise subprocess.CalledProcessError(1, command)
             with patch("benchctl.build.ROOT", root), patch("benchctl.build.shutil.which", return_value="tool"), \
+                 patch("benchctl.build.check_resolution"), \
                  patch("benchctl.build.subprocess.run", side_effect=fail):
                 with self.assertRaisesRegex(RuntimeError, "dist/rust-tests.log"):
                     build()
@@ -44,6 +46,7 @@ class BuildTests(unittest.TestCase):
             root = Path(tmp) / "source"
             root.mkdir()
             (root / "Cargo.lock").write_text("locked")
+            (root / "implementations.lock.json").write_text(json.dumps({"rafter": {"rev": "a" * 40}}))
             target = Path(tmp) / "external target"
             (target / "release").mkdir(parents=True)
             for name in IMPLEMENTATIONS:
@@ -54,6 +57,7 @@ class BuildTests(unittest.TestCase):
                 if command[:2] == ["go", "build"]:
                     (root / "dist/raft-bench-load").write_text("loadgen")
             with patch("benchctl.build.ROOT", root), patch("benchctl.build.shutil.which", return_value="tool"), \
+                 patch("benchctl.build.check_resolution"), \
                  patch("benchctl.build.subprocess.run", side_effect=run), \
                  patch("benchctl.build.subprocess.check_output", return_value=json.dumps({"target_directory": str(target)})), \
                  patch("benchctl.build.capture", return_value={}), patch("benchctl.build.source_digest", return_value="source"):

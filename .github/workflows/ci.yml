@@ -75,3 +75,39 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 # Shared CI hosts qualify behavior and recovery, never absolute throughput.
+  microbench:
+    name: In-memory benchmarks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler build-essential
+          toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt
+      - name: Check and run microbenchmarks
+        run: |
+          cargo fmt --manifest-path microbench/Cargo.toml -- --check
+          cargo test --manifest-path microbench/Cargo.toml --locked
+          ./raft-bench microbench --runs 1 --output results/microbench-ci
+          ./raft-bench verify results/microbench-ci
+          ./raft-bench microbench --mode rafter-only --runs 1 --output results/rafter-only-ci
+          ./raft-bench verify results/rafter-only-ci
+      - name: Retain microbenchmark evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: microbenchmark-evidence
+          path: |
+            microbench/Cargo.lock
+            results/
+          retention-days: 14

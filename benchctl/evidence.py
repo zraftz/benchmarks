@@ -43,6 +43,8 @@ def source_digest() -> str:
     paths = [p for directory in ("adapters", "crates", "loadgen", "benchctl", "scripts", "tests")
              for p in (ROOT / directory).rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     paths += [ROOT / name for name in ("Cargo.toml", "Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml", "implementations.lock.json", "raft-bench") if (ROOT / name).exists()]
+    paths += [p for p in (ROOT / "microbench").rglob("*")
+              if p.is_file() and "target" not in p.parts and p.suffix in (".rs", ".toml", ".lock", ".json")]
     for p in sorted(paths):
         h.update(p.relative_to(ROOT).as_posix().encode() + b"\0" + bytes.fromhex(digest(p)))
     return h.hexdigest()
@@ -93,7 +95,10 @@ def validate_result(r: dict[str, Any]) -> list[str]:
         errors.append("in-window completions exceed successes")
     if r.get("contract") != CONTRACT:
         errors.append("unsupported semantic contract")
-    for name, count in (("success_histogram", r["ok"]), ("all_histogram", r["attempted"])):
+    histograms = [("success_histogram", r["ok"]), ("all_histogram", r["attempted"])]
+    if r.get("schema", 1) >= 2:
+        histograms += [("success_execution_histogram", r["ok"]), ("all_execution_histogram", r["attempted"])]
+    for name, count in histograms:
         hist = r.get(name, {})
         bins = hist.get("bins", [])
         if len(bins) != 4096 or any(type(n) is not int or n < 0 for n in bins) or sum(bins) != count or hist.get("count") != count:
@@ -124,6 +129,10 @@ def verify(directory: Path) -> dict[str, Any]:
                 errors.append(f"invalid artifact path: {relative}")
             elif digest(p) != sha:
                 errors.append(f"checksum mismatch: {relative}")
+        if (directory / "provenance.json").exists():
+            from .micro_report import verify_report
+            verify_report(directory)
+            return {"status": "failed" if errors else "passed", "errors": errors}
         result = json.loads((directory / "measurement.json").read_text())
         errors.extend(validate_result(result))
         qualification = json.loads((directory / "qualification.json").read_text())
