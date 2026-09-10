@@ -5,7 +5,7 @@ use bench_common::{
     model::{Command, DurableModel},
     net, Config,
 };
-use rafter::{Input, LogIndex, NodeConfig, NodeId, Output, Role};
+use rafter::{Input, LogIndex, Message, NodeConfig, NodeId, Output, Role};
 use rafter_runtime::DurableRaftNode;
 #[cfg(not(feature = "journal-hard-state"))]
 use rafter_storage::{FileRaftHardStateStore as HardState, FileRaftNodeStores as NodeStores};
@@ -40,7 +40,44 @@ fn effects(outputs: Vec<Output>) -> Result<Vec<Effect>> {
     }
     Ok(result)
 }
+#[cfg(feature = "peer-group-commit")]
+type PeerGate = rafter_runtime::PeerBatchGate;
+#[cfg(not(feature = "peer-group-commit"))]
+type PeerGate = ();
+
 impl Engine for Rafter {
+    type Peer = (NodeId, Message);
+    type Gate = PeerGate;
+    fn start(&mut self, diagnostics: bool) {
+        #[cfg(feature = "peer-group-commit")]
+        rafter_storage::telemetry::set_enabled(diagnostics);
+        #[cfg(not(feature = "peer-group-commit"))]
+        let _ = diagnostics;
+    }
+    fn decode_peer(&self, from: u64, data: &[u8]) -> Result<Self::Peer> {
+        Ok((NodeId(from), rafter_codec::decode_message(data)?))
+    }
+    fn peer_gate(&self, max_events: usize, max_bytes: usize) -> PeerGate {
+        #[cfg(feature = "peer-group-commit")]
+        {
+            self.node.peer_batch_gate(max_events, max_bytes)
+        }
+        #[cfg(not(feature = "peer-group-commit"))]
+        {
+            let _ = (max_events, max_bytes);
+        }
+    }
+    fn admit_peer(gate: &mut PeerGate, peer: &Self::Peer) -> bool {
+        #[cfg(feature = "peer-group-commit")]
+        {
+            gate.admit(peer.0, &peer.1)
+        }
+        #[cfg(not(feature = "peer-group-commit"))]
+        {
+            let _ = (gate, peer);
+            false
+        }
+    }
     fn leader(&self) -> Option<u64> {
         self.node.leader_hint().map(|n| n.0)
     }
@@ -50,11 +87,15 @@ impl Engine for Rafter {
     fn tick(&mut self) -> Result<Vec<Effect>> {
         effects(self.node.step(Input::Tick)?)
     }
-    fn peer(&mut self, from: u64, data: &[u8]) -> Result<Vec<Effect>> {
-        effects(self.node.step(Input::Message {
-            from: NodeId(from),
-            message: rafter_codec::decode_message(data)?,
-        })?)
+    fn peer_batch(&mut self, peers: Vec<Self::Peer>) -> Result<Vec<Effect>> {
+        effects(
+            self.node.step_batch(
+                peers
+                    .into_iter()
+                    .map(|(from, message)| Input::Message { from, message })
+                    .collect(),
+            )?,
+        )
     }
     fn propose(&mut self, commands: Vec<Command>) -> Result<Vec<Effect>> {
         let inputs = commands
@@ -68,8 +109,22 @@ impl Engine for Rafter {
         effects(self.node.step_batch(inputs)?)
     }
     fn stats(&self) -> serde_json::Value {
+        #[cfg(feature = "peer-group-commit")]
+        let persistence: serde_json::Value = rafter_storage::telemetry::snapshot()
+            .into_iter()
+            .map(|(name, m)| {
+                (
+                    name.to_owned(),
+                    serde_json::json!({"calls":m.calls,
+                "total_ns":m.total_ns,"max_ns":m.max_ns,"buckets_ns_log2":m.buckets}),
+                )
+            })
+            .collect();
+        #[cfg(not(feature = "peer-group-commit"))]
+        let persistence = serde_json::Value::Null;
         serde_json::json!({"term":self.node.current_term().0,
         "commit_index":self.node.commit_index().0,"last_log_index":self.node.last_log_index().0,
+        "persistence_diagnostics":persistence,"peer_group_commit_available":cfg!(feature = "peer-group-commit"),
         "storage":"rafter native file stores","hard_state_backend":HARD_STATE_BACKEND,"election_ticks":"50 + 7*(node_id-1)"})
     }
 }

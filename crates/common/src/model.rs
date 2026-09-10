@@ -171,10 +171,13 @@ impl DurableModel {
         self.journal.append(&entries)?;
         self.replay(entries)
     }
+    pub fn set_diagnostics(&mut self, diagnostics: crate::diagnostics::Diagnostics) {
+        self.journal.diagnostics = diagnostics;
+    }
     pub fn stats(&self) -> serde_json::Value {
         serde_json::json!({"applied_index":self.index,"keys":self.model.values.len(),
             "sessions":self.model.sessions(),"application_syncs":self.journal.syncs,
-            "application_bytes":self.journal.bytes})
+            "application_bytes":self.journal.bytes,"diagnostics":self.journal.diagnostics.snapshot()})
     }
 }
 #[cfg(test)]

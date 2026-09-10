@@ -62,23 +62,27 @@ def confirm_canaries(nodes: dict[int, str], commands: list[dict], session: str) 
             "scope": "12 acknowledged canaries survived simultaneous process kill and restart; not power-loss testing"}
 
 
-def run_case(implementation: str, directory: Path, data: Path, options, *, command: list[str] | None = None) -> None:
+def run_case(implementation: str, directory: Path, data: Path, options, *, command: list[str] | None = None, build_receipt: dict | None = None) -> None:
     directory.mkdir(parents=True, exist_ok=False)
     data.mkdir(parents=True, exist_ok=True)
     command = command or [str(ROOT / "dist" / f"raft-bench-{implementation}")]
+    receipt = build_receipt if build_receipt is not None else (json.loads((ROOT / "dist/build.json").read_text()) if (ROOT / "dist/build.json").exists() else None)
+    if receipt and digest(Path(command[0])) != receipt["binaries"][implementation]:
+        raise RuntimeError("case binary differs from the supplied build receipt")
     case_id = uuid.uuid4().hex
     manifest = {"schema": 1, "implementation": implementation, "case_id": case_id,
         "scenario": options.scenario, "topology": "three processes on one host; real TCP, not three physical hosts",
         "smoke": options.smoke, "controller_start_unix_ns": time.time_ns(),
         "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(options).items()},
         "host": host_info(data), "source_digest": source_digest(),
-        "implementation_pins": json.loads((ROOT / "implementations.lock.json").read_text()),
+        "implementation_pins": receipt["implementations"] if receipt else json.loads((ROOT / "implementations.lock.json").read_text()),
         "binary_sha256": digest(Path(command[0])), "loadgen_sha256": digest(ROOT / "dist/raft-bench-load"),
-        "build_receipt": json.loads((ROOT / "dist/build.json").read_text()) if (ROOT / "dist/build.json").exists() else None,
+        "build_receipt": receipt,
         "limitations": ["plaintext transport", "logged reads", "static three-voter group", "retained logs; no snapshots",
                         "adapter storage/codec costs differ and are disclosed", "not upstream-reviewed tuning"]}
     write_json(directory / "manifest.json", manifest)
-    cluster = Cluster(implementation, command, directory / "cluster", data, case_id, options.batch_size)
+    cluster = Cluster(implementation, command, directory / "cluster", data, case_id, options.batch_size,
+        getattr(options, "peer_batch_size", 1), getattr(options, "diagnostics", False))
     load = None
     try:
         cluster.start()

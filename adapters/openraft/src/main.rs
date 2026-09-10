@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
     let _lock = config.lock_directory("openraft")?;
     let logs = storage::LogStore::open(&config.data_dir.join("raft.wal"))?;
     let app = storage::StateMachine::open(&config.data_dir.join("application.wal"))?;
+    app.set_diagnostics(config.diagnostics);
     let cfg = Arc::new(
         RaftConfig {
             cluster_name: config.cluster.clone(),

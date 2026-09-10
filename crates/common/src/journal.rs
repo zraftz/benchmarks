@@ -1,6 +1,7 @@
 //! Append-only checksum-framed journal. Each appended batch is synced before return.
 //! Incomplete EOF frames are truncated on open. A complete frame with a bad checksum
 //! is rejected, including at EOF: corruption is never silently treated as a clean log.
+use crate::diagnostics::Diagnostics;
 use anyhow::{bail, Result};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
@@ -13,6 +14,7 @@ const MAX_RECORD: usize = 64 * 1024 * 1024;
 #[derive(Debug)]
 pub struct Journal {
     file: File,
+    pub diagnostics: Diagnostics,
     pub syncs: u64,
     pub bytes: u64,
 }
@@ -64,6 +66,7 @@ impl Journal {
         Ok((
             Self {
                 file: f,
+                diagnostics: Diagnostics::default(),
                 syncs: 0,
                 bytes: 0,
             },
@@ -71,14 +74,21 @@ impl Journal {
         ))
     }
     pub fn append<T: Serialize>(&mut self, record: &T) -> Result<()> {
+        let started = self.diagnostics.start();
         let bytes = serde_json::to_vec(record)?;
         if bytes.is_empty() || bytes.len() > MAX_RECORD {
             bail!("journal record exceeds limit");
         }
+        let checksum = crc32(&bytes);
+        self.diagnostics.elapsed("journal_encode_ns", started);
+        let started = self.diagnostics.start();
         self.file.write_all(&(bytes.len() as u32).to_be_bytes())?;
-        self.file.write_all(&crc32(&bytes).to_be_bytes())?;
+        self.file.write_all(&checksum.to_be_bytes())?;
         self.file.write_all(&bytes)?;
+        self.diagnostics.elapsed("journal_write_ns", started);
+        let started = self.diagnostics.start();
         self.file.sync_data()?;
+        self.diagnostics.elapsed("journal_sync_ns", started);
         self.syncs += 1;
         self.bytes += bytes.len() as u64 + 8;
         Ok(())

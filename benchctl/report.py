@@ -39,15 +39,23 @@ def render(suite: Path, destination: Path) -> None:
             latency(r, "success_latency"), latency(r, "success_execution_latency"),
             latency(r, "worker_start_lateness"), r["errors"], r["unknown"], r["not_issued"], label)) + "</tr>")
         if checked["status"] == "passed" and not manifest["smoke"]:
-            key = (manifest["implementation"], revision, manifest["scenario"], r["config"]["rate"],
+            variant = json.dumps({"backend": (manifest.get("build_receipt") or {}).get("rafter_hard_state_backend", "replace"),
+                "peer_batch_size": manifest["options"].get("peer_batch_size", 1),
+                "batch_size": manifest["options"].get("batch_size", 64),
+                "peer_group_commit": (manifest.get("build_receipt") or {}).get("peer_group_commit", False),
+                "diagnostics": manifest["options"].get("diagnostics", False)}, sort_keys=True)
+            key = (manifest["implementation"], revision, variant, manifest["scenario"], r["config"]["rate"],
                    r["config"]["payload_bytes"], r["config"]["concurrency"],
                    r["config"]["read_percent"], r["config"]["cas_percent"])
             groups.setdefault(key, []).append(r)
     aggregates = []
     for key, values in sorted(groups.items()):
-        engine, revision, scenario, rate, payload, concurrency, reads, cas = key
+        engine, revision, variant, scenario, rate, payload, concurrency, reads, cas = key
         rates = [v["successful_ops_per_second"] for v in values]
-        config = f"{scenario} · {payload} bytes · {concurrency} clients · {reads}% reads · {cas}% CAS"
+        settings = json.loads(variant)
+        mode = "diagnostics" if settings["diagnostics"] else "timing"
+        detail = f"{settings['backend']} · peers ≤{settings['peer_batch_size']} · {mode}"
+        config = f"{scenario} · {detail} · {payload} bytes · {concurrency} clients · {reads}% reads · {cas}% CAS"
         fields = (engine, revision[:12], config, rate, len(values), f"{median(rates):.1f}",
                   f"{min(rates):.1f}–{max(rates):.1f}", median_latency(values, "success_latency"),
                   median_latency(values, "success_execution_latency"), median_latency(values, "worker_start_lateness"),

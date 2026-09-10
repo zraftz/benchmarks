@@ -1,6 +1,7 @@
 //! Shared single-owner embedding for the two synchronous Raft engines.
 //! Durable engine effects precede application fsync and client acknowledgment.
 use crate::{
+    diagnostics::Diagnostics,
     model::{Applied, Command, DurableModel},
     net::{Handler, Rpc},
     Config, Reply, Request, CONTRACT,
@@ -28,26 +29,36 @@ pub enum Effect {
     },
 }
 pub trait Engine: Send + 'static {
+    type Peer;
+    type Gate;
+    fn start(&mut self, _diagnostics: bool) {}
+    fn decode_peer(&self, from: u64, data: &[u8]) -> Result<Self::Peer>;
+    fn peer_gate(&self, max_events: usize, max_bytes: usize) -> Self::Gate;
+    fn admit_peer(gate: &mut Self::Gate, peer: &Self::Peer) -> bool;
+    fn peer_batch(&mut self, peers: Vec<Self::Peer>) -> Result<Vec<Effect>>;
     fn leader(&self) -> Option<u64>;
     fn is_leader(&self) -> bool;
     fn tick(&mut self) -> Result<Vec<Effect>>;
-    fn peer(&mut self, from: u64, data: &[u8]) -> Result<Vec<Effect>>;
     fn propose(&mut self, commands: Vec<Command>) -> Result<Vec<Effect>>;
     fn stats(&self) -> serde_json::Value;
 }
 enum Input {
-    Client(Request, oneshot::Sender<Reply>),
-    Peer(u64, Vec<u8>),
+    Client(Request, oneshot::Sender<Reply>, Option<Instant>),
+    Peer(u64, Vec<u8>, Option<Instant>),
 }
 #[derive(Clone)]
 pub struct Actor {
     tx: mpsc::SyncSender<Input>,
+    diagnostics: Diagnostics,
 }
 #[async_trait]
 impl Handler for Actor {
     async fn client(&self, q: Request) -> Reply {
         let (tx, rx) = oneshot::channel();
-        match self.tx.try_send(Input::Client(q, tx)) {
+        match self
+            .tx
+            .try_send(Input::Client(q, tx, self.diagnostics.start()))
+        {
             Ok(()) => {}
             Err(mpsc::TrySendError::Full(_)) => return Reply::status("overloaded"),
             Err(_) => return Reply::error("actor stopped"),
@@ -59,7 +70,7 @@ impl Handler for Actor {
     }
     async fn peer(&self, from: u64, data: Vec<u8>) -> Result<Vec<u8>> {
         self.tx
-            .try_send(Input::Peer(from, data))
+            .try_send(Input::Peer(from, data, self.diagnostics.start()))
             .map_err(|_| anyhow::anyhow!("peer inbox unavailable"))?;
         Ok(Vec::new())
     }
@@ -69,9 +80,11 @@ impl Actor {
         config: Config,
         name: &'static str,
         engine: E,
-        model: DurableModel,
+        mut model: DurableModel,
         recovered: Vec<Effect>,
     ) -> Self {
+        let diagnostics = Diagnostics::new(config.diagnostics);
+        model.set_diagnostics(diagnostics.clone());
         let (tx, rx) = mpsc::sync_channel(config.capacity);
         let dropped = Arc::new(AtomicU64::new(0));
         let mut outbound = BTreeMap::new();
@@ -80,10 +93,12 @@ impl Actor {
                 continue;
             }
             let rpc = Rpc::new(address.clone(), config.id);
-            let (send, mut receive) = async_mpsc::channel::<Vec<u8>>(256);
+            let (send, mut receive) = async_mpsc::channel::<OutboundPacket>(256);
             let lost = dropped.clone();
+            let peer_diagnostics = diagnostics.clone();
             tokio::spawn(async move {
-                while let Some(data) = receive.recv().await {
+                while let Some((data, ready)) = receive.recv().await {
+                    peer_diagnostics.elapsed("peer_outbound_queue_ns", ready);
                     if rpc.call(&data).await.is_err() {
                         lost.fetch_add(1, Ordering::Relaxed);
                     }
@@ -91,8 +106,10 @@ impl Actor {
             });
             outbound.insert(id, send);
         }
+        let owner_diagnostics = diagnostics.clone();
         std::thread::spawn(move || {
             let mut state = State {
+                diagnostics: owner_diagnostics,
                 config,
                 name,
                 engine,
@@ -101,26 +118,39 @@ impl Actor {
                 dropped,
                 pending: BTreeMap::new(),
                 pending_count: 0,
+                peer_batches: 0,
+                peer_events: 0,
+                peer_batch_sizes: BTreeMap::new(),
             };
+            state.engine.start(state.config.diagnostics);
             if let Err(e) = state.effects(recovered).and_then(|_| state.run(rx)) {
                 eprintln!("fatal benchmark node error: {e:#}");
                 std::process::exit(1);
             }
         });
-        Self { tx }
+        Self { tx, diagnostics }
     }
 }
+mod peer;
+
+type OutboundPacket = (Vec<u8>, Option<Instant>);
+type OutboundPeers = BTreeMap<u64, async_mpsc::Sender<OutboundPacket>>;
+
 type PendingCommands = BTreeMap<(String, u64), (Command, Vec<oneshot::Sender<Reply>>)>;
 
 struct State<E> {
+    diagnostics: Diagnostics,
     config: Config,
     name: &'static str,
     engine: E,
     model: DurableModel,
-    outbound: BTreeMap<u64, async_mpsc::Sender<Vec<u8>>>,
+    outbound: OutboundPeers,
     dropped: Arc<AtomicU64>,
     pending: PendingCommands,
     pending_count: usize,
+    peer_batches: u64,
+    peer_events: u64,
+    peer_batch_sizes: BTreeMap<usize, u64>,
 }
 impl<E: Engine> State<E> {
     fn run(&mut self, rx: mpsc::Receiver<Input>) -> Result<()> {
@@ -149,21 +179,44 @@ impl<E: Engine> State<E> {
                 }
             };
             match input {
-                Input::Peer(from, data) => {
-                    let e = self.engine.peer(from, &data)?;
+                Input::Peer(from, data, queued) => {
+                    self.diagnostics.elapsed("owner_peer_queue_ns", queued);
+                    let mut arrivals = vec![queued];
+                    let peers = peer::collect(
+                        &self.engine,
+                        from,
+                        data,
+                        self.config.peer_batch_size,
+                        &rx,
+                        &mut deferred,
+                        &self.diagnostics,
+                        &mut arrivals,
+                    )?;
+                    self.peer_batches += 1;
+                    self.peer_events += peers.len() as u64;
+                    *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
+                    let e = self.engine.peer_batch(peers)?;
+                    for queued in arrivals {
+                        self.diagnostics
+                            .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                    }
                     self.effects(e)?;
                 }
-                Input::Client(request, reply) => {
+                Input::Client(request, reply, queued) => {
+                    self.diagnostics.elapsed("owner_client_queue_ns", queued);
                     let mut commands = Vec::new();
                     self.client(request, reply, &mut commands)?;
                     while commands.len() < self.config.batch_size {
-                        match rx.try_recv() {
-                            Ok(Input::Client(q, r)) => self.client(q, r, &mut commands)?,
-                            Ok(i) => {
+                        match deferred.pop_front().or_else(|| rx.try_recv().ok()) {
+                            Some(Input::Client(q, r, queued)) => {
+                                self.diagnostics.elapsed("owner_client_queue_ns", queued);
+                                self.client(q, r, &mut commands)?;
+                            }
+                            Some(i) => {
                                 deferred.push_back(i);
                                 break;
                             }
-                            Err(_) => break,
+                            None => break,
                         }
                     }
                     if !commands.is_empty() {
@@ -185,6 +238,8 @@ impl<E: Engine> State<E> {
                 let info = serde_json::json!({"implementation":self.name,"node_id":self.config.id,
                     "leader":self.engine.is_leader(),"contract":CONTRACT,"application":self.model.stats(),
                     "engine":self.engine.stats(),"pending":self.pending_count,
+                    "diagnostics":self.diagnostics.snapshot(),"peer_batches":self.peer_batches,"peer_events":self.peer_events,
+                    "peer_batch_sizes":self.peer_batch_sizes,
                     "peer_drops":self.dropped.load(Ordering::Relaxed)});
                 let _ = reply.send(Reply {
                     status: "ok".into(),
@@ -253,7 +308,7 @@ impl<E: Engine> State<E> {
                     let Some(tx) = self.outbound.get(&to) else {
                         bail!("outbound peer not in configuration")
                     };
-                    if tx.try_send(data).is_err() {
+                    if tx.try_send((data, self.diagnostics.start())).is_err() {
                         self.dropped.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -264,6 +319,9 @@ impl<E: Engine> State<E> {
                 }),
             }
         }
+        let started = self.diagnostics.start();
+        self.diagnostics
+            .observe("application_batch_entries", applies.len() as u64);
         let outcomes = self.model.apply(&applies)?;
         for (entry, outcome) in applies.into_iter().zip(outcomes) {
             if let (Some(c), Some(result)) = (entry.command, outcome) {
@@ -279,6 +337,8 @@ impl<E: Engine> State<E> {
                             }
                         };
                         let _ = reply.send(Reply::applied(response));
+                        self.diagnostics
+                            .elapsed("durable_outputs_to_client_completion_ns", started);
                     }
                 }
             }

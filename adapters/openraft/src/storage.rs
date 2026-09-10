@@ -201,6 +201,13 @@ impl StateMachine {
             inner: Arc::new(Mutex::new(AppInner { app, meta })),
         })
     }
+    pub fn set_diagnostics(&self, enabled: bool) {
+        self.inner
+            .lock()
+            .unwrap()
+            .app
+            .set_diagnostics(bench_common::diagnostics::Diagnostics::new(enabled));
+    }
     pub fn stats(&self) -> serde_json::Value {
         self.inner.lock().unwrap().app.stats()
     }

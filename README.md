@@ -59,6 +59,14 @@ To test the opt-in hard-state journal on a supporting Rafter branch:
 The CI job exposes the same `rafter_hard_state` selector. Build receipts and
 node stats record the backend; `replace` remains the default.
 
+For a paired durable experiment, enable `paired` in the workflow and provide
+both Rafter refs. It alternates the prior revision, candidate batch caps
+(8/16/32/64), and OpenRaft on one runner. Results are in `results/paired/`.
+Diagnostic cases run separately; their timings are never pooled with the sweep.
+
+Locally, build a supporting revision with `--peer-group-commit`, then run with
+`--peer-batch-size 32`. Add `--diagnostics` only for a separate instrumented run.
+
 ## Development
 
 ```sh

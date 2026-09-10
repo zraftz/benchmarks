@@ -124,6 +124,19 @@ impl RaftRs {
     }
 }
 impl Engine for RaftRs {
+    type Peer = Message;
+    type Gate = ();
+    fn peer_gate(&self, _: usize, _: usize) {}
+    fn admit_peer(_: &mut (), _: &Message) -> bool {
+        false
+    }
+    fn decode_peer(&self, from: u64, data: &[u8]) -> Result<Message> {
+        let message = Message::decode(data)?;
+        if message.from != from || message.to != self.node.raft.id {
+            bail!("peer envelope identity mismatch");
+        }
+        Ok(message)
+    }
     fn leader(&self) -> Option<u64> {
         let id = self.node.raft.leader_id;
         (id != 0).then_some(id)
@@ -135,13 +148,13 @@ impl Engine for RaftRs {
         self.node.tick();
         self.drain()
     }
-    fn peer(&mut self, from: u64, data: &[u8]) -> Result<Vec<Effect>> {
-        let message = Message::decode(data)?;
-        if message.from != from || message.to != self.node.raft.id {
-            bail!("peer envelope identity mismatch");
+    fn peer_batch(&mut self, peers: Vec<Message>) -> Result<Vec<Effect>> {
+        let mut out = Vec::new();
+        for message in peers {
+            self.node.step(message)?;
+            out.extend(self.drain()?);
         }
-        self.node.step(message)?;
-        self.drain()
+        Ok(out)
     }
     fn propose(&mut self, commands: Vec<Command>) -> Result<Vec<Effect>> {
         for c in commands {

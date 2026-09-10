@@ -14,7 +14,7 @@ from .evidence import write_json, CONTRACT
 
 class Cluster:
     def __init__(self, implementation: str, command: list[str], directory: Path,
-                 data: Path, cluster_id: str, batch_size: int = 64):
+                 data: Path, cluster_id: str, batch_size: int = 64, peer_batch_size: int = 1, diagnostics: bool = False):
         self.implementation, self.command = implementation, command
         self.directory, self.data = directory, data
         self.processes: dict[int, subprocess.Popen] = {}
@@ -38,7 +38,8 @@ class Cluster:
                 write_json(self.configs[node], {"id": node, "cluster": cluster_id,
                     "client": self.nodes[node], "peer": peers[node], "peers": peers,
                     "data_dir": str((data / f"node-{node}").resolve()),
-                    "tick_ms": 20, "capacity": 4096, "batch_size": batch_size})
+                    "tick_ms": 20, "capacity": 4096, "batch_size": batch_size,
+                    "peer_batch_size": peer_batch_size, "diagnostics": diagnostics})
         finally:
             for sock in reserved:
                 sock.close()

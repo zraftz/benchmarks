@@ -1,6 +1,7 @@
 //! Shared *benchmark embedding*, not a production Raft transport or database.
 //! Every adapter uses the same framed client protocol and durable application journal.
 pub mod actor;
+pub mod diagnostics;
 pub mod journal;
 pub mod model;
 pub mod net;
@@ -32,6 +33,13 @@ pub struct Config {
     pub capacity: usize,
     #[serde(default = "batch_size")]
     pub batch_size: usize,
+    #[serde(default = "peer_batch_size")]
+    pub peer_batch_size: usize,
+    #[serde(default)]
+    pub diagnostics: bool,
+}
+fn peer_batch_size() -> usize {
+    1
 }
 fn tick_ms() -> u64 {
     20
@@ -58,6 +66,8 @@ impl Config {
             || c.capacity > 65536
             || c.batch_size == 0
             || c.batch_size > 64
+            || c.peer_batch_size == 0
+            || c.peer_batch_size > 64
         {
             bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, batch size 1..64");
         }

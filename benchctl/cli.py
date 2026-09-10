@@ -35,6 +35,8 @@ def run(options) -> None:
         raise ValueError("invalid duration, warmup or run count")
     if not 1 <= options.concurrency <= 1024 or not 1 <= options.payload <= 65536 or not 1 <= options.keyspace <= 1_000_000:
         raise ValueError("invalid workload sizes")
+    if not 1 <= options.peer_batch_size <= 64:
+        raise ValueError("peer batch size must be 1..64")
     if not 1 <= options.batch_size <= 64 or not 0 < options.timeout <= 60 or options.read_percent < 0 or options.cas_percent < 0 or options.read_percent + options.cas_percent > 100:
         raise ValueError("invalid batch size, timeout or mix")
     if not options.data_root and not options.smoke:
@@ -43,6 +45,8 @@ def run(options) -> None:
     if not receipt_path.exists():
         raise RuntimeError("no verified local build; run ./raft-bench build first")
     receipt = json.loads(receipt_path.read_text())
+    if "rafter" in implementations and options.peer_batch_size > 1 and not receipt.get("peer_group_commit"):
+        raise RuntimeError("peer batching requires a build with --peer-group-commit")
     if receipt.get("source_digest") != source_digest():
         raise RuntimeError("sources changed since build receipt; rebuild")
     for implementation in implementations:
@@ -103,6 +107,7 @@ def main() -> None:
     p = sub.add_parser("build", help="test and build all durable adapters with locked dependencies")
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
     p.add_argument("--rafter-hard-state", choices=("replace", "journal"), default="replace", help="journal requires a Rafter revision with RFHJ support")
+    p.add_argument("--peer-group-commit", action="store_true", help="requires a Rafter revision with peer batch admission and telemetry")
     p = sub.add_parser("select-rafter", help="resolve a ref and update both local manifests and lockfiles")
     p.add_argument("ref")
     p = sub.add_parser("microbench", help="run the in-memory benchmark suite")
@@ -124,6 +129,8 @@ def main() -> None:
     p.add_argument("--read-percent", type=int, default=0)
     p.add_argument("--cas-percent", type=int, default=0)
     p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument("--peer-batch-size", type=int, default=1)
+    p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
     p.add_argument("--seed-base", type=int, default=1)
     p.add_argument("--data-root", type=Path)
@@ -150,7 +157,7 @@ def main() -> None:
                 from .selection import select_rafter
                 select_rafter(args.rafter_ref)
             if args.command == "build":
-                build(args.rafter_hard_state)
+                build(args.rafter_hard_state, args.peer_group_commit)
             else:
                 from .microbench import run_microbench
                 run_microbench(args.mode, args.runs, args.output)
