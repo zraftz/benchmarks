@@ -6,6 +6,12 @@ on:
         description: 'Rafter branch, tag, or full SHA (blank uses checked-in pin)'
         type: string
         default: ''
+      rafter_hard_state:
+        description: 'Rafter durable backend (journal requires a revision with RFHJ support)'
+        type: choice
+        options: [replace, journal]
+        default: replace
+        required: true
       suite:
         description: Benchmark suite
         type: choice
@@ -57,6 +63,7 @@ jobs:
         id: select
         env:
           RAFTER_REF: ${{ inputs.rafter_ref }}
+          RAFTER_HARD_STATE: ${{ inputs.rafter_hard_state }}
           SUITE: ${{ inputs.suite }}
           SCENARIO: ${{ inputs.scenario }}
         run: |
@@ -64,7 +71,7 @@ jobs:
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'SUITE', 'SCENARIO', 'GITHUB_SHA')}, indent=2))
+          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'GITHUB_SHA')}, indent=2))
           PY
           if [[ -n "$RAFTER_REF" ]]; then
             ./raft-bench select-rafter "$RAFTER_REF" 2>&1 | tee results/selection.log
@@ -75,7 +82,7 @@ jobs:
           with open('implementations.lock.json') as stream:
               pin = json.load(stream)['rafter']
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
-              stream.write(f"Rafter: `{pin['rev']}`\n\nSuite: {os.environ['SUITE']}\n\nShared GitHub runner; compare all engines in the same run.\n")
+              stream.write(f"Rafter: `{pin['rev']}`\n\nSuite: {os.environ['SUITE']}\n\nRafter hard state: {os.environ['RAFTER_HARD_STATE']}\n\nShared GitHub runner; compare all engines in the same run.\n")
           PY
       - name: In-memory benchmarks
         if: inputs.suite != 'durable'
@@ -89,7 +96,9 @@ jobs:
       - name: Locked durable build and tests
         id: durable_build
         if: ${{ !cancelled() && (inputs.suite == 'both' || inputs.suite == 'durable') && steps.select.outcome == 'success' }}
-        run: ./raft-bench build 2>&1 | tee results/baseline-build.log
+        env:
+          RAFTER_HARD_STATE: ${{ inputs.rafter_hard_state }}
+        run: ./raft-bench build --rafter-hard-state "$RAFTER_HARD_STATE" 2>&1 | tee results/baseline-build.log
       - name: Run 27 durable cases
         if: ${{ !cancelled() && steps.durable_build.outcome == 'success' }}
         env:

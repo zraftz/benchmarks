@@ -7,11 +7,19 @@ use bench_common::{
 };
 use rafter::{Input, LogIndex, NodeConfig, NodeId, Output, Role};
 use rafter_runtime::DurableRaftNode;
-use rafter_storage::{
-    FileRaftHardStateStore, FileRaftLogSegment, FileRaftNodeStores, FileRaftSnapshotStore,
+#[cfg(not(feature = "journal-hard-state"))]
+use rafter_storage::{FileRaftHardStateStore as HardState, FileRaftNodeStores as NodeStores};
+use rafter_storage::{FileRaftLogSegment, FileRaftSnapshotStore};
+#[cfg(feature = "journal-hard-state")]
+use rafter_storage::{JournalRaftHardStateStore as HardState, JournalRaftNodeStores as NodeStores};
+
+const HARD_STATE_BACKEND: &str = if cfg!(feature = "journal-hard-state") {
+    "journal"
+} else {
+    "replace"
 };
 
-type Node = DurableRaftNode<FileRaftHardStateStore, FileRaftLogSegment, FileRaftSnapshotStore>;
+type Node = DurableRaftNode<HardState, FileRaftLogSegment, FileRaftSnapshotStore>;
 struct Rafter {
     node: Node,
 }
@@ -62,7 +70,7 @@ impl Engine for Rafter {
     fn stats(&self) -> serde_json::Value {
         serde_json::json!({"term":self.node.current_term().0,
         "commit_index":self.node.commit_index().0,"last_log_index":self.node.last_log_index().0,
-        "storage":"rafter native file stores","election_ticks":"50 + 7*(node_id-1)"})
+        "storage":"rafter native file stores","hard_state_backend":HARD_STATE_BACKEND,"election_ticks":"50 + 7*(node_id-1)"})
     }
 }
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -73,7 +81,7 @@ async fn main() -> Result<()> {
     let raft_dir = config.data_dir.join("raft");
     std::fs::create_dir_all(&raft_dir)?;
     std::fs::File::open(&config.data_dir)?.sync_all()?;
-    let (hard, log, snap) = FileRaftNodeStores::open(&raft_dir)?.into_parts();
+    let (hard, log, snap) = NodeStores::open(&raft_dir)?.into_parts();
     let peers = config
         .peers
         .keys()

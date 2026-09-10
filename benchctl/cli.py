@@ -102,6 +102,7 @@ def main() -> None:
     sub.add_parser("doctor", help="show required tools; makes no installations")
     p = sub.add_parser("build", help="test and build all durable adapters with locked dependencies")
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
+    p.add_argument("--rafter-hard-state", choices=("replace", "journal"), default="replace", help="journal requires a Rafter revision with RFHJ support")
     p = sub.add_parser("select-rafter", help="resolve a ref and update both local manifests and lockfiles")
     p.add_argument("ref")
     p = sub.add_parser("microbench", help="run the in-memory benchmark suite")
@@ -149,7 +150,7 @@ def main() -> None:
                 from .selection import select_rafter
                 select_rafter(args.rafter_ref)
             if args.command == "build":
-                build()
+                build(args.rafter_hard_state)
             else:
                 from .microbench import run_microbench
                 run_microbench(args.mode, args.runs, args.output)

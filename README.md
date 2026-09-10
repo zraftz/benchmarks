@@ -50,6 +50,15 @@ Results live under `results/`. Verify a case or an in-memory suite with:
 ./raft-bench verify <result-directory>
 ```
 
+To test the opt-in hard-state journal on a supporting Rafter branch:
+
+```sh
+./raft-bench build --rafter-ref perf/hard-state-journal --rafter-hard-state journal
+```
+
+The CI job exposes the same `rafter_hard_state` selector. Build receipts and
+node stats record the backend; `replace` remains the default.
+
 ## Development
 
 ```sh

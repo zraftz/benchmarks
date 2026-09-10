@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+journal-hard-state = []
+
 [dependencies]
 bench-common.workspace = true
 anyhow.workspace = true

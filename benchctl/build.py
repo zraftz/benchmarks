@@ -12,11 +12,14 @@ from .selection import check_resolution
 IMPLEMENTATIONS = ("rafter", "raft-rs", "openraft")
 
 
-def build() -> None:
+def build(rafter_hard_state: str = "replace") -> None:
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     # A failed rebuild must never leave an earlier receipt usable.
     (dist / "build.json").unlink(missing_ok=True)
+    if rafter_hard_state not in ("replace", "journal"):
+        raise ValueError("rafter hard state must be replace or journal")
+    features = ["--features", "raft-bench-rafter/journal-hard-state"] if rafter_hard_state == "journal" else []
     if not (ROOT / "Cargo.lock").is_file():
         raise RuntimeError("Cargo.lock is missing; restore the checked-in lockfile before building")
     pins = json.loads((ROOT / "implementations.lock.json").read_text())
@@ -26,11 +29,11 @@ def build() -> None:
             raise RuntimeError(f"{tool} is missing; see README prerequisites")
     with (dist / "rust-tests.log").open("w") as log:
         try:
-            subprocess.run(["cargo", "test", "--workspace", "--locked"], cwd=ROOT,
+            subprocess.run(["cargo", "test", "--workspace", "--locked", *features], cwd=ROOT,
                            stdout=log, stderr=subprocess.STDOUT, check=True)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError("Rust tests failed; inspect dist/rust-tests.log") from exc
-    subprocess.run(["cargo", "build", "--workspace", "--release", "--locked"], cwd=ROOT, check=True)
+    subprocess.run(["cargo", "build", "--workspace", "--release", "--locked", *features], cwd=ROOT, check=True)
     # Cargo resolves config files and CARGO_TARGET_DIR; do not guess its output path.
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"], cwd=ROOT))
@@ -41,7 +44,7 @@ def build() -> None:
     subprocess.run(["go", "build", "-trimpath", "-o", str(dist / "raft-bench-load"), "."],
                    cwd=ROOT / "loadgen", check=True)
     record = {
-        "schema": 1, "source_digest": source_digest(), "implementations": pins,
+        "schema": 1, "rafter_hard_state_backend": rafter_hard_state, "source_digest": source_digest(), "implementations": pins,
         "cargo_lock_sha256": digest(ROOT / "Cargo.lock"), "rust_tests_passed": True,
         "rustc": capture(["rustc", "-Vv"]), "cargo": capture(["cargo", "-V"]),
         "go": capture(["go", "version"]), "protoc": capture(["protoc", "--version"]),

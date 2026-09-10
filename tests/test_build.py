@@ -42,6 +42,11 @@ class BuildTests(unittest.TestCase):
             self.assertEqual((root / "dist/rust-tests.log").read_text(), "compiler failure")
 
     def test_cargo_output_directory_is_staged_and_hashed(self):
+        for backend in ("replace", "journal"):
+            with self.subTest(backend=backend):
+                self.check_successful_build(backend)
+
+    def check_successful_build(self, backend):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "source"
             root.mkdir()
@@ -58,11 +63,19 @@ class BuildTests(unittest.TestCase):
                     (root / "dist/raft-bench-load").write_text("loadgen")
             with patch("benchctl.build.ROOT", root), patch("benchctl.build.shutil.which", return_value="tool"), \
                  patch("benchctl.build.check_resolution"), \
-                 patch("benchctl.build.subprocess.run", side_effect=run), \
+                 patch("benchctl.build.subprocess.run", side_effect=run) as commands, \
                  patch("benchctl.build.subprocess.check_output", return_value=json.dumps({"target_directory": str(target)})), \
                  patch("benchctl.build.capture", return_value={}), patch("benchctl.build.source_digest", return_value="source"):
-                build()
+                build(backend)
+            cargo_commands = [call.args[0] for call in commands.call_args_list if call.args[0][0] == "cargo"]
+            self.assertEqual(len(cargo_commands), 2)
+            for command in cargo_commands:
+                if backend == "journal":
+                    self.assertEqual(command[-2:], ["--features", "raft-bench-rafter/journal-hard-state"])
+                else:
+                    self.assertNotIn("--features", command)
             receipt = json.loads((root / "dist/build.json").read_text())
+            self.assertEqual(receipt["rafter_hard_state_backend"], backend)
             for name in IMPLEMENTATIONS:
                 binary = root / "dist" / f"raft-bench-{name}"
                 self.assertEqual(binary.read_text(), name)
