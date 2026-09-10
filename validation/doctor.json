@@ -1,0 +1,8 @@
+{
+  "cargo": null,
+  "rustc": null,
+  "go": "/usr/local/go/bin/go",
+  "protoc": null,
+  "git": "/usr/bin/git",
+  "python3": "/opt/pyvenv/bin/python3"
+}

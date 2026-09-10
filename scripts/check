@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mode="${1:-all}"
+case "$mode" in all|tooling|rust) ;; *) echo "usage: scripts/check [all|tooling|rust]" >&2; exit 2 ;; esac
+if [[ "$mode" != rust ]]; then
+  bash -n scripts/check scripts/test.sh scripts/smoke
+  unformatted="$(cd loadgen && gofmt -l .)"
+  if [[ -n "$unformatted" ]]; then
+    echo "Run gofmt on: $unformatted" >&2
+    exit 1
+  fi
+  (cd loadgen && go vet ./... && go test -race -count=1 ./...)
+  python3 -m unittest discover -s tests -v
+fi
+if [[ "$mode" != tooling ]]; then
+  cargo fmt --all -- --check
+  cargo clippy --workspace --all-targets --locked -- -D warnings
+  cargo test --workspace --locked
+fi

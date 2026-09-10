@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "rafter": {
+    "git": "https://github.com/zsumz/rafter",
+    "rev": "518aefd767dc0ef2c1f1ccc5f970c96456cfd109"
+  },
+  "raft-rs": {
+    "crate": "raft",
+    "version": "0.7.0",
+    "codec": "prost-codec"
+  },
+  "openraft": {
+    "crate": "openraft",
+    "version": "0.9.24",
+    "features": [
+      "storage-v2",
+      "serde"
+    ]
+  },
+  "etcd-raft": {
+    "status": "not-implemented"
+  },
+  "hashicorp-raft": {
+    "status": "not-implemented"
+  },
+  "note": "Exact implementation pins. Cargo.lock freezes the complete Rust dependency graph; all builds use --locked."
+}

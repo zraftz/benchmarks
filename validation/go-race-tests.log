@@ -1,0 +1,14 @@
+=== RUN   TestHistogramBounds
+--- PASS: TestHistogramBounds (0.00s)
+=== RUN   TestHistogramMerge
+--- PASS: TestHistogramMerge (0.00s)
+=== RUN   TestFrameRoundTrip
+--- PASS: TestFrameRoundTrip (0.00s)
+=== RUN   TestRejectLargeFrame
+--- PASS: TestRejectLargeFrame (0.00s)
+=== RUN   TestTruncatedFrame
+--- PASS: TestTruncatedFrame (0.00s)
+=== RUN   TestNodeParser
+--- PASS: TestNodeParser (0.00s)
+PASS
+ok  	raft-bench/loadgen	1.091s

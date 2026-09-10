@@ -1,0 +1,100 @@
+name: Baseline benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Workload scenario
+        type: choice
+        options:
+          - durable-kv
+          - leader-loss
+          - follower-catchup
+        default: durable-kv
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: baseline-benchmark
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  GOTOOLCHAIN: local
+jobs:
+  baseline:
+    name: Three-engine baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.7'
+          cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler build-essential
+          toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          rustup toolchain install "$toolchain" --profile minimal
+      - name: Locked build and tests
+        run: |
+          mkdir -p results
+          ./raft-bench build 2>&1 | tee results/baseline-build.log
+      - name: Record experiment scope
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          cat > results/BASELINE.md <<EOF
+          # Initial baseline on a shared GitHub runner
+
+          Commit: $GITHUB_SHA
+          Scenario: $SCENARIO
+          Implementations: Rafter, raft-rs, OpenRaft
+          Offered rates: closed loop, 100/s, 1000/s
+          Repetitions: 3, with rotating implementation order
+          Per case: 60 seconds measured, 10 seconds warmup
+          Workload: writes, 512-byte values, 64 concurrent clients
+          Storage: runner disk under $RUNNER_TEMP/raft-bench-data
+
+          This is an initial reference from shared GitHub hardware. Results describe
+          these complete service integrations. Controlled hardware and review are
+          required before publishing a general performance ranking.
+
+          Open baseline/report.html for the comparison and inspect each case's
+          evidence and logs. Failed cases remain visible and fail the workflow.
+          EOF
+          cat results/BASELINE.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Run 27 benchmark cases
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          ./raft-bench run --implementations rafter,raft-rs,openraft \
+            --scenario "$SCENARIO" --rates 0,100,1000 \
+            --duration 60 --warmup 10 --runs 3 \
+            --concurrency 64 --payload 512 \
+            --data-root "$RUNNER_TEMP/raft-bench-data" \
+            --output results/baseline 2>&1 | tee results/baseline-run.log
+      - name: Retain report and evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: baseline-${{ inputs.scenario }}-${{ github.run_id }}
+          path: |
+            Cargo.lock
+            dist/build.json
+            dist/rust-tests.log
+            results/BASELINE.md
+            results/baseline-build.log
+            results/baseline-run.log
+            results/baseline/
+          if-no-files-found: error
+          retention-days: 30

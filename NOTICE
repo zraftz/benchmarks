@@ -1,0 +1,9 @@
+raft-bench
+Standalone benchmark harness and adapter source.
+
+The new harness is distributed under the Apache License, Version 2.0.
+The historical-source importer retrieves code from zsumz/rafter at the exact
+revision recorded in implementations.lock.json and preserves its LICENSE and
+NOTICE. Imported files and third-party dependencies retain their own notices
+and licensing terms. No upstream endorsement or independent certification is
+implied by their inclusion in a comparison.

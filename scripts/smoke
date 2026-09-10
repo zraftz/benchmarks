@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Run all real adapters, retain every failure, and fail the overall gate if any case fails.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+output="${1:-results/runs/smoke-$(date -u +%Y%m%dT%H%M%SZ)}"
+mkdir -p "$(dirname "$output")"
+mkdir "$output"
+status=0
+./raft-bench run --smoke --rates 0,100 --output "$output/durable-kv" || status=1
+./raft-bench run --smoke --rates 100 --scenario leader-loss --output "$output/leader-loss" || status=1
+./raft-bench run --smoke --rates 100 --scenario follower-catchup --output "$output/follower-catchup" || status=1
+exit "$status"

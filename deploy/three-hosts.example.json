@@ -1,0 +1,23 @@
+{
+  "cluster": "replace-with-a-unique-trial-id",
+  "nodes": [
+    {
+      "id": 1,
+      "client": "10.0.0.11:7000",
+      "peer": "10.0.0.11:7001",
+      "data_dir": "/var/lib/raft-bench/trial-1/node-1"
+    },
+    {
+      "id": 2,
+      "client": "10.0.0.12:7000",
+      "peer": "10.0.0.12:7001",
+      "data_dir": "/var/lib/raft-bench/trial-1/node-2"
+    },
+    {
+      "id": 3,
+      "client": "10.0.0.13:7000",
+      "peer": "10.0.0.13:7001",
+      "data_dir": "/var/lib/raft-bench/trial-1/node-3"
+    }
+  ]
+}
