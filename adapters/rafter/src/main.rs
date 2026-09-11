@@ -1,5 +1,6 @@
 //! Rafter native durable stores + shared client/transport/application embedding.
 mod diagnostics;
+mod driver;
 
 use anyhow::Result;
 use bench_common::{
@@ -11,7 +12,7 @@ use rafter::{Input, LogIndex, Message, NodeConfig, NodeId, Output, Role};
 mod storage;
 use storage::{Node, NodeStores, HARD_STATE_BACKEND};
 struct Rafter {
-    node: Node,
+    node: driver::Driver,
     ordered_apply: bool,
     empty_appends: diagnostics::EmptyAppends,
 }
@@ -47,7 +48,7 @@ impl Rafter {
             .first()
             .map(|input| diagnostics::origin(input, self.node.role()));
         let progress = if self.empty_appends.enabled() {
-            self.node.leader_replication_progress()
+            self.node.ready().leader_replication_progress()
         } else {
             Vec::new()
         };
@@ -59,6 +60,15 @@ impl Rafter {
     }
 }
 impl Engine for Rafter {
+    fn persistence_pending(&self) -> bool {
+        self.node.pending()
+    }
+    fn complete_persistence(&mut self) -> Result<Option<Vec<Effect>>> {
+        self.node
+            .complete()?
+            .map(|outputs| effects(outputs, self.ordered_apply))
+            .transpose()
+    }
     fn term(&self) -> u64 {
         self.node.current_term().0
     }
@@ -76,7 +86,7 @@ impl Engine for Rafter {
     fn peer_gate(&self, max_events: usize, max_bytes: usize) -> PeerGate {
         #[cfg(feature = "peer-group-commit")]
         {
-            self.node.peer_batch_gate(max_events, max_bytes)
+            self.node.ready().peer_batch_gate(max_events, max_bytes)
         }
         #[cfg(not(feature = "peer-group-commit"))]
         {
@@ -95,28 +105,29 @@ impl Engine for Rafter {
         }
     }
     fn committed_through(&self) -> u64 {
-        self.node.commit_index().0
+        self.node.ready().commit_index().0
     }
     fn last_index(&self) -> u64 {
-        self.node.last_log_index().0
+        self.node.ready().last_log_index().0
     }
     fn committed_entries(&self, after: u64, count: usize, bytes: usize) -> Result<Vec<Applied>> {
         #[cfg(feature = "ordered-apply")]
         {
-            if after < self.node.snapshot_index().0 {
+            if after < self.node.ready().snapshot_index().0 {
                 anyhow::bail!("application floor is behind a snapshot")
             }
             let mut result = Vec::new();
             let mut used = 0;
             for (offset, entry) in self
                 .node
+                .ready()
                 .log_entries_slice_from(LogIndex(after + 1))
                 .iter()
                 .take(count)
                 .enumerate()
             {
                 let index = after + 1 + offset as u64;
-                if index > self.node.commit_index().0 {
+                if index > self.node.ready().commit_index().0 {
                     break;
                 }
                 let applied = Applied {
@@ -173,7 +184,9 @@ impl Engine for Rafter {
     }
     fn stats(&self) -> serde_json::Value {
         #[cfg(feature = "peer-group-commit")]
-        let persistence: serde_json::Value = rafter_storage::telemetry::snapshot()
+        let persistence: serde_json::Value = self
+            .node
+            .native_counters()
             .into_iter()
             .map(|(name, m)| {
                 (
@@ -186,8 +199,8 @@ impl Engine for Rafter {
         #[cfg(not(feature = "peer-group-commit"))]
         let persistence = serde_json::Value::Null;
         serde_json::json!({"term":self.node.current_term().0,
-        "commit_index":self.node.commit_index().0,"last_log_index":self.node.last_log_index().0,
-        "empty_appends_by_reason":self.empty_appends.snapshot(),
+        "commit_index":self.node.ready().commit_index().0,"last_log_index":self.node.ready().last_log_index().0,
+        "empty_appends_by_reason":self.empty_appends.snapshot(),"persistence_pipeline":self.node.stats(),
         "persistence_diagnostics":persistence,"peer_group_commit_available":cfg!(feature = "peer-group-commit"),
         "storage":"rafter native file stores","hard_state_backend":HARD_STATE_BACKEND,"election_ticks":"50 + 7*(node_id-1)"})
     }
@@ -197,6 +210,12 @@ async fn main() -> Result<()> {
     let config = Config::load()?;
     if config.ordered_apply && !cfg!(feature = "ordered-apply") {
         anyhow::bail!("ordered apply is unavailable in this build")
+    }
+    if config.pipelined_durability && !cfg!(feature = "pipelined-durability") {
+        anyhow::bail!("pipelined durability is unavailable in this build")
+    }
+    if config.pipelined_durability && (!config.ordered_apply || !config.peer_message_stream) {
+        anyhow::bail!("pipelined durability requires ordered application and message transport")
     }
     let _lock = config.lock_directory("rafter")?;
     let model = DurableModel::open(&config.data_dir.join("application.wal"))?;
@@ -224,7 +243,7 @@ async fn main() -> Result<()> {
         config.clone(),
         "rafter",
         Rafter {
-            node,
+            node: driver::Driver::new(node, config.pipelined_durability, config.diagnostics)?,
             ordered_apply: config.ordered_apply,
             empty_appends: diagnostics::EmptyAppends::new(config.diagnostics),
         },

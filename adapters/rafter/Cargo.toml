@@ -12,6 +12,7 @@ journal-hard-state = []
 wal-hard-state = []
 peer-group-commit = []
 ordered-apply = []
+pipelined-durability = ["peer-group-commit", "ordered-apply"]
 
 [dependencies]
 bench-common.workspace = true

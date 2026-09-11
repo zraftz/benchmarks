@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from unittest.mock import patch
-from benchctl.paired import archive_build, ordered_arms
+from benchctl.paired import archive_build, ordered_arms, mode_flags
 from benchctl.evidence import digest
 
 
@@ -30,3 +30,11 @@ class PairedTests(unittest.TestCase):
                     archive_build(root / "invalid")
             self.assertEqual((root / "prior/raft-bench-rafter").read_bytes(), b"compiled prior revision")
             self.assertEqual(json.loads((root / "prior/build.json").read_text()), receipt)
+
+    def test_pipeline_mode_retains_worker_transport_and_control_isolation(self):
+        self.assertEqual(mode_flags("pipeline"), {"ordered_apply": True, "peer_message_stream": True, "pipelined_durability": True})
+        self.assertEqual(mode_flags("messages"), {"ordered_apply": True, "peer_message_stream": True, "pipelined_durability": False})
+        for mode in ("inline", "worker", "messages", "pipeline"):
+            self.assertFalse(any(mode_flags(mode, "openraft").values()))
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            mode_flags("unknown")

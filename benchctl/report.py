@@ -45,6 +45,7 @@ def render(suite: Path, destination: Path) -> None:
                 "network_delay_ms": manifest["options"].get("network_delay_ms", 0),
                 "ordered_apply": manifest["options"].get("ordered_apply", False),
                 "peer_message_stream": manifest["options"].get("peer_message_stream", False),
+                "pipelined_durability": manifest["options"].get("pipelined_durability", False),
                 "peer_group_commit": (manifest.get("build_receipt") or {}).get("peer_group_commit", False),
                 "diagnostics": manifest["options"].get("diagnostics", False)}, sort_keys=True)
             key = (manifest["implementation"], revision, variant, manifest["scenario"], r["config"]["rate"],
@@ -59,7 +60,8 @@ def render(suite: Path, destination: Path) -> None:
         mode = "diagnostics" if settings["diagnostics"] else "timing"
         apply = "worker" if settings["ordered_apply"] else "inline/native"
         transport = "messages" if settings["peer_message_stream"] else "RPC"
-        detail = f"{settings['backend']} · peers ≤{settings['peer_batch_size']} · {apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
+        persistence = "pipelined" if settings["pipelined_durability"] else "synchronous"
+        detail = f"{persistence} · {settings['backend']} · peers ≤{settings['peer_batch_size']} · {apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
         config = f"{scenario} · {detail} · {payload} bytes · {concurrency} clients · {reads}% reads · {cas}% CAS"
         fields = (engine, revision[:12], config, rate, len(values), f"{median(rates):.1f}",
                   f"{min(rates):.1f}–{max(rates):.1f}", median_latency(values, "success_latency"),

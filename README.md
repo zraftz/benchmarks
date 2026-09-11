@@ -14,8 +14,8 @@ any Rafter branch, tag, or full commit SHA. Leave it blank to use the checked-in
 pin. Both suites resolve the same SHA and retain their exact dependency locks.
 
 ```sh
-gh workflow run baseline.yml --repo zraftz/benchmarks \
-  -f suite=both -f rafter_ref=perf/durable-crc32
+gh workflow run baseline.yml --repo zraftz/benchmarks --ref perf/raft-performance \
+  -f suite=both -f rafter_ref=perf/raft-performance
 ```
 
 Download the `benchmarks-<run-id>` artifact. Open `results/microbench/report.html`
@@ -35,7 +35,7 @@ Linux is recommended. Data storage must support file and directory syncs.
 ```sh
 ./raft-bench microbench --runs 3
 
-./raft-bench build --rafter-ref perf/durable-crc32
+./raft-bench build --rafter-ref perf/raft-performance
 ./raft-bench run --rates 0,100,1000 --runs 3 --data-root /path/to/benchmark-disk
 ```
 
@@ -50,26 +50,31 @@ Results live under `results/`. Verify a case or an in-memory suite with:
 ./raft-bench verify <result-directory>
 ```
 
-To test the opt-in hard-state journal on a supporting Rafter branch:
+## Compare changes
 
-```sh
-./raft-bench build --rafter-ref perf/hard-state-journal --rafter-hard-state journal
-```
+All active performance work uses `perf/raft-performance`. In paired CI, give
+prior and candidate Rafter refs, choose each embedding mode, and keep batch caps
+fixed to isolate a change. Runs alternate both revisions with OpenRaft on one
+runner. Timing and diagnostic cases stay separate in `results/paired/`.
 
-The CI job exposes the same `rafter_hard_state` selector. Build receipts and
-node stats record the backend; `replace` remains the default.
+| Option | Purpose |
+|---|---|
+| Build `--peer-group-commit`, run `--peer-batch-size 32` | Drain ready peer events into one durable batch |
+| Build/run `--ordered-apply` | Persist application work on one ordered worker |
+| Run `--peer-message-stream --implementations rafter,raft-rs` | Send peer messages without empty transport replies |
+| Build `--rafter-hard-state journal` or `wal` | Select supported native storage; `replace` is the default |
+| Build/run `--pipelined-durability` | Rafter only: overlap eligible replication and local persistence |
 
-For a paired durable experiment, enable `paired` in the workflow and provide
-both Rafter refs. It alternates the prior revision, candidate batch caps
-(8/16/32/64), and OpenRaft on one runner. Results are in `results/paired/`.
-Diagnostic cases run separately; their timings are never pooled with the sweep.
+Options require a Rafter revision supporting the corresponding API. Pipeline
+mode also enables ordered apply and message transport. Paired CI offers
+`inline`, `worker`, `messages`, and `pipeline` independently for each revision;
+message modes run with both zero and 2 ms added loopback egress delay.
 
-Locally, build a supporting revision with `--peer-group-commit`, then run with
-`--peer-batch-size 32`. Add `--diagnostics` only for a separate instrumented run.
-
-Build and run with `--ordered-apply` to move application persistence onto one
-ordered worker per node. In paired CI, select `prior_mode` and `candidate_mode`
-independently and keep `prior_peer_batch_size` fixed to isolate each change.
+The workflow's `rafter_hard_state` selects the candidate backend; the prior uses
+journal. The paired CLI also accepts `--prior-hard-state`. Each run uses fresh
+directories; the WAL has no implicit format migration. Build receipts and node
+stats record the choices. Use `--diagnostics` separately for stage counters and
+empty-append reasons; timing runs leave them disabled.
 
 ## Development
 
@@ -84,13 +89,3 @@ independently and keep `prior_peer_batch_size` fixed to isolate each change.
 
 Maintained by the Rafter author. Results describe these service integrations;
 they are not upstream endorsements. Apache-2.0; see [NOTICE](NOTICE).
-
-Use `run --peer-message-stream --implementations rafter,raft-rs` to remove empty delivery replies. The RPC control remains the default. Paired CI selects each revision’s `inline`, `worker`, or `messages` mode independently, first on loopback and then with 2 ms of added delay per loopback egress (clients and peers).
-
-Rafter diagnostic runs also count empty appends by input reason, including full proposal windows and unanswered probes. Timing runs leave these counters disabled.
-
-Use `--rafter-hard-state wal` with a revision supporting the atomic RFWB backend.
-Paired CI uses `rafter_hard_state` for the candidate and journal for the prior;
-the CLI also accepts `--prior-hard-state`. Keep modes and batch caps equal when
-isolating the WAL change. WAL directories are a separate format with no implicit
-migration; these runs always create fresh directories.

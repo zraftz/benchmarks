@@ -104,6 +104,7 @@ fn state(engine: PendingEngine, outbound: OutboundPeers) -> State<PendingEngine>
             diagnostics: false,
             ordered_apply: false,
             peer_message_stream: true,
+            pipelined_durability: false,
         },
         name: "test",
         engine,

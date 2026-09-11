@@ -12,18 +12,22 @@ from .selection import check_resolution
 IMPLEMENTATIONS = ("rafter", "raft-rs", "openraft")
 
 
-def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False, ordered_apply: bool = False) -> None:
+def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False, ordered_apply: bool = False, pipelined_durability: bool = False) -> None:
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     # A failed rebuild must never leave an earlier receipt usable.
     (dist / "build.json").unlink(missing_ok=True)
     if rafter_hard_state not in ("replace", "journal", "wal"):
         raise ValueError("rafter hard state must be replace, journal, or wal")
+    if pipelined_durability:
+        peer_group_commit = ordered_apply = True
     selected = [f"raft-bench-rafter/{rafter_hard_state}-hard-state"] if rafter_hard_state != "replace" else []
     if peer_group_commit:
         selected.append("raft-bench-rafter/peer-group-commit")
     if ordered_apply:
         selected.append("raft-bench-rafter/ordered-apply")
+    if pipelined_durability:
+        selected.append("raft-bench-rafter/pipelined-durability")
     features = ["--features", ",".join(selected)] if selected else []
     if not (ROOT / "Cargo.lock").is_file():
         raise RuntimeError("Cargo.lock is missing; restore the checked-in lockfile before building")
@@ -49,7 +53,7 @@ def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False, o
     subprocess.run(["go", "build", "-trimpath", "-o", str(dist / "raft-bench-load"), "."],
                    cwd=ROOT / "loadgen", check=True)
     record = {
-        "schema": 1, "peer_group_commit": peer_group_commit, "ordered_apply": ordered_apply, "rafter_hard_state_backend": rafter_hard_state, "source_digest": source_digest(), "implementations": pins,
+        "schema": 1, "pipelined_durability": pipelined_durability, "peer_group_commit": peer_group_commit, "ordered_apply": ordered_apply, "rafter_hard_state_backend": rafter_hard_state, "source_digest": source_digest(), "implementations": pins,
         "cargo_lock_sha256": digest(ROOT / "Cargo.lock"), "rust_tests_passed": True,
         "rustc": capture(["rustc", "-Vv"]), "cargo": capture(["cargo", "-V"]),
         "go": capture(["go", "version"]), "protoc": capture(["protoc", "--version"]),

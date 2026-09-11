@@ -83,7 +83,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
     write_json(directory / "manifest.json", manifest)
     cluster = Cluster(implementation, command, directory / "cluster", data, case_id, options.batch_size,
         getattr(options, "peer_batch_size", 1), getattr(options, "diagnostics", False),
-        getattr(options, "ordered_apply", False), getattr(options, "peer_message_stream", False))
+        getattr(options, "ordered_apply", False), getattr(options, "peer_message_stream", False),
+        getattr(options, "pipelined_durability", False))
     load = None
     try:
         cluster.start()
@@ -107,7 +108,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 keyspace=options.keyspace, seed=options.seed, reads=options.read_percent,
                 cas=options.cas_percent, namespace="bench", timeout=options.timeout)
             checked_load(args, directory / "warmup.log", options.warmup + options.timeout * 3 + 30)
-        write_json(directory / "before.json", protocol.statuses(cluster.nodes))
+        before = protocol.statuses(cluster.nodes)
+        write_json(directory / "before.json", before)
         args = load_command(cluster.nodes, directory, "measurement", duration=options.duration,
             concurrency=options.concurrency, payload=options.payload, rate=options.rate,
             keyspace=options.keyspace, seed=options.seed, reads=options.read_percent,
@@ -166,6 +168,11 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             raise RuntimeError(f"measurement accounting failed: {invalid}")
         cluster.wait_ready()
         protocol.leader(cluster.nodes)
+        if getattr(options, "pipelined_durability", False) and options.scenario == "durable-kv":
+            from .pipeline import activity
+            after_load = protocol.statuses(cluster.nodes)
+            write_json(directory / "persistence-after-load.json", after_load)
+            write_json(directory / "pipeline-activity.json", activity(before, after_load))
         post = canaries(cluster.nodes, case_id + "post")
         write_json(directory / "after.json", protocol.statuses(cluster.nodes))
         cluster.stop_all()

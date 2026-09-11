@@ -24,3 +24,12 @@ pub const HARD_STATE_BACKEND: &str = if cfg!(feature = "wal-hard-state") {
     "replace"
 };
 pub type Node = DurableRaftNode<HardState, Log, FileRaftSnapshotStore>;
+
+#[cfg(feature = "pipelined-durability")]
+pub type Pipeline =
+    rafter_runtime::pipelined::PipelinedRaftNode<HardState, Log, FileRaftSnapshotStore>;
+#[cfg(feature = "pipelined-durability")]
+pub type Work = rafter_runtime::pipelined::PersistenceWork<HardState, Log, FileRaftSnapshotStore>;
+#[cfg(feature = "pipelined-durability")]
+pub type Completion =
+    rafter_runtime::pipelined::PersistenceCompletion<HardState, Log, FileRaftSnapshotStore>;

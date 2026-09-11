@@ -21,6 +21,10 @@ def run(options) -> None:
     implementations = options.implementations.split(",")
     if not implementations or len(set(implementations)) != len(implementations) or any(i not in IMPLEMENTATIONS for i in implementations):
         raise ValueError("implementations must be distinct members of rafter,raft-rs,openraft")
+    if options.pipelined_durability:
+        if implementations != ["rafter"]:
+            raise ValueError("pipelined durability requires --implementations rafter")
+        options.ordered_apply = options.peer_message_stream = True
     if options.peer_message_stream and "openraft" in implementations:
         raise ValueError("OpenRaft uses actual request/reply RPCs; select message engines explicitly")
     rates = [float(r) for r in options.rates.split(",")]
@@ -51,6 +55,8 @@ def run(options) -> None:
         raise RuntimeError("peer batching requires a build with --peer-group-commit")
     if "rafter" in implementations and options.ordered_apply and not receipt.get("ordered_apply"):
         raise RuntimeError("ordered application requires a build with --ordered-apply")
+    if options.pipelined_durability and not receipt.get("pipelined_durability"):
+        raise RuntimeError("pipelined durability requires a build with --pipelined-durability")
     if receipt.get("source_digest") != source_digest():
         raise RuntimeError("sources changed since build receipt; rebuild")
     for implementation in implementations:
@@ -113,6 +119,7 @@ def main() -> None:
     p.add_argument("--rafter-hard-state", choices=("replace", "journal", "wal"), default="replace", help="journal and wal require a Rafter revision supporting that backend")
     p.add_argument("--peer-group-commit", action="store_true", help="requires a Rafter revision with peer batch admission and telemetry")
     p.add_argument("--ordered-apply", action="store_true", help="enable the ordered application worker API")
+    p.add_argument("--pipelined-durability", action="store_true", help="requires the Rafter pipeline API; enables peer batching and ordered apply support")
     p = sub.add_parser("select-rafter", help="resolve a ref and update both local manifests and lockfiles")
     p.add_argument("ref")
     p = sub.add_parser("microbench", help="run the in-memory benchmark suite")
@@ -137,6 +144,7 @@ def main() -> None:
     p.add_argument("--ordered-apply", action="store_true")
     p.add_argument("--peer-batch-size", type=int, default=1)
     p.add_argument("--peer-message-stream", action="store_true")
+    p.add_argument("--pipelined-durability", action="store_true", help="Rafter only; enables ordered apply and message transport")
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
     p.add_argument("--seed-base", type=int, default=1)
@@ -164,7 +172,7 @@ def main() -> None:
                 from .selection import select_rafter
                 select_rafter(args.rafter_ref)
             if args.command == "build":
-                build(args.rafter_hard_state, args.peer_group_commit, args.ordered_apply)
+                build(args.rafter_hard_state, args.peer_group_commit, args.ordered_apply, args.pipelined_durability)
             else:
                 from .microbench import run_microbench
                 run_microbench(args.mode, args.runs, args.output)

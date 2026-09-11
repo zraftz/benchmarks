@@ -42,6 +42,8 @@ pub struct Config {
     pub ordered_apply: bool,
     #[serde(default)]
     pub peer_message_stream: bool,
+    #[serde(default)]
+    pub pipelined_durability: bool,
 }
 fn peer_batch_size() -> usize {
     1

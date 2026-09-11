@@ -133,6 +133,13 @@ def verify(directory: Path) -> dict[str, Any]:
             from .micro_report import verify_report
             verify_report(directory)
             return {"status": "failed" if errors else "passed", "errors": errors}
+        manifest = json.loads((directory / "manifest.json").read_text())
+        if manifest.get("options", {}).get("pipelined_durability") and manifest.get("scenario") == "durable-kv":
+            from .pipeline import activity
+            actual_activity = activity(json.loads((directory / "before.json").read_text()),
+                                       json.loads((directory / "persistence-after-load.json").read_text()))
+            if actual_activity != json.loads((directory / "pipeline-activity.json").read_text()):
+                errors.append("pipeline activity verdict differs from recorded counters")
         result = json.loads((directory / "measurement.json").read_text())
         errors.extend(validate_result(result))
         qualification = json.loads((directory / "qualification.json").read_text())

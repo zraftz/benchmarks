@@ -29,12 +29,12 @@ on:
       prior_mode:
         description: Prior Rafter embedding
         type: choice
-        options: [inline, worker, messages]
+        options: [inline, worker, messages, pipeline]
         default: inline
       candidate_mode:
         description: Candidate Rafter embedding
         type: choice
-        options: [inline, worker, messages]
+        options: [inline, worker, messages, pipeline]
         default: inline
       prior_peer_batch_size:
         description: Prior Rafter peer batch cap
@@ -148,7 +148,7 @@ jobs:
           CANDIDATE_BATCHES: ${{ inputs.peer_batch_sizes }}
         run: |
           flags=()
-          if [[ "$PRIOR_MODE" == messages || "$CANDIDATE_MODE" == messages ]]; then flags+=(--network-delays-ms 0,2); fi
+          if [[ "$PRIOR_MODE" == messages || "$PRIOR_MODE" == pipeline || "$CANDIDATE_MODE" == messages || "$CANDIDATE_MODE" == pipeline ]]; then flags+=(--network-delays-ms 0,2); fi
           python3 -m benchctl.paired --prior "$PRIOR_REF" --candidate "$CANDIDATE_REF" --candidate-hard-state "$CANDIDATE_HARD_STATE" "${flags[@]}" \
             --prior-mode "$PRIOR_MODE" --candidate-mode "$CANDIDATE_MODE" \
             --prior-peer-batch-size "$PRIOR_BATCH" --peer-batch-sizes "$CANDIDATE_BATCHES" \

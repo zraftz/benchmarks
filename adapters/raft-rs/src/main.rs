@@ -221,6 +221,10 @@ impl Engine for RaftRs {
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
     let config = Config::load()?;
+    if config.pipelined_durability {
+        anyhow::bail!("pipelined durability is a Rafter-only mode")
+    }
+
     let _lock = config.lock_directory("raft-rs")?;
     let model = DurableModel::open(&config.data_dir.join("application.wal"))?;
     let mut engine = RaftRs::open(&config, model.index)?;

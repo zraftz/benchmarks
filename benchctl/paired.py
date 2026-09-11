@@ -17,6 +17,17 @@ from .selection import select_rafter
 from .network import loopback_delay
 
 
+MODES = ("inline", "worker", "messages", "pipeline")
+
+
+def mode_flags(mode: str, engine: str = "rafter") -> dict[str, bool]:
+    if mode not in MODES:
+        raise ValueError("unsupported embedding mode")
+    return {"ordered_apply": mode != "inline" and engine == "rafter",
+            "peer_message_stream": mode in ("messages", "pipeline") and engine == "rafter",
+            "pipelined_durability": mode == "pipeline" and engine == "rafter"}
+
+
 def archive_build(destination: Path) -> dict:
     receipt = json.loads((ROOT / "dist/build.json").read_text())
     destination.mkdir(parents=True, exist_ok=False)
@@ -42,8 +53,8 @@ def main() -> None:
     parser.add_argument("--candidate-hard-state", choices=("replace", "journal", "wal"), default="journal")
     parser.add_argument("--peer-batch-sizes", default="8,16,32,64")
     parser.add_argument("--network-delays-ms", default="0", help="explicit Linux loopback netem delays; 0 leaves networking unchanged")
-    parser.add_argument("--prior-mode", choices=("inline", "worker", "messages"), default="inline")
-    parser.add_argument("--candidate-mode", choices=("inline", "worker", "messages"), default="inline")
+    parser.add_argument("--prior-mode", choices=MODES, default="inline")
+    parser.add_argument("--candidate-mode", choices=MODES, default="inline")
     parser.add_argument("--prior-peer-batch-size", type=int, default=1)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
@@ -61,19 +72,23 @@ def main() -> None:
     work = ROOT / ".cache/paired" / uuid.uuid4().hex
     data = args.data_root.resolve() / work.name
     select_rafter(args.prior)
-    build(args.prior_hard_state, peer_group_commit=args.prior_peer_batch_size > 1, ordered_apply=args.prior_mode != "inline")
+    build(args.prior_hard_state, peer_group_commit=args.prior_peer_batch_size > 1, ordered_apply=args.prior_mode != "inline", pipelined_durability=args.prior_mode == "pipeline")
     prior = archive_build(work / "prior")
     write_json(output / "prior-build.json", prior)
     select_rafter(args.candidate)
-    build(args.candidate_hard_state, peer_group_commit=True, ordered_apply=args.candidate_mode != "inline")
+    build(args.candidate_hard_state, peer_group_commit=True, ordered_apply=args.candidate_mode != "inline", pipelined_durability=args.candidate_mode == "pipeline")
     candidate = archive_build(work / "candidate")
     write_json(output / "candidate-build.json", candidate)
     if args.candidate_mode != "inline":
-        scenarios = ("durable-kv", "leader-loss", "follower-catchup") if args.candidate_mode == "messages" else ("durable-kv",)
+        scenarios = ("durable-kv", "leader-loss", "follower-catchup") if args.candidate_mode in ("messages", "pipeline") else ("durable-kv",)
         for scenario in scenarios:
-            flags = ["--peer-message-stream"] if args.candidate_mode == "messages" else []
+            flags = ["--peer-message-stream"] if args.candidate_mode in ("messages", "pipeline") else []
+            engines = "rafter,raft-rs"
+            if args.candidate_mode == "pipeline":
+                flags.append("--pipelined-durability")
+                engines = "rafter"
             subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
-                "--implementations", "rafter,raft-rs", "--ordered-apply", "--peer-batch-size", "32",
+                "--implementations", engines, "--ordered-apply", "--peer-batch-size", "32",
                 "--scenario", scenario, *flags,
                 "--output", str(output / f"worker-smoke-{scenario}"), "--data-root", str(data / "smoke")],
                 cwd=ROOT, check=True)
@@ -101,8 +116,7 @@ def main() -> None:
                             name = f"{ordinal:03d}-n{delay}-{label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
                             options = SimpleNamespace(network_delay_ms=delay, scenario="durable-kv", smoke=False, batch_size=64,
                                 peer_batch_size=cap, diagnostics=diagnostic, duration=60, warmup=10,
-                                ordered_apply=(args.prior_mode if binary_set == "prior" else args.candidate_mode) != "inline" and engine == "rafter",
-                                peer_message_stream=(args.prior_mode if binary_set == "prior" else args.candidate_mode) == "messages" and engine == "rafter",
+                                **mode_flags(args.prior_mode if binary_set == "prior" else args.candidate_mode, engine),
                                 concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
                                 read_percent=0, cas_percent=0, timeout=2, variant=label)
                             print(f"Running {name}", flush=True)

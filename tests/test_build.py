@@ -46,7 +46,10 @@ class BuildTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 self.check_successful_build(backend)
 
-    def check_successful_build(self, backend):
+    def test_pipeline_build_records_all_implied_features(self):
+        self.check_successful_build("wal", pipeline=True)
+
+    def check_successful_build(self, backend, pipeline=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "source"
             root.mkdir()
@@ -66,16 +69,21 @@ class BuildTests(unittest.TestCase):
                  patch("benchctl.build.subprocess.run", side_effect=run) as commands, \
                  patch("benchctl.build.subprocess.check_output", return_value=json.dumps({"target_directory": str(target)})), \
                  patch("benchctl.build.capture", return_value={}), patch("benchctl.build.source_digest", return_value="source"):
-                build(backend)
+                build(backend, pipelined_durability=pipeline)
             cargo_commands = [call.args[0] for call in commands.call_args_list if call.args[0][0] == "cargo"]
             self.assertEqual(len(cargo_commands), 2)
             for command in cargo_commands:
-                if backend != "replace":
+                if pipeline:
+                    self.assertEqual(command[-2:], ["--features", f"raft-bench-rafter/{backend}-hard-state,raft-bench-rafter/peer-group-commit,raft-bench-rafter/ordered-apply,raft-bench-rafter/pipelined-durability"])
+                elif backend != "replace":
                     self.assertEqual(command[-2:], ["--features", f"raft-bench-rafter/{backend}-hard-state"])
                 else:
                     self.assertNotIn("--features", command)
             receipt = json.loads((root / "dist/build.json").read_text())
             self.assertEqual(receipt["rafter_hard_state_backend"], backend)
+            self.assertEqual(receipt["pipelined_durability"], pipeline)
+            self.assertEqual(receipt["peer_group_commit"], pipeline)
+            self.assertEqual(receipt["ordered_apply"], pipeline)
             for name in IMPLEMENTATIONS:
                 binary = root / "dist" / f"raft-bench-{name}"
                 self.assertEqual(binary.read_text(), name)
