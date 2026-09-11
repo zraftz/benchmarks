@@ -5,6 +5,7 @@ Three such processes exercise orchestration, wire framing, retries, process
 cleanup, and result handling. Public CLI allowlists exclude this backend.
 """
 import argparse
+from contextlib import closing
 import json
 from pathlib import Path
 import socketserver
@@ -27,7 +28,7 @@ def connect():
 
 for attempt in range(20):
     try:
-        with connect() as db:
+        with closing(connect()) as db, db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY,t REAL)")
             db.execute("CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY,v TEXT)")
@@ -41,7 +42,7 @@ else:
 def heartbeat():
     while True:
         try:
-            with connect() as db:
+            with closing(connect()) as db, db:
                 db.execute("INSERT OR REPLACE INTO nodes VALUES (?,?)", (c["id"], time.time()))
         except sqlite3.OperationalError:
             pass
@@ -53,7 +54,7 @@ def current(db):
     return rows[0][0] if len(rows) >= 2 else None
 
 def dispatch(q):
-    with connect() as db:
+    with closing(connect()) as db, db:
         lead = current(db)
         if q["op"] == "status":
             return {"status": "ok", "leader_id": lead, "info": {"implementation": "test-fixture", "node_id": c["id"], "leader": lead == c["id"], "contract": "durable-log+durable-application-v1/logged-reads"}}
