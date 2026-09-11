@@ -164,8 +164,7 @@ fn native_pipeline_fences_quorum_and_reopens_after_durable_application_completio
     assert_eq!(recovered.last_log_index(), LogIndex(2));
 }
 
-#[test]
-fn same_term_ack_and_ready_proposal_share_one_synchronous_wal_step() {
+fn combined_ack_and_proposal_share_one_synchronous_wal_step(peer_first: bool) {
     let directory = Directory::new();
     let (leader, mut follower) = elected(&directory.0);
     let mut pipeline = Pipeline::new(leader, true, 8).unwrap();
@@ -182,7 +181,12 @@ fn same_term_ack_and_ready_proposal_share_one_synchronous_wal_step() {
     };
     pipeline.complete().unwrap().unwrap();
 
-    let outputs = pipeline.step(vec![ack, proposal_at(2)]).unwrap();
+    let inputs = if peer_first {
+        vec![ack, proposal_at(2)]
+    } else {
+        vec![proposal_at(2), ack]
+    };
+    let outputs = pipeline.step(inputs).unwrap();
 
     assert!(pipeline.node.ready_node().is_some());
     assert!(pipeline.node.pending_operation().is_none());
@@ -204,6 +208,16 @@ fn same_term_ack_and_ready_proposal_share_one_synchronous_wal_step() {
     let recovered = node(&directory.0, 1, LogIndex::ZERO);
     assert_eq!(recovered.last_log_index(), LogIndex(3));
     assert_eq!(recovered.commit_index(), LogIndex(2));
+}
+
+#[test]
+fn same_term_ack_then_ready_proposal_share_one_synchronous_wal_step() {
+    combined_ack_and_proposal_share_one_synchronous_wal_step(true);
+}
+
+#[test]
+fn ready_proposal_then_same_term_ack_share_one_synchronous_wal_step() {
+    combined_ack_and_proposal_share_one_synchronous_wal_step(false);
 }
 
 #[test]

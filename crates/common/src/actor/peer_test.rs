@@ -94,7 +94,7 @@ fn cap_leaves_work_queued_and_empty_queue_does_not_wait() {
 }
 
 struct CombiningEngine {
-    combined: mpsc::Sender<(Vec<u8>, Vec<Command>)>,
+    combined: mpsc::Sender<(bool, Vec<u8>, Vec<Command>)>,
 }
 impl Engine for CombiningEngine {
     type Peer = u8;
@@ -109,7 +109,7 @@ impl Engine for CombiningEngine {
     fn peer_batch(&mut self, _: Vec<u8>) -> Result<Vec<Effect>> {
         unreachable!("eligible ready proposals should share the peer step")
     }
-    fn can_batch_proposals_after_peer(&self, _: &[u8]) -> bool {
+    fn can_batch_proposals_with_peer(&self, _: &[u8]) -> bool {
         true
     }
     fn peer_batch_and_propose(
@@ -117,7 +117,15 @@ impl Engine for CombiningEngine {
         peers: Vec<u8>,
         commands: Vec<Command>,
     ) -> Result<Vec<Effect>> {
-        self.combined.send((peers, commands)).unwrap();
+        self.combined.send((true, peers, commands)).unwrap();
+        Ok(Vec::new())
+    }
+    fn propose_and_peer_batch(
+        &mut self,
+        commands: Vec<Command>,
+        peers: Vec<u8>,
+    ) -> Result<Vec<Effect>> {
+        self.combined.send((false, peers, commands)).unwrap();
         Ok(Vec::new())
     }
     fn leader(&self) -> Option<u64> {
@@ -137,12 +145,12 @@ impl Engine for CombiningEngine {
     }
 }
 
-#[test]
-fn same_turn_peer_ack_and_ready_write_use_one_engine_step() {
-    let path = std::env::temp_dir().join(format!("mixed-peer-proposal-{}", std::process::id()));
-    let model = DurableModel::open(&path).unwrap();
-    let (combined, observed) = mpsc::channel();
-    let mut state = State {
+fn combining_state(
+    path: &std::path::Path,
+    combined: mpsc::Sender<(bool, Vec<u8>, Vec<Command>)>,
+) -> State<CombiningEngine> {
+    let model = DurableModel::open(path).unwrap();
+    State {
         diagnostics: Diagnostics::default(),
         config: Config {
             id: 1,
@@ -150,7 +158,7 @@ fn same_turn_peer_ack_and_ready_write_use_one_engine_step() {
             client: String::new(),
             peer: String::new(),
             peers: BTreeMap::new(),
-            data_dir: path.clone(),
+            data_dir: path.to_owned(),
             tick_ms: 20,
             capacity: 16,
             batch_size: 8,
@@ -176,30 +184,61 @@ fn same_turn_peer_ack_and_ready_write_use_one_engine_step() {
         peer_batches: 0,
         peer_events: 0,
         peer_batch_sizes: BTreeMap::new(),
-    };
-    let (tx, rx) = mpsc::sync_channel(8);
-    tx.send(peer(7)).unwrap();
+    }
+}
+
+fn write(key: &str) -> Input {
     let (reply, _response) = oneshot::channel();
-    tx.send(Input::Client(
+    Input::Client(
         Request {
             op: "execute".into(),
             command: Some(Command {
                 client: "client".into(),
                 sequence: 1,
                 kind: "put".into(),
-                key: "key".into(),
+                key: key.into(),
                 value: "value".into(),
                 expected: None,
             }),
         },
         reply,
         None,
-    ))
-    .unwrap();
+    )
+}
+
+#[test]
+fn same_turn_peer_ack_and_ready_write_use_one_engine_step() {
+    let path = std::env::temp_dir().join(format!("mixed-peer-proposal-{}", std::process::id()));
+    let (combined, observed) = mpsc::channel();
+    let mut state = combining_state(&path, combined);
+    let (tx, rx) = mpsc::sync_channel(8);
+    tx.send(peer(7)).unwrap();
+    tx.send(write("key")).unwrap();
     drop(tx);
 
     state.run(rx).unwrap();
-    let (peers, commands) = observed.recv_timeout(Duration::from_secs(1)).unwrap();
+    let (peer_first, peers, commands) = observed.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(peer_first);
+    assert_eq!(peers, vec![7]);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].key, "key");
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn same_turn_ready_write_and_following_ack_preserve_order_in_one_engine_step() {
+    let path = std::env::temp_dir().join(format!("mixed-proposal-peer-{}", std::process::id()));
+    let (combined, observed) = mpsc::channel();
+    let mut state = combining_state(&path, combined);
+    let (tx, rx) = mpsc::sync_channel(8);
+    tx.send(write("key")).unwrap();
+    tx.send(peer(7)).unwrap();
+    drop(tx);
+
+    state.run(rx).unwrap();
+    let (peer_first, peers, commands) = observed.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(!peer_first);
     assert_eq!(peers, vec![7]);
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].key, "key");

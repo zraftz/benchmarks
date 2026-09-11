@@ -63,8 +63,8 @@ pub trait Engine: Send + 'static {
     fn peer_gate(&self, max_events: usize, max_bytes: usize) -> Self::Gate;
     fn admit_peer(gate: &mut Self::Gate, peer: &Self::Peer) -> bool;
     fn peer_batch(&mut self, peers: Vec<Self::Peer>) -> Result<Vec<Effect>>;
-    /// Whether this peer batch can safely precede ready client proposals in one durable step.
-    fn can_batch_proposals_after_peer(&self, _peers: &[Self::Peer]) -> bool {
+    /// Whether this peer batch can safely share one durable step with ready client proposals.
+    fn can_batch_proposals_with_peer(&self, _peers: &[Self::Peer]) -> bool {
         false
     }
     /// Processes a peer batch followed by client proposals in their observed order.
@@ -74,6 +74,14 @@ pub trait Engine: Send + 'static {
         _commands: Vec<Command>,
     ) -> Result<Vec<Effect>> {
         bail!("engine declared combined peer/proposal batching without implementing it")
+    }
+    /// Processes client proposals followed by a peer batch in their observed order.
+    fn propose_and_peer_batch(
+        &mut self,
+        _commands: Vec<Command>,
+        _peers: Vec<Self::Peer>,
+    ) -> Result<Vec<Effect>> {
+        bail!("engine declared combined proposal/peer batching without implementing it")
     }
     fn leader(&self) -> Option<u64>;
     fn is_leader(&self) -> bool;
@@ -293,7 +301,7 @@ impl<E: Engine> State<E> {
                     }
                     let mut commands = Vec::new();
                     if self.config.combine_peer_proposals
-                        && self.engine.can_batch_proposals_after_peer(&peers)
+                        && self.engine.can_batch_proposals_with_peer(&peers)
                     {
                         self.collect_ready_execute_clients(&rx, &mut deferred, &mut commands)?;
                     }
@@ -316,7 +324,26 @@ impl<E: Engine> State<E> {
                     self.collect_ready_clients(&rx, &mut deferred, &mut commands, false)?;
                     if !commands.is_empty() {
                         self.diagnostics.proposals_submitted(&commands);
-                        let e = self.engine.propose(commands)?;
+                        let combined = if self.config.combine_peer_proposals {
+                            self.take_ready_combinable_peer(&mut deferred)?
+                        } else {
+                            None
+                        };
+                        let e = if let Some((peer, queued)) = combined {
+                            self.peer_batches = self.peer_batches.saturating_add(1);
+                            self.peer_events = self.peer_events.saturating_add(1);
+                            *self.peer_batch_sizes.entry(1).or_default() += 1;
+                            if let Some(metric) = E::peer_queue_metric(&peer) {
+                                self.diagnostics.elapsed(metric, queued);
+                            }
+                            let outputs =
+                                self.engine.propose_and_peer_batch(commands, vec![peer])?;
+                            self.diagnostics
+                                .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                            outputs
+                        } else {
+                            self.engine.propose(commands)?
+                        };
                         self.effects(e)?;
                     }
                 }
@@ -354,6 +381,27 @@ impl<E: Engine> State<E> {
             }
         }
         Ok(())
+    }
+    fn take_ready_combinable_peer(
+        &mut self,
+        deferred: &mut VecDeque<Input>,
+    ) -> Result<Option<(E::Peer, Option<Instant>)>> {
+        let Some(Input::Peer(from, data, queued)) = deferred.front() else {
+            return Ok(None);
+        };
+        let peer = self.engine.decode_peer(*from, data)?;
+        if !self
+            .engine
+            .can_batch_proposals_with_peer(std::slice::from_ref(&peer))
+        {
+            return Ok(None);
+        }
+        let queued = *queued;
+        let Some(Input::Peer(..)) = deferred.pop_front() else {
+            unreachable!("the ready peer was inspected at the queue front")
+        };
+        self.diagnostics.elapsed("owner_peer_queue_ns", queued);
+        Ok(Some((peer, queued)))
     }
     fn client(
         &mut self,

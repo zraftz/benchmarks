@@ -205,7 +205,7 @@ impl Engine for Rafter {
         )
     }
 
-    fn can_batch_proposals_after_peer(&self, peers: &[Self::Peer]) -> bool {
+    fn can_batch_proposals_with_peer(&self, peers: &[Self::Peer]) -> bool {
         can_batch_same_term_append_responses(self.node.role(), self.node.current_term(), peers)
     }
 
@@ -227,6 +227,27 @@ impl Engine for Rafter {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
+        );
+        self.drive(inputs)
+    }
+
+    fn propose_and_peer_batch(
+        &mut self,
+        commands: Vec<Command>,
+        peers: Vec<Self::Peer>,
+    ) -> Result<Vec<Effect>> {
+        let mut inputs = commands
+            .into_iter()
+            .map(|command| {
+                Ok(Input::ClientProposal {
+                    payload: serde_json::to_vec(&command)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        inputs.extend(
+            peers
+                .into_iter()
+                .map(|(from, message)| Input::Message { from, message }),
         );
         self.drive(inputs)
     }

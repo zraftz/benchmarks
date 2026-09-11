@@ -67,8 +67,7 @@ impl Pipeline {
     pub fn step(&mut self, inputs: Vec<Input>) -> Result<Vec<Output>> {
         let proposal_count = inputs
             .iter()
-            .rev()
-            .take_while(|input| matches!(input, Input::ClientProposal { .. }))
+            .filter(|input| matches!(input, Input::ClientProposal { .. }))
             .count();
         let proposals_only = proposal_count != 0 && proposal_count == inputs.len();
         if self.diagnostics && proposal_count != 0 {
