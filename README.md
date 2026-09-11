@@ -104,7 +104,8 @@ runner. Timing and diagnostic cases stay separate in `results/paired/`.
 Options require a Rafter revision supporting the corresponding API. Pipeline
 mode also enables ordered apply and message transport. Paired CI offers
 `inline`, `worker`, `messages`, and `pipeline` independently for each revision;
-message modes run with both zero and 2 ms added loopback egress delay.
+message modes run with both zero and 2 ms added loopback egress delay unless
+`network_delays_ms` explicitly selects a smaller or different delay set.
 
 Set `prior_rafter_ref` to enable paired CI. Choose `prior_hard_state` and
 `rafter_hard_state` independently; keep both at `wal` to isolate pipelining.
@@ -121,7 +122,8 @@ separately named arms.
 
 For an offered-load envelope, set `paired_rates` to a fixed curve such as
 `1000,2000,3000,4000,6000,8000,10000,12000`, keep one Rafter batch cap and
-speculative threshold, and restrict diagnostics to one selected rate. The
+speculative threshold, restrict diagnostics to one selected rate, and set
+`network_delays_ms=0` when the first curve should isolate no-delay capacity. The
 layered report declares useful capacity only when every repetition achieves at
 least 99% of offered load, p99 is at most 20 ms, p99.9 is at most 50 ms, and
 errors, unknown outcomes, and unsent requests are all zero. The detailed table
