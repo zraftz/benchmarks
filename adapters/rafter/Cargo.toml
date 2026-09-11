@@ -21,7 +21,7 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-rafter = { git = "https://github.com/zsumz/rafter", rev = "2e50d4a7c3f98a08519f71ddf548323bfd0eb5ef" }
-rafter-runtime = { git = "https://github.com/zsumz/rafter", rev = "2e50d4a7c3f98a08519f71ddf548323bfd0eb5ef" }
-rafter-storage = { git = "https://github.com/zsumz/rafter", rev = "2e50d4a7c3f98a08519f71ddf548323bfd0eb5ef" }
-rafter-codec = { git = "https://github.com/zsumz/rafter", rev = "2e50d4a7c3f98a08519f71ddf548323bfd0eb5ef" }
+rafter = { git = "https://github.com/zsumz/rafter", rev = "3f2cdc956eaa35b546fec623a15a0285efdb0dbc" }
+rafter-runtime = { git = "https://github.com/zsumz/rafter", rev = "3f2cdc956eaa35b546fec623a15a0285efdb0dbc" }
+rafter-storage = { git = "https://github.com/zsumz/rafter", rev = "3f2cdc956eaa35b546fec623a15a0285efdb0dbc" }
+rafter-codec = { git = "https://github.com/zsumz/rafter", rev = "3f2cdc956eaa35b546fec623a15a0285efdb0dbc" }

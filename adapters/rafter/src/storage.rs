@@ -29,7 +29,5 @@ pub type Node = DurableRaftNode<HardState, Log, FileRaftSnapshotStore>;
 pub type Pipeline =
     rafter_runtime::pipelined::PipelinedRaftNode<HardState, Log, FileRaftSnapshotStore>;
 #[cfg(feature = "pipelined-durability")]
-pub type Work = rafter_runtime::pipelined::PersistenceWork<HardState, Log, FileRaftSnapshotStore>;
-#[cfg(feature = "pipelined-durability")]
-pub type Completion =
-    rafter_runtime::pipelined::PersistenceCompletion<HardState, Log, FileRaftSnapshotStore>;
+pub type PipelineWorker =
+    rafter_runtime::pipelined::PersistenceWorker<HardState, Log, FileRaftSnapshotStore>;

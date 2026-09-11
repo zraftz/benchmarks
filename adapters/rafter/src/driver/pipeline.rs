@@ -1,18 +1,19 @@
 //! Only bounded application proposals can prepare speculative replication work.
-use super::worker::{Counters, Worker};
 use crate::storage;
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use rafter::{ClientProposalInput, Input, NodeId, Output, Role, Term};
-use rafter_runtime::pipelined::PreparedProposals;
+use rafter_runtime::pipelined::{
+    PersistenceWorkerOptions, PersistenceWorkerTelemetry, PreparedProposals,
+};
 use std::collections::BTreeMap;
 
 pub struct Pipeline {
     pub node: storage::Pipeline,
-    worker: Worker,
+    worker: storage::PipelineWorker,
     pub term: Term,
     pub role: Role,
     pub leader: Option<NodeId>,
-    pub counters: Counters,
+    pub counters: PersistenceWorkerTelemetry,
     pub submitted: u64,
     pub completed: u64,
     pub synchronous_proposal_batches: u64,
@@ -37,7 +38,9 @@ impl Pipeline {
             role: node.role(),
             leader: node.leader_hint(),
             node: storage::Pipeline::new(node),
-            worker: Worker::start(diagnostics)?,
+            worker: storage::PipelineWorker::start(
+                PersistenceWorkerOptions::new().with_storage_telemetry(diagnostics),
+            )?,
             counters: Vec::new(),
             submitted: 0,
             completed: 0,
@@ -85,7 +88,9 @@ impl Pipeline {
             match self.node.prepare_proposals(proposals)? {
                 PreparedProposals::Durable(outputs) => outputs,
                 PreparedProposals::Pending { replication, work } => {
-                    self.worker.submit(work)?;
+                    self.worker.try_submit(work).map_err(|error| {
+                        anyhow!("persistence worker request queue unavailable: {error}")
+                    })?;
                     self.submitted += 1;
                     self.speculative_proposal_batches =
                         self.speculative_proposal_batches.saturating_add(1);
@@ -113,7 +118,7 @@ impl Pipeline {
         if self.node.pending_operation().is_none() {
             return Ok(None);
         }
-        let (completion, counters) = self.worker.complete()?;
+        let (completion, counters) = self.worker.complete()?.into_parts();
         // The runtime checks generation and operation before restoring consensus ownership.
         let outputs = self.node.complete(completion)?;
         self.counters = counters;

@@ -4,8 +4,6 @@ use anyhow::{bail, Result};
 use rafter::{Input, NodeId, Output, Role, Term};
 #[cfg(feature = "pipelined-durability")]
 mod pipeline;
-#[cfg(feature = "pipelined-durability")]
-mod worker;
 
 pub enum Driver {
     Direct(Box<Node>),
