@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use bench_compare::{
-    payload_of_size, report_json, CodecShapeMetrics, WorkloadMetrics, CODEC_BATCH_FRAMES,
-    CODEC_LARGE_FRAMES, LARGE_PAYLOAD_BYTES, PAYLOAD_BYTES,
+    payload_of_size, report_json, selected_rafter_revision, CodecShapeMetrics, WorkloadMetrics,
+    CODEC_BATCH_FRAMES, CODEC_LARGE_FRAMES, LARGE_PAYLOAD_BYTES, PAYLOAD_BYTES,
 };
 use rafter::{AppendEntries, LogEntry, LogIndex, Message, NodeId, Term};
 use rafter_codec::{decode_message, encode_message_into};
@@ -73,7 +73,7 @@ fn main() {
         "{}",
         report_json(
             "rafter-codec",
-            "path:../crates (workspace @ HEAD)",
+            selected_rafter_revision(),
             "one operation is encode_message + decode_message for one AppendEntries frame",
             &[batched, large],
         )

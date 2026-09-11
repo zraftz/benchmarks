@@ -4,19 +4,20 @@
 //! binary: node 1 is elected by a scripted tick, then every proposal batch is
 //! stepped through the leader and every `Send` output is delivered
 //! synchronously to its destination (responses routed back) until the cluster
-//! is quiescent. Commit latency is measured from batch submission to the
-//! leader emitting `Apply` for that proposal's index. The durable file-backed
-//! path is deliberately not used here; see METHODOLOGY.md.
+//! is quiescent. Completion latency is measured from batch submission through
+//! the leader executing the shared reference application operation for the
+//! emitted `Apply`. The durable file-backed path is deliberately not used
+//! here; see METHODOLOGY.md.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Instant;
 
 use bench_compare::{
-    payload_of_size, report_json, FailoverShapeMetrics, ReadShapeMetrics, ShapeMetrics,
-    WorkloadMetrics, FAILOVER_QUEUED_PROPOSALS, FAILOVER_ROUNDS, LARGE_PAYLOAD_BYTES,
-    LARGE_PAYLOAD_PIPELINE_DEPTH, LARGE_PAYLOAD_PROPOSALS, LEASE_READ_REQUESTS, PAYLOAD_BYTES,
-    PIPELINED_PROPOSALS, PIPELINE_DEPTH, READ_BATCH_DEPTH, READ_BATCH_REQUESTS,
-    READ_LOAD_PROPOSALS, READ_LOAD_WRITE_BATCH_DEPTH, SERIAL_PROPOSALS,
+    payload_of_size, report_json, selected_rafter_revision, FailoverShapeMetrics, ReadShapeMetrics,
+    ReferenceApplication, ShapeMetrics, WorkloadMetrics, FAILOVER_QUEUED_PROPOSALS,
+    FAILOVER_ROUNDS, LARGE_PAYLOAD_BYTES, LARGE_PAYLOAD_PIPELINE_DEPTH, LARGE_PAYLOAD_PROPOSALS,
+    LEASE_READ_REQUESTS, PAYLOAD_BYTES, PIPELINED_PROPOSALS, PIPELINE_DEPTH, READ_BATCH_DEPTH,
+    READ_BATCH_REQUESTS, READ_LOAD_PROPOSALS, READ_LOAD_WRITE_BATCH_DEPTH, SERIAL_PROPOSALS,
 };
 use rafter::{
     Input as RaftInput, LogIndex, Message as RaftMessage, NodeConfig, NodeId, Output as RaftOutput,
@@ -55,8 +56,8 @@ fn main() {
         "{}",
         report_json(
             "rafter",
-            "path:../crates (workspace @ HEAD)",
-            "proposal batch submitted to leader step -> leader emits Apply for that index",
+            selected_rafter_revision(),
+            "proposal submitted -> reference application operation completes on leader",
             &workloads,
         )
     );
@@ -455,6 +456,7 @@ fn leader_failover_under_queued_proposals() -> WorkloadMetrics {
 
 struct Cluster {
     nodes: BTreeMap<NodeId, BenchNode>,
+    applications: BTreeMap<NodeId, ReferenceApplication>,
     leader_id: NodeId,
 }
 
@@ -473,6 +475,10 @@ impl Cluster {
         }
         let mut cluster = Self {
             nodes,
+            applications: ids
+                .into_iter()
+                .map(|id| (id, ReferenceApplication::default()))
+                .collect(),
             leader_id: NodeId(1),
         };
 
@@ -615,8 +621,14 @@ impl Cluster {
                         .expect("message step persists");
                     queue.extend(responses.into_iter().map(|response| (to, response)));
                 }
-                RaftOutput::Apply { index, .. } if from == self.leader_id => {
-                    on_leader_apply(index);
+                RaftOutput::Apply { index, payload, .. } => {
+                    self.applications
+                        .get_mut(&from)
+                        .expect("replica application exists")
+                        .apply(payload.as_ref());
+                    if from == self.leader_id {
+                        on_leader_apply(index);
+                    }
                 }
                 RaftOutput::ReadIndexGranted {
                     read_id,
@@ -648,8 +660,14 @@ impl Cluster {
                         .expect("message step persists");
                     queue.extend(responses.into_iter().map(|response| (to, response)));
                 }
-                RaftOutput::Apply { index, .. } if from == self.leader_id => {
-                    on_leader_apply(index);
+                RaftOutput::Apply { index, payload, .. } => {
+                    self.applications
+                        .get_mut(&from)
+                        .expect("replica application exists")
+                        .apply(payload.as_ref());
+                    if from == self.leader_id {
+                        on_leader_apply(index);
+                    }
                 }
                 _ => {}
             }

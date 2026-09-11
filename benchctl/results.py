@@ -289,7 +289,7 @@ def load_microbench(directory: Path) -> dict:
             "measurement_mode": "timing",
             "metric_definitions": {
                 "throughput_ops_s": "proposals completed per elapsed benchmark second",
-                "client_p99_us": "submission to the adapter-specific completion boundary; median per-run p99",
+                "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
                 "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
             },
             "repetitions": row["runs"],

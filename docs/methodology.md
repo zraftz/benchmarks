@@ -27,14 +27,16 @@ or produce the authoritative JSON.
 Three voters in one process, in-memory stores, 512-byte values for serial and
 pipelined workloads, and a separate large-payload probe. Rafter and raft-rs use
 an explicit message pump; OpenRaft runs on a single-thread Tokio runtime.
-Each binary states its completion boundary in the raw JSON and report. The
-suite measures protocol/runtime work without TCP or disk persistence.
+Each replica executes the same tiny reference application operation for every
+normal payload. Completion is recorded after that operation executes on the
+leader: Rafter consumes `Apply`, raft-rs consumes the committed ready entry,
+and OpenRaft returns from `client_write()`. The operation only accounts for
+applied payload bytes, keeping protocol/runtime and scheduler overhead visible.
+The suite requires seven isolated repetitions before publishing a leaderboard.
 
-The current boundaries are not identical: Rafter observes `Apply`, raft-rs
-handles the committed entry, and OpenRaft returns from `client_write()` after
-leader-side application. The layered report therefore labels the comparison
-pending qualification rather than publishing a shared leaderboard. Multi-write
-workloads are submission bursts, not continuously replenished windows.
+Multi-write workloads are submission bursts, not continuously replenished
+windows. The report labels them accordingly; a rolling-window workload remains
+separate future evidence.
 
 The sources were imported from Rafter; [UPSTREAM.json](../microbench/UPSTREAM.json)
 records their origin. They are maintained in this repo so changing the Rafter

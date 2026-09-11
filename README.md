@@ -50,7 +50,7 @@ Needs Rust 1.88.0, Python 3.11+, Go 1.22+, Git, `protoc`, and a C compiler.
 Linux is recommended. Data storage must support file and directory syncs.
 
 ```sh
-./raft-bench microbench --runs 3
+./raft-bench microbench --runs 7
 
 ./raft-bench build --rafter-ref perf/raft-performance
 ./raft-bench run --rates 0,100,1000 --runs 3 --data-root /path/to/benchmark-disk

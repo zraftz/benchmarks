@@ -4,10 +4,9 @@
 //! pattern) and a `RaftNetwork` that routes RPCs directly to the target
 //! `Raft` handle in the same process.
 //!
-//! Commit latency is measured from proposal submission (immediately before
-//! `client_write`) to `client_write` returning, which is openraft's
-//! linearizable acknowledgement: the entry is committed and applied to the
-//! leader's state machine before the response resolves.
+//! Completion latency is measured from proposal submission (immediately before
+//! `client_write`) to `client_write` returning after the shared reference
+//! application operation executes on the leader.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -17,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bench_compare::{
-    payload_of_size, report_json, WorkloadMetrics, LARGE_PAYLOAD_BYTES,
+    payload_of_size, report_json, ReferenceApplication, WorkloadMetrics, LARGE_PAYLOAD_BYTES,
     LARGE_PAYLOAD_PIPELINE_DEPTH, LARGE_PAYLOAD_PROPOSALS, PAYLOAD_BYTES, PIPELINED_PROPOSALS,
     PIPELINE_DEPTH, SERIAL_PROPOSALS,
 };
@@ -71,7 +70,7 @@ fn main() {
         report_json(
             "openraft",
             "0.9.24 (features: storage-v2; current-thread tokio)",
-            "client_write submitted -> client_write response (committed and applied on leader)",
+            "proposal submitted -> reference application operation completes on leader",
             &[serial, pipelined, large_payload],
         )
     });
@@ -417,7 +416,7 @@ impl RaftLogStorage<TypeConfig> for MemLogStore {
 struct StateMachineInner {
     applied: Option<LogId<NodeId>>,
     membership: StoredMembership<NodeId, BasicNode>,
-    applied_bytes: u64,
+    application: ReferenceApplication,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -462,7 +461,7 @@ impl RaftStateMachine<TypeConfig> for MemStateMachine {
         for entry in entries {
             match entry.payload {
                 EntryPayload::Blank => {}
-                EntryPayload::Normal(data) => inner.applied_bytes += data.len() as u64,
+                EntryPayload::Normal(data) => inner.application.apply(&data),
                 EntryPayload::Membership(membership) => {
                     inner.membership = StoredMembership::new(Some(entry.log_id), membership);
                 }

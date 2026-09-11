@@ -35,7 +35,9 @@ class MicrobenchTests(unittest.TestCase):
             root = Path(tmp); (root / "microbench").mkdir()
             (root / "microbench/UPSTREAM.json").write_text("{}")
             (root / "implementations.lock.json").write_text(json.dumps({"rafter": {"rev": "a" * 40}}))
+            build_environment = {}
             def fail(command, **kwargs):
+                build_environment.update(kwargs["env"])
                 kwargs["stdout"].write("compiler failed")
                 raise subprocess.CalledProcessError(1, command)
             out = root / "result"
@@ -46,6 +48,7 @@ class MicrobenchTests(unittest.TestCase):
                     run_microbench("full", 1, out)
             self.assertIn("compiler failed", (out / "build.log").read_text())
             self.assertEqual(json.loads((out / "provenance.json").read_text())["rafter"]["rev"], "a" * 40)
+            self.assertEqual(build_environment["RAFTER_BENCH_REV"], "a" * 40)
             self.assertTrue((out / "failure.json").exists())
             self.assertTrue((out / "SHA256SUMS.json").exists())
             self.assertFalse((out / "report.html").exists())

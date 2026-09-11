@@ -6,6 +6,33 @@
 
 use std::time::Duration;
 
+/// Tiny reference application operation shared by the in-memory engines.
+///
+/// Every replica accounts for each normal payload after its implementation
+/// exposes that entry through the application boundary. The operation is
+/// intentionally small: it aligns the observable completion point without
+/// hiding implementation/runtime overhead behind a synthetic workload.
+#[derive(Debug, Default)]
+pub struct ReferenceApplication {
+    applied_payload_bytes: u64,
+}
+
+impl ReferenceApplication {
+    /// Executes the reference operation for one applied application payload.
+    pub fn apply(&mut self, payload: &[u8]) {
+        self.applied_payload_bytes = self
+            .applied_payload_bytes
+            .wrapping_add(payload.len() as u64);
+        std::hint::black_box(self.applied_payload_bytes);
+    }
+}
+
+/// Exact selected Rafter revision embedded by the evidence runner.
+#[must_use]
+pub fn selected_rafter_revision() -> &'static str {
+    option_env!("RAFTER_BENCH_REV").unwrap_or("unrecorded revision; see enclosing provenance")
+}
+
 /// Default proposal payload size, identical in all three harnesses for the C5
 /// serial and pipelined workloads.
 pub const PAYLOAD_BYTES: usize = 512;

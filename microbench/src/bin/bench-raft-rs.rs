@@ -4,14 +4,15 @@
 //! ready -> send messages -> apply committed entries -> persist entries and
 //! hard state into `MemStorage` -> send persisted messages -> advance ->
 //! handle the light ready -> advance_apply. Message passing is synchronous
-//! and in-process. Commit latency is measured from proposal submission on the
-//! leader to the leader handling the committed entry through its apply path.
+//! and in-process. Completion latency is measured from proposal submission on
+//! the leader through the shared reference application operation for the
+//! leader's committed entry.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
 use bench_compare::{
-    payload_of_size, report_json, WorkloadMetrics, LARGE_PAYLOAD_BYTES,
+    payload_of_size, report_json, ReferenceApplication, WorkloadMetrics, LARGE_PAYLOAD_BYTES,
     LARGE_PAYLOAD_PIPELINE_DEPTH, LARGE_PAYLOAD_PROPOSALS, PAYLOAD_BYTES, PIPELINED_PROPOSALS,
     PIPELINE_DEPTH, SERIAL_PROPOSALS,
 };
@@ -41,7 +42,7 @@ fn main() {
         report_json(
             "raft-rs",
             "0.7.0 (crate `raft`, prost-codec)",
-            "propose() on leader -> leader takes the committed entry from ready/light-ready",
+            "proposal submitted -> reference application operation completes on leader",
             &[serial, pipelined, large_payload],
         )
     );
@@ -111,6 +112,7 @@ fn proposal_workload(
 
 struct Cluster {
     nodes: BTreeMap<u64, RawNode<MemStorage>>,
+    applications: BTreeMap<u64, ReferenceApplication>,
 }
 
 impl Cluster {
@@ -119,6 +121,10 @@ impl Cluster {
     fn elect() -> Self {
         let mut cluster = Self {
             nodes: VOTERS.iter().map(|id| (*id, open_node(*id))).collect(),
+            applications: VOTERS
+                .iter()
+                .map(|id| (*id, ReferenceApplication::default()))
+                .collect(),
         };
         cluster
             .nodes
@@ -167,6 +173,7 @@ impl Cluster {
     fn handle_ready(&mut self, id: u64, on_leader_apply: &mut dyn FnMut(u64)) -> Vec<Message> {
         let is_leader_node = id == LEADER;
         let node = self.nodes.get_mut(&id).expect("node exists");
+        let application = self.applications.get_mut(&id).expect("application exists");
         let store = node.raft.raft_log.store.clone();
         let mut out = Vec::new();
 
@@ -179,8 +186,11 @@ impl Cluster {
                 .expect("snapshot applies");
         }
         for entry in ready.take_committed_entries() {
-            if is_leader_node && !entry.data.is_empty() {
-                on_leader_apply(entry.index);
+            if !entry.data.is_empty() {
+                application.apply(&entry.data);
+                if is_leader_node {
+                    on_leader_apply(entry.index);
+                }
             }
         }
         store.wl().append(ready.entries()).expect("entries persist");
@@ -195,8 +205,11 @@ impl Cluster {
         }
         out.extend(light_ready.take_messages());
         for entry in light_ready.take_committed_entries() {
-            if is_leader_node && !entry.data.is_empty() {
-                on_leader_apply(entry.index);
+            if !entry.data.is_empty() {
+                application.apply(&entry.data);
+                if is_leader_node {
+                    on_leader_apply(entry.index);
+                }
             }
         }
         node.advance_apply();

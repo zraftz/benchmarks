@@ -11,6 +11,29 @@ from benchctl.summary import build_summary, render_html, render_markdown
 
 ENVIRONMENT = {"topology": "three processes on one host", "runner": "same"}
 COMPLETION = "durable-log+durable-application-v1/logged-reads"
+MEMORY_COMPLETION = "proposal submitted -> reference application operation completes on leader"
+
+
+def memory_record(engine, throughput, p99, *, completion=MEMORY_COMPLETION, repetitions=7):
+    return {
+        "layer": "consensus_in_memory",
+        "engine": {"name": engine, "version": "selected"},
+        "display_name": engine,
+        "configuration": {"storage": "memory", "transport": "in_process"},
+        "workload": {"workload": "serial", "proposals": 2000,
+                     "payload_bytes": 512, "max_in_flight": 1},
+        "completion_boundary": completion,
+        "environment": {"topology": "three voters in one process", "machine": "same"},
+        "measurement_mode": "timing",
+        "metric_definitions": {"throughput_ops_s": "ops", "client_p99_us": "p99",
+                               "aggregate": "median"},
+        "repetitions": repetitions,
+        "qualification": "passed",
+        "qualification_errors": [],
+        "metrics": {"throughput_ops_s": {"median": throughput},
+                    "client_p99_us": {"median": p99}},
+        "source_cases": [f"run-{run}-{engine}.json" for run in range(1, repetitions + 1)],
+    }
 
 
 def service_case(variant, engine, delay, rate, throughput, p99, *, p999=None, unsent=0):
@@ -103,6 +126,37 @@ def storage_record(arm, backend, batch, throughput, p99):
 
 
 class SummaryTests(unittest.TestCase):
+    def test_qualified_in_memory_evidence_publishes_one_fair_leaderboard(self):
+        micro = {"qualification": "passed", "records": [
+            memory_record("rafter", 120, 1.0),
+            memory_record("raft-rs", 100, 1.5),
+            memory_record("openraft", 80, 2.0),
+        ]}
+        section = build_summary(micro=micro)["sections"][0]
+        self.assertEqual(section["status"], "measured lead")
+        self.assertEqual(len(section["rows"]), 1)
+        self.assertEqual(section["rows"][0]["throughput_vs_openraft"]["label"], "measured lead")
+        self.assertIn("4 of 4", section["result"])
+        rendered = render_markdown(build_summary(micro=micro), {})
+        self.assertIn("reference application operation", rendered)
+        self.assertIn("120/s", rendered)
+
+    def test_in_memory_evidence_fails_closed_on_boundary_or_repetition_mismatch(self):
+        records = [
+            memory_record("rafter", 120, 1.0),
+            memory_record("raft-rs", 100, 1.5),
+            memory_record("openraft", 80, 2.0, completion="different"),
+        ]
+        section = build_summary(micro={"qualification": "passed", "records": records})["sections"][0]
+        self.assertEqual(section["status"], "pending qualification")
+        self.assertFalse(section["rows"])
+        for record in records:
+            record["completion_boundary"] = MEMORY_COMPLETION
+            record["repetitions"] = 6
+        section = build_summary(micro={"qualification": "passed", "records": records})["sections"][0]
+        self.assertEqual(section["status"], "pending qualification")
+        self.assertIn("requires at least 7", section["details"][0])
+
     def test_service_headline_is_one_named_variant_and_outputs_agree(self):
         storage = {"qualification": "passed", "qualification_errors": [], "sync_probes": {}, "records": [
             storage_record("baseline", "replace", 1, 354.102, 4.140),

@@ -40,8 +40,11 @@ def run_microbench(mode: str, runs: int, output: Path | None = None) -> Path:
             command.append("--no-default-features")
         for binary in binaries:
             command += ["--bin", binary]
+        build_env = dict(os.environ)
+        build_env["RAFTER_BENCH_REV"] = pins["rafter"]["rev"]
         with (directory / "build.log").open("x") as log:
-            subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
+            subprocess.run(command, cwd=ROOT, env=build_env, stdout=log,
+                           stderr=subprocess.STDOUT, check=True)
         metadata = json.loads(subprocess.check_output(
             ["cargo", "metadata", "--no-deps", "--locked", "--format-version", "1", "--manifest-path", str(manifest)], cwd=ROOT))
         release = Path(metadata["target_directory"]) / "release"

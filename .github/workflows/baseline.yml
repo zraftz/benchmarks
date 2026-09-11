@@ -162,7 +162,7 @@ jobs:
         run: |
           mode=full
           if [[ "$SUITE" == rafter-only ]]; then mode=rafter-only; fi
-          ./raft-bench microbench --mode "$mode" --runs 3 --output results/microbench
+          ./raft-bench microbench --mode "$mode" --runs 7 --output results/microbench
           ./raft-bench verify results/microbench
       - name: Locked durable build and tests
         id: durable_build

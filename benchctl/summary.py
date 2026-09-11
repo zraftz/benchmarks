@@ -36,6 +36,7 @@ def _consensus_section(micro: dict | None) -> dict:
         "result": "Comparison pending qualification.",
         "conditions": "Three voters in one process, in-memory stores, no disk synchronization or TCP.",
         "details": [],
+        "rows": [],
         "source_cases": [],
     }
     if micro is None:
@@ -47,16 +48,91 @@ def _consensus_section(micro: dict | None) -> dict:
         return section
     boundaries = sorted({record["completion_boundary"] for record in micro["records"]})
     repetitions = sorted({record["repetitions"] for record in micro["records"]})
-    section["details"] = [
-        "Current adapters record different leader-side completion boundaries, so their numbers are not presented as one leaderboard.",
-        f"Selected evidence has {', '.join(map(str, repetitions))} repetitions; qualification requires at least {MIN_MEMORY_REPETITIONS}.",
-    ]
     section["completion_boundaries"] = boundaries
     section["source_cases"] = _source_refs("consensus_in_memory", sorted({
         case for record in micro["records"] for case in record["source_cases"]
     }))
     if micro["qualification"] != "passed":
         section["details"].append("The selected evidence failed artifact verification.")
+        return section
+    if len(boundaries) != 1:
+        section["details"].append(
+            "Adapters record different leader-side completion boundaries, so no shared leaderboard is published."
+        )
+        return section
+    if not repetitions or min(repetitions) < MIN_MEMORY_REPETITIONS:
+        section["details"].append(
+            f"Selected evidence has {', '.join(map(str, repetitions))} repetitions; "
+            f"qualification requires at least {MIN_MEMORY_REPETITIONS}."
+        )
+        return section
+
+    grouped = {}
+    for record in micro["records"]:
+        grouped.setdefault(record["workload"]["workload"], {})[record["engine"]["name"]] = record
+    expected = {"rafter", "raft-rs", "openraft"}
+    if not grouped or any(set(engines) != expected for engines in grouped.values()):
+        section["details"].append("Every workload needs Rafter, raft-rs, and OpenRaft measurements.")
+        return section
+
+    interpretations = []
+    rows = []
+    try:
+        for workload, engines in sorted(grouped.items()):
+            rafter = engines["rafter"]
+            raft_rs = engines["raft-rs"]
+            openraft = engines["openraft"]
+            throughput_raft_rs = compare(
+                rafter, raft_rs, "throughput_ops_s", higher_is_better=True
+            )
+            throughput_openraft = compare(
+                rafter, openraft, "throughput_ops_s", higher_is_better=True
+            )
+            p99_raft_rs = compare(rafter, raft_rs, "client_p99_us", higher_is_better=False)
+            p99_openraft = compare(rafter, openraft, "client_p99_us", higher_is_better=False)
+            comparisons = (throughput_raft_rs, throughput_openraft, p99_raft_rs, p99_openraft)
+            interpretations.extend(item["label"] for item in comparisons)
+            rows.append({
+                "workload": workload,
+                "payload_bytes": rafter["workload"]["payload_bytes"],
+                "max_in_flight": rafter["workload"]["max_in_flight"],
+                "repetitions": rafter["repetitions"],
+                "rafter_ops_s": rafter["metrics"]["throughput_ops_s"]["median"],
+                "raft_rs_ops_s": raft_rs["metrics"]["throughput_ops_s"]["median"],
+                "openraft_ops_s": openraft["metrics"]["throughput_ops_s"]["median"],
+                "rafter_p99_us": rafter["metrics"]["client_p99_us"]["median"],
+                "raft_rs_p99_us": raft_rs["metrics"]["client_p99_us"]["median"],
+                "openraft_p99_us": openraft["metrics"]["client_p99_us"]["median"],
+                "throughput_vs_raft_rs": throughput_raft_rs,
+                "throughput_vs_openraft": throughput_openraft,
+                "p99_vs_raft_rs": p99_raft_rs,
+                "p99_vs_openraft": p99_openraft,
+            })
+    except NotComparable as error:
+        section["status"] = "not comparable"
+        section["result"] = "The selected in-memory measurements are not comparable."
+        section["details"].append(str(error))
+        return section
+
+    leads = interpretations.count("measured lead")
+    regressions = interpretations.count("measured regression")
+    section["rows"] = rows
+    if regressions == 0:
+        section["status"] = "measured lead" if leads else "roughly level"
+    elif leads or regressions < len(interpretations):
+        section["status"] = "mixed result"
+    else:
+        section["status"] = "measured regression"
+    section["result"] = (
+        f"Rafter leads {leads} of {len(interpretations)} qualified throughput and p99 comparisons"
+        + (" with no measured regressions." if regressions == 0 else f"; {regressions} are regressions.")
+    )
+    section["conditions"] += (
+        " Workloads use submission bursts, not a continuously replenished concurrency window."
+    )
+    section["details"].append(
+        f"All adapters execute the same leader-side reference application operation; {min(repetitions)} repetitions."
+    )
     return section
 
 
@@ -546,13 +622,26 @@ def _fmt_ms(value: float) -> str:
     return f"{value:.3f} ms"
 
 
+def _fmt_us(value: float) -> str:
+    return f"{value:,.1f} µs"
+
+
 def render_markdown(summary: dict, evidence: dict) -> str:
     sections = {section["id"]: section for section in summary["sections"]}
     lines = [f"# {summary['title']}", "", summary["principle"], ""]
     for section_id in ("consensus-in-memory", "durable-replication", "complete-durable-service", "failure-and-sustained-operation"):
         section = sections[section_id]
         lines += [f"## {section['title']}", "", f"*{section['question']}*", "", f"**{section['result']}**", ""]
-        if section_id == "durable-replication" and section["rows"]:
+        if section_id == "consensus-in-memory" and section["rows"]:
+            lines += ["| Workload | In flight | Rafter | raft-rs | OpenRaft | Rafter p99 | raft-rs p99 | OpenRaft p99 |",
+                      "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+            for row in section["rows"]:
+                lines.append(f"| {row['workload']} | {row['max_in_flight']} | "
+                             f"{_fmt_ops(row['rafter_ops_s'])}/s | {_fmt_ops(row['raft_rs_ops_s'])}/s | "
+                             f"{_fmt_ops(row['openraft_ops_s'])}/s | {_fmt_us(row['rafter_p99_us'])} | "
+                             f"{_fmt_us(row['raft_rs_p99_us'])} | {_fmt_us(row['openraft_p99_us'])} |")
+            lines.append("")
+        elif section_id == "durable-replication" and section["rows"]:
             lines += ["| Batch | File replacement | Append-only journal | Throughput change | Replacement p99 | Journal p99 |",
                       "| ---: | ---: | ---: | ---: | ---: | ---: |"]
             for row in section["rows"]:
@@ -663,7 +752,18 @@ def render_html(summary: dict, evidence: dict) -> str:
         section = sections[section_id]
         content = [f"<p class='question'>{html.escape(section['question'])}</p>",
                    f"<p class='result'>{html.escape(section['result'])}</p>"]
-        if section_id == "durable-replication" and section["rows"]:
+        if section_id == "consensus-in-memory" and section["rows"]:
+            body = "".join(
+                f"<tr><td>{html.escape(row['workload'])}</td><td>{row['max_in_flight']}</td>"
+                f"<td>{_fmt_ops(row['rafter_ops_s'])}/s</td><td>{_fmt_ops(row['raft_rs_ops_s'])}/s</td>"
+                f"<td>{_fmt_ops(row['openraft_ops_s'])}/s</td><td>{_fmt_us(row['rafter_p99_us'])}</td>"
+                f"<td>{_fmt_us(row['raft_rs_p99_us'])}</td><td>{_fmt_us(row['openraft_p99_us'])}</td></tr>"
+                for row in section["rows"]
+            )
+            content.append("<div class='table'><table><thead><tr><th>Workload</th><th>In flight</th>"
+                           "<th>Rafter</th><th>raft-rs</th><th>OpenRaft</th><th>Rafter p99</th>"
+                           f"<th>raft-rs p99</th><th>OpenRaft p99</th></tr></thead><tbody>{body}</tbody></table></div>")
+        elif section_id == "durable-replication" and section["rows"]:
             body = "".join(
                 f"<tr><td>{row['batch_size']}</td><td>{_fmt_ops(row['file_replacement_ops_s'])}/s</td>"
                 f"<td>{_fmt_ops(row['append_only_journal_ops_s'])}/s</td><td>+{row['throughput_change_percent']:.1f}%</td>"

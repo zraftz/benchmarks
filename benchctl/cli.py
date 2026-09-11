@@ -128,7 +128,7 @@ def main() -> None:
     p.add_argument("ref")
     p = sub.add_parser("microbench", help="run the in-memory benchmark suite")
     p.add_argument("--mode", choices=("full", "rafter-only"), default="full")
-    p.add_argument("--runs", type=int, default=3)
+    p.add_argument("--runs", type=int, default=7)
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
     p.add_argument("--output", type=Path)
     p = sub.add_parser("run")
