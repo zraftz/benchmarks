@@ -180,8 +180,12 @@ def _service_section(durable: dict | None, headline_variant: str | None) -> dict
             candidate_1000 = _one(rows, variant=selected, rate=1000, delay=delay)
             control_1000 = _one(rows, variant=control, rate=1000, delay=delay)
             throughput = compare(candidate_saturated, control_saturated, "throughput_ops_s", higher_is_better=True)
+            saturated_p99 = compare(candidate_saturated, control_saturated, "client_p99_ms", higher_is_better=False)
+            saturated_p999 = compare(candidate_saturated, control_saturated, "client_p999_ms", higher_is_better=False)
             low = compare(candidate_low, control_low, "client_p99_ms", higher_is_better=False)
+            low_p999 = compare(candidate_low, control_low, "client_p999_ms", higher_is_better=False)
             at_1000 = compare(candidate_1000, control_1000, "client_p99_ms", higher_is_better=False)
+            at_1000_p999 = compare(candidate_1000, control_1000, "client_p999_ms", higher_is_better=False)
             selected_rows = (candidate_saturated, control_saturated, candidate_low, control_low,
                              candidate_1000, control_1000)
             sources.extend(case for row in selected_rows for case in row["source_cases"])
@@ -191,14 +195,30 @@ def _service_section(durable: dict | None, headline_variant: str | None) -> dict
                 "openraft_throughput_ops_s": control_saturated["metrics"]["throughput_ops_s"]["median"],
                 "throughput_ratio": throughput["ratio"],
                 "throughput_interpretation": throughput["label"],
+                "rafter_saturated_p99_ms": candidate_saturated["metrics"]["client_p99_ms"]["median"],
+                "openraft_saturated_p99_ms": control_saturated["metrics"]["client_p99_ms"]["median"],
+                "saturated_p99_improvement_percent": saturated_p99["advantage_percent"],
+                "saturated_p99_interpretation": saturated_p99["label"],
+                "rafter_saturated_p999_ms": candidate_saturated["metrics"]["client_p999_ms"]["median"],
+                "openraft_saturated_p999_ms": control_saturated["metrics"]["client_p999_ms"]["median"],
+                "saturated_p999_improvement_percent": saturated_p999["advantage_percent"],
+                "saturated_p999_interpretation": saturated_p999["label"],
                 "rafter_p99_at_100_ms": candidate_low["metrics"]["client_p99_ms"]["median"],
                 "openraft_p99_at_100_ms": control_low["metrics"]["client_p99_ms"]["median"],
                 "p99_at_100_improvement_percent": low["advantage_percent"],
                 "p99_at_100_interpretation": low["label"],
+                "rafter_p999_at_100_ms": candidate_low["metrics"]["client_p999_ms"]["median"],
+                "openraft_p999_at_100_ms": control_low["metrics"]["client_p999_ms"]["median"],
+                "p999_at_100_improvement_percent": low_p999["advantage_percent"],
+                "p999_at_100_interpretation": low_p999["label"],
                 "rafter_p99_at_1000_ms": candidate_1000["metrics"]["client_p99_ms"]["median"],
                 "openraft_p99_at_1000_ms": control_1000["metrics"]["client_p99_ms"]["median"],
                 "p99_at_1000_improvement_percent": at_1000["advantage_percent"],
                 "p99_at_1000_interpretation": at_1000["label"],
+                "rafter_p999_at_1000_ms": candidate_1000["metrics"]["client_p999_ms"]["median"],
+                "openraft_p999_at_1000_ms": control_1000["metrics"]["client_p999_ms"]["median"],
+                "p999_at_1000_improvement_percent": at_1000_p999["advantage_percent"],
+                "p999_at_1000_interpretation": at_1000_p999["label"],
             })
     except NotComparable as error:
         section.update(status="not comparable", result=str(error))
@@ -219,14 +239,38 @@ def _service_section(durable: dict | None, headline_variant: str | None) -> dict
             same_storage = candidate["configuration"]["hard_state"] == baseline["configuration"]["hard_state"]
             if same_source and same_storage:
                 change = compare(candidate, baseline, "throughput_ops_s", higher_is_better=True)
+                latency_rows = []
+                internal_sources = candidate["source_cases"] + baseline["source_cases"]
+                for rate in (0, 100, 1000):
+                    candidate_rate = _one(rows, variant=selected, rate=rate, delay=delay)
+                    baseline_rate = _one(rows, variant=prior, rate=rate, delay=delay)
+                    p99 = compare(candidate_rate, baseline_rate, "client_p99_ms", higher_is_better=False)
+                    p999 = compare(candidate_rate, baseline_rate, "client_p999_ms", higher_is_better=False)
+                    latency_rows.append({
+                        "offered_per_second": rate,
+                        "candidate_p99_ms": candidate_rate["metrics"]["client_p99_ms"]["median"],
+                        "prior_p99_ms": baseline_rate["metrics"]["client_p99_ms"]["median"],
+                        "p99_improvement_percent": p99["advantage_percent"],
+                        "p99_interpretation": p99["label"],
+                        "candidate_p999_ms": candidate_rate["metrics"]["client_p999_ms"]["median"],
+                        "prior_p999_ms": baseline_rate["metrics"]["client_p999_ms"]["median"],
+                        "p999_improvement_percent": p999["advantage_percent"],
+                        "p999_interpretation": p999["label"],
+                    })
+                    if rate != 0:
+                        internal_sources.extend(candidate_rate["source_cases"] + baseline_rate["source_cases"])
                 internal.append({"network_delay_ms": delay, "prior_variant": prior,
                                  "throughput_change_percent": change["advantage_percent"],
                                  "interpretation": change["label"],
-                                 "source_cases": _source_refs("durable_service", candidate["source_cases"] + baseline["source_cases"])})
+                                 "latencies": latency_rows,
+                                 "source_cases": _source_refs("durable_service", internal_sources)})
     example = candidate_rows[0]
     openraft = control_rows[0]
     interpretations = [row[key] for row in result_rows for key in
-                       ("throughput_interpretation", "p99_at_100_interpretation", "p99_at_1000_interpretation")]
+                       ("throughput_interpretation", "saturated_p99_interpretation",
+                        "saturated_p999_interpretation", "p99_at_100_interpretation",
+                        "p999_at_100_interpretation", "p99_at_1000_interpretation",
+                        "p999_at_1000_interpretation")]
     if any(candidate_accounting.values()) or "measured regression" in interpretations:
         status = "mixed result"
     elif all(row["throughput_interpretation"] == "roughly level" for row in result_rows):
@@ -234,10 +278,18 @@ def _service_section(durable: dict | None, headline_variant: str | None) -> dict
     else:
         status = "measured lead"
     no_delay = next((row for row in result_rows if row["network_delay_ms"] == 0), result_rows[0])
+    saturated_regressions = []
+    for label, key in (("p99", "saturated_p99_improvement_percent"),
+                       ("p99.9", "saturated_p999_improvement_percent")):
+        if no_delay[f"saturated_{label.replace('.', '')}_interpretation"] == "measured regression":
+            saturated_regressions.append(f"{label} was {abs(no_delay[key]):.1f}% higher")
+    tail_qualification = (" At no-delay saturation, " + " and ".join(saturated_regressions)
+                          + " while completing that greater load.") if saturated_regressions else ""
     section.update(
         status=status,
         result=(f"{example['display_name']} completed {no_delay['throughput_ratio']:.2f}× as many "
-                "durable writes per second as the tested OpenRaft integration in the no-delay condition."),
+                "durable writes per second as the tested OpenRaft integration in the no-delay condition."
+                + tail_qualification),
         conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                     f"{example['workload']['payload_bytes']}-byte writes; medians of {example['repetitions']} repetitions. "
                     "Success requires Raft commitment and durable application completion. Added delay affects client and peer egress. "
@@ -333,7 +385,7 @@ def build_summary(*, durable: dict | None = None, storage: dict | None = None,
         "complete_durable_service": durable["qualification"] if durable else "not measured",
     }
     return {
-        "schema": 1,
+        "schema": 2,
         "title": "Rafter implementation performance",
         "principle": "Where Rafter demonstrably leads, where evidence is mixed, and what remains unmeasured.",
         "interpretation": {"roughly_level_percent": 3.0,
@@ -374,24 +426,44 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                            f"journal {probes['journal']['sync_calls_per_publication']:.1f} sync calls/publication. "
                            "This is not synchronization calls per committed entry."), ""]
         elif section_id == "complete-durable-service" and section["rows"]:
-            lines += ["| Added loopback egress | Rafter throughput | OpenRaft throughput | Advantage | Rafter p99 at 1,000/s | OpenRaft p99 at 1,000/s |",
-                      "| ---: | ---: | ---: | ---: | ---: | ---: |"]
+            lines += ["| Added loopback egress | Rafter throughput | OpenRaft throughput | Advantage |",
+                      "| ---: | ---: | ---: | ---: |"]
             for row in section["rows"]:
                 lines.append(f"| {row['network_delay_ms']} ms | **{_fmt_ops(row['rafter_throughput_ops_s'])} writes/s** | "
                              f"{_fmt_ops(row['openraft_throughput_ops_s'])} writes/s | **{row['throughput_ratio']:.2f}×** | "
-                             f"**{_fmt_ms(row['rafter_p99_at_1000_ms'])}** | {_fmt_ms(row['openraft_p99_at_1000_ms'])} |")
+                             )
+            lines += ["", "| Added egress | Offered rate | Rafter p99 | OpenRaft p99 | Rafter p99.9 | OpenRaft p99.9 |",
+                      "| ---: | ---: | ---: | ---: | ---: | ---: |"]
+            for row in section["rows"]:
+                latency_rows = (
+                    ("saturation", row["rafter_saturated_p99_ms"], row["openraft_saturated_p99_ms"],
+                     row["rafter_saturated_p999_ms"], row["openraft_saturated_p999_ms"]),
+                    ("100/s", row["rafter_p99_at_100_ms"], row["openraft_p99_at_100_ms"],
+                     row["rafter_p999_at_100_ms"], row["openraft_p999_at_100_ms"]),
+                    ("1,000/s", row["rafter_p99_at_1000_ms"], row["openraft_p99_at_1000_ms"],
+                     row["rafter_p999_at_1000_ms"], row["openraft_p999_at_1000_ms"]),
+                )
+                for rate, rafter_p99, openraft_p99, rafter_p999, openraft_p999 in latency_rows:
+                    lines.append(f"| {row['network_delay_ms']} ms | {rate} | {_fmt_ms(rafter_p99)} | "
+                                 f"{_fmt_ms(openraft_p99)} | {_fmt_ms(rafter_p999)} | {_fmt_ms(openraft_p999)} |")
             lines.append("")
             accounting = section["accounting"]["rafter"]
             control_accounting = section["accounting"]["openraft"]
-            low = " · ".join(f"{row['network_delay_ms']} ms: {_fmt_ms(row['rafter_p99_at_100_ms'])} vs {_fmt_ms(row['openraft_p99_at_100_ms'])}"
-                             for row in section["rows"])
-            lines += [f"p99 at 100 writes/s — {low}", "",
-                      f"Rafter accounting: {accounting['errors']} errors · {accounting['unknown']} unknown · {accounting['not_issued']} unsent",
+            lines += [f"Rafter accounting: {accounting['errors']} errors · {accounting['unknown']} unknown · {accounting['not_issued']} unsent",
                       f"OpenRaft accounting: {control_accounting['errors']} errors · {control_accounting['unknown']} unknown · {control_accounting['not_issued']} unsent", ""]
             if section["internal_comparisons"]:
                 changes = " · ".join(f"{item['network_delay_ms']} ms: {item['throughput_change_percent']:+.1f}%"
                                      for item in section["internal_comparisons"])
-                lines += [f"Pipeline versus same-code synchronous Rafter throughput — {changes}", ""]
+                lines += [f"Pipeline versus same-code synchronous Rafter throughput — {changes}", "",
+                          "| Added egress | Offered rate | Pipeline p99 | Synchronous p99 | Pipeline p99.9 | Synchronous p99.9 |",
+                          "| ---: | ---: | ---: | ---: | ---: | ---: |"]
+                for item in section["internal_comparisons"]:
+                    for latency in item["latencies"]:
+                        rate = "saturation" if latency["offered_per_second"] == 0 else f"{latency['offered_per_second']:,}/s"
+                        lines.append(f"| {item['network_delay_ms']} ms | {rate} | {_fmt_ms(latency['candidate_p99_ms'])} | "
+                                     f"{_fmt_ms(latency['prior_p99_ms'])} | {_fmt_ms(latency['candidate_p999_ms'])} | "
+                                     f"{_fmt_ms(latency['prior_p999_ms'])} |")
+                lines.append("")
         elif section_id == "failure-and-sustained-operation" and section["checks"]:
             for check in section["checks"]:
                 if "passed_cases" in check:
@@ -445,25 +517,48 @@ def render_html(summary: dict, evidence: dict) -> str:
                                f"journal {probes['journal']['sync_calls_per_publication']:.1f} sync calls/publication. "
                                "This is not synchronization calls per committed entry.</p>")
         elif section_id == "complete-durable-service" and section["rows"]:
-            body = "".join(
+            throughput_body = "".join(
                 f"<tr><td>{row['network_delay_ms']} ms</td><td><strong>{_fmt_ops(row['rafter_throughput_ops_s'])}/s</strong></td>"
                 f"<td>{_fmt_ops(row['openraft_throughput_ops_s'])}/s</td><td><strong>{row['throughput_ratio']:.2f}×</strong></td>"
-                f"<td><strong>{_fmt_ms(row['rafter_p99_at_1000_ms'])}</strong></td><td>{_fmt_ms(row['openraft_p99_at_1000_ms'])}</td></tr>"
+                "</tr>"
                 for row in section["rows"])
             content.append("<div class='table'><table><thead><tr><th>Added egress</th><th>Rafter throughput</th>"
-                           "<th>OpenRaft throughput</th><th>Advantage</th><th>Rafter p99 at 1,000/s</th>"
-                           f"<th>OpenRaft p99</th></tr></thead><tbody>{body}</tbody></table></div>")
+                           f"<th>OpenRaft throughput</th><th>Advantage</th></tr></thead><tbody>{throughput_body}</tbody></table></div>")
+            latency_body = ""
+            for row in section["rows"]:
+                latency_rows = (
+                    ("saturation", row["rafter_saturated_p99_ms"], row["openraft_saturated_p99_ms"],
+                     row["rafter_saturated_p999_ms"], row["openraft_saturated_p999_ms"]),
+                    ("100/s", row["rafter_p99_at_100_ms"], row["openraft_p99_at_100_ms"],
+                     row["rafter_p999_at_100_ms"], row["openraft_p999_at_100_ms"]),
+                    ("1,000/s", row["rafter_p99_at_1000_ms"], row["openraft_p99_at_1000_ms"],
+                     row["rafter_p999_at_1000_ms"], row["openraft_p999_at_1000_ms"]),
+                )
+                latency_body += "".join(
+                    f"<tr><td>{row['network_delay_ms']} ms</td><td>{rate}</td><td>{_fmt_ms(rafter_p99)}</td>"
+                    f"<td>{_fmt_ms(openraft_p99)}</td><td>{_fmt_ms(rafter_p999)}</td><td>{_fmt_ms(openraft_p999)}</td></tr>"
+                    for rate, rafter_p99, openraft_p99, rafter_p999, openraft_p999 in latency_rows)
+            content.append("<div class='table'><table><thead><tr><th>Added egress</th><th>Offered rate</th>"
+                           "<th>Rafter p99</th><th>OpenRaft p99</th><th>Rafter p99.9</th><th>OpenRaft p99.9</th>"
+                           f"</tr></thead><tbody>{latency_body}</tbody></table></div>")
             accounting = section["accounting"]["rafter"]
             control_accounting = section["accounting"]["openraft"]
-            low = " · ".join(f"{row['network_delay_ms']} ms: {_fmt_ms(row['rafter_p99_at_100_ms'])} vs {_fmt_ms(row['openraft_p99_at_100_ms'])}"
-                             for row in section["rows"])
-            content.append(f"<p>p99 at 100 writes/s — {html.escape(low)}</p>")
             content.append(f"<p>Rafter accounting: {accounting['errors']} errors · {accounting['unknown']} unknown · {accounting['not_issued']} unsent<br>"
                            f"OpenRaft accounting: {control_accounting['errors']} errors · {control_accounting['unknown']} unknown · {control_accounting['not_issued']} unsent</p>")
             if section["internal_comparisons"]:
                 changes = " · ".join(f"{item['network_delay_ms']} ms: {item['throughput_change_percent']:+.1f}%"
                                      for item in section["internal_comparisons"])
                 content.append(f"<p>Pipeline versus same-code synchronous Rafter throughput — {html.escape(changes)}</p>")
+                internal_body = ""
+                for item in section["internal_comparisons"]:
+                    internal_body += "".join(
+                        f"<tr><td>{item['network_delay_ms']} ms</td><td>{'saturation' if latency['offered_per_second'] == 0 else format(latency['offered_per_second'], ',') + '/s'}</td>"
+                        f"<td>{_fmt_ms(latency['candidate_p99_ms'])}</td><td>{_fmt_ms(latency['prior_p99_ms'])}</td>"
+                        f"<td>{_fmt_ms(latency['candidate_p999_ms'])}</td><td>{_fmt_ms(latency['prior_p999_ms'])}</td></tr>"
+                        for latency in item["latencies"])
+                content.append("<div class='table'><table><thead><tr><th>Added egress</th><th>Offered rate</th>"
+                               "<th>Pipeline p99</th><th>Synchronous p99</th><th>Pipeline p99.9</th><th>Synchronous p99.9</th>"
+                               f"</tr></thead><tbody>{internal_body}</tbody></table></div>")
         elif section_id == "failure-and-sustained-operation" and section["checks"]:
             items = []
             for check in section["checks"]:

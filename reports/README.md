@@ -8,4 +8,5 @@ identity remains separate from benchmarked source identity.
 Generate a new directory with `./raft-bench summary`. Do not edit generated
 numbers by hand or replace a prior report in place.
 
-- [Qualified service run 34609743659](qualified-34609743659/summary.md)
+- [Qualified service run 34628543562](qualified-34628543562/summary.md) — current exact-main evidence
+- [Qualified service run 34609743659](qualified-34609743659/summary.md) — previous evidence

@@ -13,7 +13,8 @@ ENVIRONMENT = {"topology": "three processes on one host", "runner": "same"}
 COMPLETION = "durable-log+durable-application-v1/logged-reads"
 
 
-def service_case(variant, engine, delay, rate, throughput, p99, *, unsent=0):
+def service_case(variant, engine, delay, rate, throughput, p99, *, p999=None, unsent=0):
+    p999 = p99 * 1.25 if p999 is None else p999
     mode = "pipeline" if variant.startswith("candidate") else ("messages" if variant == "prior" else "public_api")
     return {
         "layer": "complete_service",
@@ -31,13 +32,15 @@ def service_case(variant, engine, delay, rate, throughput, p99, *, unsent=0):
         "environment": ENVIRONMENT,
         "measurement_mode": "timing",
         "metric_definitions": {"throughput_ops_s": "ops", "client_p99_ms": "p99",
-                               "execution_p99_ms": "execution", "aggregate": "median"},
+                               "client_p999_ms": "p99.9", "execution_p99_ms": "execution p99",
+                               "execution_p999_ms": "execution p99.9", "aggregate": "median"},
         "repetition": 1,
         "smoke": False,
         "qualification": "passed",
         "qualification_errors": [],
         "metrics": {"throughput_ops_s": throughput, "client_p99_ms": p99,
-                    "execution_p99_ms": p99},
+                    "client_p999_ms": p999, "execution_p99_ms": p99,
+                    "execution_p999_ms": p999},
         "accounting": {"offered": 1000, "attempted": 1000 - unsent, "ok": 1000 - unsent,
                        "errors": 0, "unknown": 0, "not_issued": unsent},
         "recovery": {"status": "passed"},
@@ -113,6 +116,7 @@ class SummaryTests(unittest.TestCase):
         service = sections["complete-durable-service"]
         self.assertEqual(service["selected_configuration"]["name"], "Rafter pipeline")
         self.assertAlmostEqual(service["rows"][0]["throughput_ratio"], 8025 / 2116)
+        self.assertAlmostEqual(service["rows"][0]["rafter_p999_at_1000_ms"], 12.714 * 1.25)
         self.assertEqual(service["accounting"]["rafter"], {"errors": 0, "unknown": 0, "not_issued": 0})
         self.assertEqual(service["accounting"]["openraft"]["not_issued"], 9)
         self.assertEqual(len(summary["normalized_results"]["complete_durable_service"]), 18)
@@ -126,6 +130,7 @@ class SummaryTests(unittest.TestCase):
         for rendered in (markdown, page):
             self.assertIn("8,025", rendered)
             self.assertIn("3.79", rendered)
+            self.assertIn("p99.9", rendered)
             self.assertIn("567 unsent", rendered)
         self.assertIn('"rafter_throughput_ops_s": 8025', json.dumps(summary, sort_keys=True))
 
@@ -161,6 +166,21 @@ class SummaryTests(unittest.TestCase):
         section = build_summary(durable=data)["sections"][2]
         self.assertEqual(section["status"], "mixed result")
         self.assertEqual(section["accounting"]["rafter"]["not_issued"], 1)
+
+    def test_saturated_tail_regression_labels_result_mixed(self):
+        data = durable_data()
+        candidate = next(case for case in data["cases"]
+                         if case["configuration"]["variant"] == "candidate-b32"
+                         and case["workload"]["network_delay_ms"] == 0
+                         and case["workload"]["offered_per_second"] == 0)
+        control = next(case for case in data["cases"]
+                       if case["configuration"]["variant"] == "openraft"
+                       and case["workload"]["network_delay_ms"] == 0
+                       and case["workload"]["offered_per_second"] == 0)
+        candidate["metrics"]["client_p99_ms"] = control["metrics"]["client_p99_ms"] * 1.2
+        section = build_summary(durable=data)["sections"][2]
+        self.assertEqual(section["status"], "mixed result")
+        self.assertEqual(section["rows"][0]["saturated_p99_interpretation"], "measured regression")
 
     def test_storage_loader_recomputes_raw_receipts(self):
         with tempfile.TemporaryDirectory() as temp:

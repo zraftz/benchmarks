@@ -1,8 +1,8 @@
 # Raft benchmarks
 
-Current qualified evidence: [one-minute summary](reports/qualified-34609743659/summary.md) ·
-[static HTML](reports/qualified-34609743659/report.html) ·
-[normalized JSON](reports/qualified-34609743659/summary.json)
+Current qualified evidence: [one-minute summary](reports/qualified-34628543562/summary.md) ·
+[static HTML](reports/qualified-34628543562/report.html) ·
+[normalized JSON](reports/qualified-34628543562/summary.json)
 
 Compare Rafter, raft-rs, and OpenRaft with two suites:
 
