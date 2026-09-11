@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from benchctl.timelines import STAGES, extract
+from benchctl.timelines import STAGES, extract, recorded_extract_matches
 
 
 def timeline(ordinal=65, boundary="engine_apply_effect"):
@@ -125,3 +125,19 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual(windows["observed_ns"], 200)
         self.assertEqual(windows["any_full_fraction"], .5)
         self.assertEqual(windows["mean_full_followers"], 1.0)
+
+    def test_sealed_extraction_compatibility_is_explicit_and_fail_closed(self):
+        current = extract(snapshot(64, [timeline(1)]), snapshot(128, [timeline(1), timeline(65)]))
+        transitional = copy.deepcopy(current)
+        transitional["schema"] = 1
+        legacy = copy.deepcopy(transitional)
+        for node in legacy["nodes"].values():
+            node.pop("measurement_metrics")
+            node.pop("measurement_replication_windows")
+        self.assertTrue(recorded_extract_matches(current, current))
+        self.assertTrue(recorded_extract_matches(current, transitional))
+        self.assertTrue(recorded_extract_matches(current, legacy))
+        malformed = copy.deepcopy(transitional)
+        malformed["nodes"]["1"].pop("measurement_metrics")
+        self.assertFalse(recorded_extract_matches(current, malformed))
+        self.assertFalse(recorded_extract_matches(current, {**current, "schema": 3}))

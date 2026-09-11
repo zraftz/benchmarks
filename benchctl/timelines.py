@@ -1,5 +1,6 @@
 """Validate and isolate bounded operation timelines from diagnostic node status."""
 from __future__ import annotations
+import copy
 from typing import Any
 
 
@@ -198,7 +199,7 @@ def extract(before: dict, after: dict) -> dict:
             ),
         }
     return {
-        "schema": 1,
+        "schema": 2,
         "scope": "bounded samples admitted after the pre-measurement watermark; callback timestamps, not kernel commit timestamps",
         "commit_boundaries": {
             "engine_apply_effect": "first committed apply effect observed by the shared Rafter or raft-rs owner",
@@ -208,3 +209,29 @@ def extract(before: dict, after: dict) -> dict:
         "retained_measurement_timelines": retained_total,
         "nodes": nodes,
     }
+
+
+def recorded_extract_matches(actual: dict, recorded: dict) -> bool:
+    """Compare current, transitional, and pre-metrics sealed extractions."""
+    schema = recorded.get("schema")
+    if schema == 2:
+        return actual == recorded
+    if schema != 1:
+        return False
+    compatible = copy.deepcopy(actual)
+    compatible["schema"] = 1
+    legacy_node_fields = {
+        "before_operations_seen",
+        "after_operations_seen",
+        "measurement_operations_seen",
+        "retained_after_total",
+        "retained_measurement_timelines",
+    }
+    recorded_nodes = recorded.get("nodes")
+    if (isinstance(recorded_nodes, dict) and recorded_nodes
+            and all(isinstance(node, dict) and set(node) == legacy_node_fields
+                    for node in recorded_nodes.values())):
+        for node in compatible["nodes"].values():
+            node.pop("measurement_metrics", None)
+            node.pop("measurement_replication_windows", None)
+    return compatible == recorded

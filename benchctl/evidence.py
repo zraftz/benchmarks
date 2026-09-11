@@ -135,19 +135,20 @@ def verify(directory: Path) -> dict[str, Any]:
             return {"status": "failed" if errors else "passed", "errors": errors}
         manifest = json.loads((directory / "manifest.json").read_text())
         if manifest.get("options", {}).get("diagnostics"):
-            from .timelines import extract
+            from .timelines import extract, recorded_extract_matches
             actual_timelines = extract(
                 json.loads((directory / "before.json").read_text()),
                 json.loads((directory / "diagnostics-after-load.json").read_text()),
             )
             recorded_timelines = json.loads((directory / "operation-timelines.json").read_text())
-            if actual_timelines != recorded_timelines:
+            if not recorded_extract_matches(actual_timelines, recorded_timelines):
                 errors.append("operation timeline extraction differs from status watermarks")
         if manifest.get("options", {}).get("pipelined_durability") and manifest.get("scenario") == "durable-kv":
-            from .pipeline import activity
+            from .pipeline import activity, recorded_activity_matches
             actual_activity = activity(json.loads((directory / "before.json").read_text()),
                                        json.loads((directory / "persistence-after-load.json").read_text()))
-            if actual_activity != json.loads((directory / "pipeline-activity.json").read_text()):
+            recorded_activity = json.loads((directory / "pipeline-activity.json").read_text())
+            if not recorded_activity_matches(actual_activity, recorded_activity):
                 errors.append("pipeline activity verdict differs from recorded counters")
         result = json.loads((directory / "measurement.json").read_text())
         errors.extend(validate_result(result))

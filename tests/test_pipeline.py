@@ -1,6 +1,6 @@
 import copy
 import unittest
-from benchctl.pipeline import activity
+from benchctl.pipeline import activity, recorded_activity_matches
 
 
 def snapshot(counts):
@@ -25,6 +25,7 @@ def instrumented(counts, speculative, synchronous, sizes, threshold=2):
 class PipelineActivityTests(unittest.TestCase):
     def test_counts_are_deltas_across_nodes_without_claiming_latency(self):
         result = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))
+        self.assertEqual(result["schema"], 2)
         self.assertEqual(result["completed_by_node"], {"1": 5, "2": 3, "3": 0})
         self.assertEqual(result["status"], "passed")
 
@@ -57,3 +58,13 @@ class PipelineActivityTests(unittest.TestCase):
         self.assertEqual(result["max_speculative_proposals_by_node"], {"1": 2, "2": 2, "3": 2})
         self.assertEqual(result["speculative_proposal_batches_by_node"]["1"], 4)
         self.assertEqual(result["proposal_batch_sizes_by_node"]["1"], {"1": 4, "4": 1})
+
+    def test_sealed_activity_compatibility_is_explicit_and_fail_closed(self):
+        current = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))
+        transitional = {key: value for key, value in current.items() if key != "schema"}
+        legacy = {key: transitional[key] for key in ("status", "completed_by_node", "scope")}
+        self.assertTrue(recorded_activity_matches(current, current))
+        self.assertTrue(recorded_activity_matches(current, transitional))
+        self.assertTrue(recorded_activity_matches(current, legacy))
+        self.assertFalse(recorded_activity_matches(current, {"status": "passed"}))
+        self.assertFalse(recorded_activity_matches(current, {**current, "schema": 1}))

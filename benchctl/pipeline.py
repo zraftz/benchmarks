@@ -37,7 +37,7 @@ def activity(before: dict, after: dict) -> dict:
         raise ValueError("pipeline counters reset during the steady-state load")
     if sum(delta.values()) == 0:
         raise ValueError("selected pipeline completed no persistence operations during the load")
-    result = {"status": "passed", "completed_by_node": delta,
+    result = {"schema": 2, "status": "passed", "completed_by_node": delta,
             "scope": "load and generator drain, before post-load canaries; not an exact measurement-window count"}
     optional_names = ("submitted_operations", "synchronous_proposal_batches", "synchronous_proposals",
                       "speculative_proposal_batches", "speculative_proposals")
@@ -76,3 +76,17 @@ def activity(before: dict, after: dict) -> dict:
                 raise ValueError("pipeline proposal batch counter regressed")
         result["proposal_batch_sizes_by_node"] = sizes_by_node
     return result
+
+
+def recorded_activity_matches(actual: dict, recorded: dict) -> bool:
+    """Compare current, transitional, and legacy sealed activity verdicts."""
+    if recorded.get("schema") == 2:
+        return actual == recorded
+    if "schema" in recorded:
+        return False
+    compatible = dict(actual)
+    compatible.pop("schema", None)
+    legacy_fields = {"status", "completed_by_node", "scope"}
+    if set(recorded) == legacy_fields:
+        compatible = {key: compatible[key] for key in legacy_fields}
+    return compatible == recorded
