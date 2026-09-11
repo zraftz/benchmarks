@@ -5,6 +5,12 @@ use anyhow::{bail, Result};
 use rafter::{ClientProposalInput, Input, NodeId, Output, Role, Term};
 use rafter_runtime::pipelined::PreparedProposals;
 
+/// Speculate only when the ready queue cannot already amortize persistence.
+///
+/// A larger ready batch takes the ordinary synchronous group-commit path. This
+/// introduces no timer and keeps the runtime's single-owner durability fence.
+pub(super) const MAX_SPECULATIVE_PROPOSALS: usize = 1;
+
 pub struct Pipeline {
     pub node: storage::Pipeline,
     worker: Worker,
@@ -14,6 +20,8 @@ pub struct Pipeline {
     pub counters: Counters,
     pub submitted: u64,
     pub completed: u64,
+    pub synchronous_proposal_batches: u64,
+    pub synchronous_proposals: u64,
 }
 impl Pipeline {
     pub fn new(node: storage::Node, diagnostics: bool) -> Result<Self> {
@@ -26,6 +34,8 @@ impl Pipeline {
             counters: Vec::new(),
             submitted: 0,
             completed: 0,
+            synchronous_proposal_batches: 0,
+            synchronous_proposals: 0,
         })
     }
     fn refresh(&mut self) {
@@ -36,11 +46,12 @@ impl Pipeline {
         }
     }
     pub fn step(&mut self, inputs: Vec<Input>) -> Result<Vec<Output>> {
-        let outputs = if !inputs.is_empty()
+        let proposal_count = (!inputs.is_empty()
             && inputs
                 .iter()
-                .all(|input| matches!(input, Input::ClientProposal { .. }))
-        {
+                .all(|input| matches!(input, Input::ClientProposal { .. })))
+        .then_some(inputs.len());
+        let outputs = if proposal_count.is_some_and(|count| count <= MAX_SPECULATIVE_PROPOSALS) {
             let proposals = inputs
                 .into_iter()
                 .map(|input| {
@@ -63,7 +74,14 @@ impl Pipeline {
                 _ => bail!("unsupported persistence preparation result"),
             }
         } else {
-            self.node.step_batch(inputs)?
+            let outputs = self.node.step_batch(inputs)?;
+            if let Some(count) = proposal_count {
+                self.synchronous_proposal_batches =
+                    self.synchronous_proposal_batches.saturating_add(1);
+                self.synchronous_proposals =
+                    self.synchronous_proposals.saturating_add(count as u64);
+            }
+            outputs
         };
         self.refresh();
         Ok(outputs)

@@ -82,10 +82,15 @@ fn command() -> Command {
         expected: None,
     }
 }
+fn proposal_at(sequence: u64) -> Input {
+    let mut command = command();
+    command.sequence = sequence;
+    Input::ClientProposal {
+        payload: serde_json::to_vec(&command).unwrap(),
+    }
+}
 fn proposal() -> Vec<Input> {
-    vec![Input::ClientProposal {
-        payload: serde_json::to_vec(&command()).unwrap(),
-    }]
+    vec![proposal_at(1)]
 }
 #[test]
 fn native_pipeline_fences_quorum_and_reopens_after_durable_application_completion() {
@@ -157,6 +162,29 @@ fn native_pipeline_fences_quorum_and_reopens_after_durable_application_completio
     let recovered = node(&directory.0, 1, LogIndex(recovered_application.index));
     assert_eq!(recovered.commit_index(), LogIndex(2));
     assert_eq!(recovered.last_log_index(), LogIndex(2));
+}
+#[test]
+fn ready_multi_proposal_batch_uses_synchronous_group_commit() {
+    let directory = Directory::new();
+    let (leader, follower) = elected(&directory.0);
+    let mut pipeline = Pipeline::new(leader, true).unwrap();
+    let outputs = pipeline.step(vec![proposal_at(1), proposal_at(2)]).unwrap();
+    assert!(pipeline.node.ready_node().is_some());
+    assert!(pipeline.node.pending_operation().is_none());
+    assert_eq!(pipeline.node.progress().accepted, LogIndex(3));
+    assert_eq!(pipeline.node.progress().durable, LogIndex(3));
+    assert!(outputs
+        .iter()
+        .any(|output| matches!(output, Output::Send { .. })));
+    assert_eq!(pipeline.submitted, 0);
+    assert_eq!(pipeline.completed, 0);
+    assert_eq!(pipeline.synchronous_proposal_batches, 1);
+    assert_eq!(pipeline.synchronous_proposals, 2);
+    drop(pipeline);
+    drop(follower);
+    let recovered = node(&directory.0, 1, LogIndex::ZERO);
+    assert_eq!(recovered.last_log_index(), LogIndex(3));
+    assert_eq!(recovered.commit_index(), LogIndex(1));
 }
 #[test]
 fn shutdown_joins_outstanding_native_persistence_without_publishing_a_commit() {

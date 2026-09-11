@@ -88,7 +88,10 @@ impl Driver {
                 serde_json::json!({"enabled":true, "accepted_index":p.accepted.0,
                     "submitted_index":p.submitted.0,"durable_index":p.durable.0,
                     "durable_commit_index":p.committed.0,"submitted_operations":state.submitted,
-                    "completed_operations":state.completed,"max_outstanding_operations":1})
+                    "completed_operations":state.completed,"max_outstanding_operations":1,
+                    "max_speculative_proposals":pipeline::MAX_SPECULATIVE_PROPOSALS,
+                    "synchronous_proposal_batches":state.synchronous_proposal_batches,
+                    "synchronous_proposals":state.synchronous_proposals})
             }
         }
     }
