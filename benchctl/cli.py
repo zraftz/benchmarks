@@ -43,6 +43,8 @@ def run(options) -> None:
         raise ValueError("invalid workload sizes")
     if not 1 <= options.peer_batch_size <= 64:
         raise ValueError("peer batch size must be 1..64")
+    if not 1 <= options.max_speculative_proposals <= 64:
+        raise ValueError("max speculative proposals must be 1..64")
     if not 1 <= options.batch_size <= 64 or not 0 < options.timeout <= 60 or options.read_percent < 0 or options.cas_percent < 0 or options.read_percent + options.cas_percent > 100:
         raise ValueError("invalid batch size, timeout or mix")
     if not options.data_root and not options.smoke:
@@ -145,6 +147,8 @@ def main() -> None:
     p.add_argument("--peer-batch-size", type=int, default=1)
     p.add_argument("--peer-message-stream", action="store_true")
     p.add_argument("--pipelined-durability", action="store_true", help="Rafter only; enables ordered apply and message transport")
+    p.add_argument("--max-speculative-proposals", type=int, default=1,
+                   help="Rafter pipeline only; largest ready proposal batch eligible for speculative replication")
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
     p.add_argument("--seed-base", type=int, default=1)

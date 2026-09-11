@@ -124,6 +124,7 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "hard_state": receipt.get("rafter_hard_state_backend") if manifest["implementation"] == "rafter" else "adapter_journal",
             "peer_batch_size": options.get("peer_batch_size", 1),
             "client_batch_size": options.get("batch_size"),
+            "max_speculative_proposals": options.get("max_speculative_proposals", 1),
         },
         "workload": _workload(manifest, measurement),
         "completion_boundary": (measurement or {}).get("contract", CONTRACT),
@@ -152,8 +153,9 @@ def _expected_durable_cases(suite: dict) -> int:
     if "arms" in suite:
         delays = len(suite.get("network_delays_ms", [0]))
         timing = delays * len(suite["arms"]) * len(suite["rates"]) * suite["runs"]
-        diagnostic_arms = min(3, len(suite["arms"]))
-        diagnostics = delays * diagnostic_arms * len(suite["rates"])
+        diagnostic_arms = len(suite.get("diagnostic_arms", [])) or min(3, len(suite["arms"]))
+        diagnostic_rates = len(suite.get("diagnostic_rates", suite["rates"]))
+        diagnostics = delays * diagnostic_arms * diagnostic_rates
         return timing + diagnostics
     return len(suite["implementations"]) * len(suite["rates"]) * suite["runs"]
 

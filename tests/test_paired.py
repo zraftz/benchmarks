@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 from benchctl.paired import archive_build, ordered_arms, mode_flags
 from benchctl.evidence import digest
+from benchctl.results import _expected_durable_cases
 
 
 class PairedTests(unittest.TestCase):
@@ -38,3 +39,10 @@ class PairedTests(unittest.TestCase):
             self.assertFalse(any(mode_flags(mode, "openraft").values()))
         with self.assertRaisesRegex(ValueError, "unsupported"):
             mode_flags("unknown")
+
+    def test_threshold_sweep_case_count_uses_declared_diagnostic_subset(self):
+        suite = {"arms": [["prior"], ["openraft"], ["s1"], ["s2"], ["s4"], ["s8"]],
+                 "rates": [0, 1000], "runs": 3, "network_delays_ms": [0, 2],
+                 "diagnostic_arms": ["prior", "openraft", "s1", "s2", "s4", "s8"],
+                 "diagnostic_rates": [0]}
+        self.assertEqual(_expected_durable_cases(suite), 84)

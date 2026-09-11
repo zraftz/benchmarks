@@ -46,6 +46,30 @@ def snapshot(seen, retained, *, sample_every=64):
     }
 
 
+def add_diagnostics(snapshot_value, *, samples, total, observed, full):
+    for status in snapshot_value.values():
+        status["info"]["diagnostics"]["metrics"] = {
+            "owner_persistence_blocked_ns": {
+                "samples": samples,
+                "total": total,
+                "max": total,
+                "buckets_log2": [samples],
+            }
+        }
+        status["info"]["engine"] = {
+            "replication_windows": {
+                "definition": "owner-observed",
+                "observations": samples,
+                "observed_ns": observed,
+                "any_full_ns": full,
+                "full_follower_ns": full * 2,
+                "currently_full_followers": 0,
+                "windows": [],
+            }
+        }
+    return snapshot_value
+
+
 class TimelineTests(unittest.TestCase):
     def test_extract_uses_pre_measurement_watermark(self):
         before = snapshot(64, [timeline(1)])
@@ -86,3 +110,18 @@ class TimelineTests(unittest.TestCase):
         after = snapshot(128, [timeline(1)])
         with self.assertRaises(ValueError):
             extract(before, after)
+
+    def test_extracts_precommit_and_replication_window_deltas(self):
+        before = add_diagnostics(snapshot(64, [timeline(1)]), samples=2, total=20,
+                                 observed=100, full=25)
+        after = add_diagnostics(snapshot(128, [timeline(1), timeline(65)]), samples=5, total=80,
+                                observed=300, full=125)
+        result = extract(before, after)
+        node = result["nodes"]["1"]
+        metric = node["measurement_metrics"]["owner_persistence_blocked_ns"]
+        self.assertEqual(metric["samples"], 3)
+        self.assertEqual(metric["mean_ns"], 20)
+        windows = node["measurement_replication_windows"]
+        self.assertEqual(windows["observed_ns"], 200)
+        self.assertEqual(windows["any_full_fraction"], .5)
+        self.assertEqual(windows["mean_full_followers"], 1.0)

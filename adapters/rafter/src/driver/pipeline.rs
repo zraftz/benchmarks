@@ -4,12 +4,7 @@ use crate::storage;
 use anyhow::{bail, Result};
 use rafter::{ClientProposalInput, Input, NodeId, Output, Role, Term};
 use rafter_runtime::pipelined::PreparedProposals;
-
-/// Speculate only when the ready queue cannot already amortize persistence.
-///
-/// A larger ready batch takes the ordinary synchronous group-commit path. This
-/// introduces no timer and keeps the runtime's single-owner durability fence.
-pub(super) const MAX_SPECULATIVE_PROPOSALS: usize = 1;
+use std::collections::BTreeMap;
 
 pub struct Pipeline {
     pub node: storage::Pipeline,
@@ -22,9 +17,21 @@ pub struct Pipeline {
     pub completed: u64,
     pub synchronous_proposal_batches: u64,
     pub synchronous_proposals: u64,
+    pub speculative_proposal_batches: u64,
+    pub speculative_proposals: u64,
+    pub proposal_batch_sizes: BTreeMap<usize, u64>,
+    pub max_speculative_proposals: usize,
+    diagnostics: bool,
 }
 impl Pipeline {
-    pub fn new(node: storage::Node, diagnostics: bool) -> Result<Self> {
+    pub fn new(
+        node: storage::Node,
+        diagnostics: bool,
+        max_speculative_proposals: usize,
+    ) -> Result<Self> {
+        if !(1..=64).contains(&max_speculative_proposals) {
+            bail!("max speculative proposals must be 1..64")
+        }
         Ok(Self {
             term: node.current_term(),
             role: node.role(),
@@ -36,6 +43,11 @@ impl Pipeline {
             completed: 0,
             synchronous_proposal_batches: 0,
             synchronous_proposals: 0,
+            speculative_proposal_batches: 0,
+            speculative_proposals: 0,
+            proposal_batch_sizes: BTreeMap::new(),
+            max_speculative_proposals,
+            diagnostics,
         })
     }
     fn refresh(&mut self) {
@@ -51,7 +63,13 @@ impl Pipeline {
                 .iter()
                 .all(|input| matches!(input, Input::ClientProposal { .. })))
         .then_some(inputs.len());
-        let outputs = if proposal_count.is_some_and(|count| count <= MAX_SPECULATIVE_PROPOSALS) {
+        if self.diagnostics {
+            if let Some(count) = proposal_count {
+                *self.proposal_batch_sizes.entry(count).or_default() += 1;
+            }
+        }
+        let outputs = if proposal_count.is_some_and(|count| count <= self.max_speculative_proposals)
+        {
             let proposals = inputs
                 .into_iter()
                 .map(|input| {
@@ -69,6 +87,11 @@ impl Pipeline {
                 PreparedProposals::Pending { replication, work } => {
                     self.worker.submit(work)?;
                     self.submitted += 1;
+                    self.speculative_proposal_batches =
+                        self.speculative_proposal_batches.saturating_add(1);
+                    self.speculative_proposals = self
+                        .speculative_proposals
+                        .saturating_add(proposal_count.unwrap_or_default() as u64);
                     replication
                 }
                 _ => bail!("unsupported persistence preparation result"),

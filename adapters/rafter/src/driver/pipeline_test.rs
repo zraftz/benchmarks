@@ -96,7 +96,7 @@ fn proposal() -> Vec<Input> {
 fn native_pipeline_fences_quorum_and_reopens_after_durable_application_completion() {
     let directory = Directory::new();
     let (leader, mut follower) = elected(&directory.0);
-    let mut pipeline = Pipeline::new(leader, true).unwrap();
+    let mut pipeline = Pipeline::new(leader, true, 1).unwrap();
     let replicated = pipeline.step(proposal()).unwrap();
     assert!(pipeline.node.ready_node().is_none());
     assert_eq!(pipeline.node.progress().accepted, LogIndex(2));
@@ -167,7 +167,7 @@ fn native_pipeline_fences_quorum_and_reopens_after_durable_application_completio
 fn ready_multi_proposal_batch_uses_synchronous_group_commit() {
     let directory = Directory::new();
     let (leader, follower) = elected(&directory.0);
-    let mut pipeline = Pipeline::new(leader, true).unwrap();
+    let mut pipeline = Pipeline::new(leader, true, 1).unwrap();
     let outputs = pipeline.step(vec![proposal_at(1), proposal_at(2)]).unwrap();
     assert!(pipeline.node.ready_node().is_some());
     assert!(pipeline.node.pending_operation().is_none());
@@ -187,10 +187,30 @@ fn ready_multi_proposal_batch_uses_synchronous_group_commit() {
     assert_eq!(recovered.commit_index(), LogIndex(1));
 }
 #[test]
+fn configured_multi_proposal_batch_uses_one_speculative_operation() {
+    let directory = Directory::new();
+    let (leader, follower) = elected(&directory.0);
+    let mut pipeline = Pipeline::new(leader, true, 2).unwrap();
+    let outputs = pipeline.step(vec![proposal_at(1), proposal_at(2)]).unwrap();
+    assert!(pipeline.node.ready_node().is_none());
+    assert!(pipeline.node.pending_operation().is_some());
+    assert!(outputs
+        .iter()
+        .any(|output| matches!(output, Output::Send { .. })));
+    assert_eq!(pipeline.submitted, 1);
+    assert_eq!(pipeline.speculative_proposal_batches, 1);
+    assert_eq!(pipeline.speculative_proposals, 2);
+    assert_eq!(pipeline.proposal_batch_sizes, BTreeMap::from([(2, 1)]));
+    assert_eq!(pipeline.synchronous_proposal_batches, 0);
+    pipeline.complete().unwrap().unwrap();
+    drop(pipeline);
+    drop(follower);
+}
+#[test]
 fn shutdown_joins_outstanding_native_persistence_without_publishing_a_commit() {
     let directory = Directory::new();
     let (leader, follower) = elected(&directory.0);
-    let mut pipeline = Pipeline::new(leader, false).unwrap();
+    let mut pipeline = Pipeline::new(leader, false, 1).unwrap();
     pipeline.step(proposal()).unwrap();
     assert!(pipeline.node.pending_operation().is_some());
     // Drop joins the single worker; its unconsumed completion cannot release outputs.

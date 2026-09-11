@@ -141,6 +141,9 @@ impl Diagnostics {
     pub fn start(&self) -> Option<Instant> {
         self.enabled.then(Instant::now)
     }
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
     pub fn elapsed(&self, name: &str, start: Option<Instant>) {
         if let Some(start) = start {
             self.observe(

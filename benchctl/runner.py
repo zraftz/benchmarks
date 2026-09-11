@@ -84,7 +84,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
     cluster = Cluster(implementation, command, directory / "cluster", data, case_id, options.batch_size,
         getattr(options, "peer_batch_size", 1), getattr(options, "diagnostics", False),
         getattr(options, "ordered_apply", False), getattr(options, "peer_message_stream", False),
-        getattr(options, "pipelined_durability", False))
+        getattr(options, "pipelined_durability", False),
+        getattr(options, "max_speculative_proposals", 1))
     load = None
     try:
         cluster.start()

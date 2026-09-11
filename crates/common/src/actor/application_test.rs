@@ -128,6 +128,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         ordered_apply: true,
         peer_message_stream: false,
         pipelined_durability: false,
+        max_speculative_proposals: 1,
     };
     let mut state = State {
         diagnostics: Diagnostics::default(),

@@ -13,15 +13,21 @@ pub enum Driver {
     Pipeline(Box<pipeline::Pipeline>),
 }
 impl Driver {
-    pub fn new(node: Node, enabled: bool, diagnostics: bool) -> Result<Self> {
+    pub fn new(
+        node: Node,
+        enabled: bool,
+        diagnostics: bool,
+        max_speculative_proposals: usize,
+    ) -> Result<Self> {
         #[cfg(feature = "pipelined-durability")]
         if enabled {
             return Ok(Self::Pipeline(Box::new(pipeline::Pipeline::new(
                 node,
                 diagnostics,
+                max_speculative_proposals,
             )?)));
         }
-        let _ = diagnostics;
+        let _ = (diagnostics, max_speculative_proposals);
         if enabled {
             bail!("pipelined durability is unavailable in this build")
         }
@@ -89,9 +95,12 @@ impl Driver {
                     "submitted_index":p.submitted.0,"durable_index":p.durable.0,
                     "durable_commit_index":p.committed.0,"submitted_operations":state.submitted,
                     "completed_operations":state.completed,"max_outstanding_operations":1,
-                    "max_speculative_proposals":pipeline::MAX_SPECULATIVE_PROPOSALS,
+                    "max_speculative_proposals":state.max_speculative_proposals,
                     "synchronous_proposal_batches":state.synchronous_proposal_batches,
-                    "synchronous_proposals":state.synchronous_proposals})
+                    "synchronous_proposals":state.synchronous_proposals,
+                    "speculative_proposal_batches":state.speculative_proposal_batches,
+                    "speculative_proposals":state.speculative_proposals,
+                    "proposal_batch_sizes":state.proposal_batch_sizes})
             }
         }
     }

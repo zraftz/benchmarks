@@ -8,6 +8,20 @@ def snapshot(counts):
         "enabled": True, "completed_operations": count}}}} for i, count in enumerate(counts)}
 
 
+def instrumented(counts, speculative, synchronous, sizes, threshold=2):
+    result = snapshot(counts)
+    for node, status in result.items():
+        pipeline = status["info"]["engine"]["persistence_pipeline"]
+        pipeline.update({"submitted_operations": counts[int(node) - 1],
+                         "synchronous_proposal_batches": synchronous[int(node) - 1],
+                         "synchronous_proposals": synchronous[int(node) - 1],
+                         "speculative_proposal_batches": speculative[int(node) - 1],
+                         "speculative_proposals": speculative[int(node) - 1],
+                         "proposal_batch_sizes": sizes[int(node) - 1],
+                         "max_speculative_proposals": threshold})
+    return result
+
+
 class PipelineActivityTests(unittest.TestCase):
     def test_counts_are_deltas_across_nodes_without_claiming_latency(self):
         result = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))
@@ -35,3 +49,11 @@ class PipelineActivityTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case), self.assertRaises(ValueError):
                 activity(before, case)
+
+    def test_threshold_and_batch_geometry_are_counter_deltas(self):
+        before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3, "4": 1}, {}, {}])
+        after = instrumented([9, 0, 0], [7, 0, 0], [2, 0, 0], [{"1": 7, "4": 2}, {}, {}])
+        result = activity(before, after)
+        self.assertEqual(result["max_speculative_proposals_by_node"], {"1": 2, "2": 2, "3": 2})
+        self.assertEqual(result["speculative_proposal_batches_by_node"]["1"], 4)
+        self.assertEqual(result["proposal_batch_sizes_by_node"]["1"], {"1": 4, "4": 1})

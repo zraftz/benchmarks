@@ -56,6 +56,10 @@ pub trait Engine: Send + 'static {
         bail!("ordered application is unsupported by this build")
     }
     fn decode_peer(&self, from: u64, data: &[u8]) -> Result<Self::Peer>;
+    /// Optional queue-delay metric for one decoded peer input.
+    fn peer_queue_metric(_peer: &Self::Peer) -> Option<&'static str> {
+        None
+    }
     fn peer_gate(&self, max_events: usize, max_bytes: usize) -> Self::Gate;
     fn admit_peer(gate: &mut Self::Gate, peer: &Self::Peer) -> bool;
     fn peer_batch(&mut self, peers: Vec<Self::Peer>) -> Result<Vec<Effect>>;
@@ -268,6 +272,13 @@ impl<E: Engine> State<E> {
                     self.peer_batches += 1;
                     self.peer_events += peers.len() as u64;
                     *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
+                    if self.diagnostics.enabled() {
+                        for (peer, queued) in peers.iter().zip(&arrivals) {
+                            if let Some(metric) = E::peer_queue_metric(peer) {
+                                self.diagnostics.elapsed(metric, *queued);
+                            }
+                        }
+                    }
                     let e = self.engine.peer_batch(peers)?;
                     for queued in arrivals {
                         self.diagnostics

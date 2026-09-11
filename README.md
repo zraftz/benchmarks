@@ -95,6 +95,7 @@ runner. Timing and diagnostic cases stay separate in `results/paired/`.
 | Run `--peer-message-stream --implementations rafter,raft-rs` | Send peer messages without empty transport replies |
 | Build `--rafter-hard-state journal` or `wal` | Select supported native storage; `replace` is the default |
 | Build/run `--pipelined-durability` | Rafter only: overlap eligible replication and local persistence |
+| Run `--max-speculative-proposals N` | Bound ready proposal batches eligible for that overlap; default 1 |
 
 Options require a Rafter revision supporting the corresponding API. Pipeline
 mode also enables ordered apply and message transport. Paired CI offers
@@ -108,7 +109,9 @@ Build receipts and node stats record the choices. Use `--diagnostics` separately
 empty-append reasons, and bounded sampled operation timelines; timing runs leave them disabled.
 Each timeline names the adapter's first observable Raft commit callback and the later application
 dispatch, start, durable completion, and client completion points. These are callback timestamps,
-not kernel storage-commit timestamps. Paired diagnostics cover 0, 100, and 1,000 requests/second.
+not kernel storage-commit timestamps. Diagnostics also retain owner persistence blocking,
+replication-ack queue delay, proposal-batch distribution, and owner-observed full replication-window
+time. Paired CI can sweep speculative limits and restrict timing and diagnostic rates independently.
 
 ## Development
 

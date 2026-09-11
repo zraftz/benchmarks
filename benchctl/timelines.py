@@ -106,6 +106,63 @@ def _state(status: dict, node: str) -> dict:
     return state
 
 
+def _metric_deltas(before: dict, after: dict, node: str) -> dict:
+    earlier = before["info"]["diagnostics"].get("metrics", {})
+    later = after["info"]["diagnostics"].get("metrics", {})
+    if not isinstance(earlier, dict) or not isinstance(later, dict):
+        raise ValueError(f"node {node} diagnostic metrics are malformed")
+    result = {}
+    for name in sorted(set(earlier) | set(later)):
+        first = earlier.get(name, {"samples": 0, "total": 0, "max": 0, "buckets_log2": []})
+        last = later.get(name)
+        if not isinstance(first, dict) or not isinstance(last, dict):
+            raise ValueError(f"node {node} diagnostic metric changed inventory: {name}")
+        for field in ("samples", "total", "max"):
+            _nonnegative(first.get(field), f"node {node} {name} {field}")
+            _nonnegative(last.get(field), f"node {node} {name} {field}")
+        first_buckets = first.get("buckets_log2")
+        last_buckets = last.get("buckets_log2")
+        if (not isinstance(first_buckets, list) or not isinstance(last_buckets, list)
+                or any(type(value) is not int or value < 0 for value in first_buckets + last_buckets)):
+            raise ValueError(f"node {node} diagnostic metric has malformed buckets: {name}")
+        width = max(len(first_buckets), len(last_buckets))
+        first_buckets = first_buckets + [0] * (width - len(first_buckets))
+        last_buckets = last_buckets + [0] * (width - len(last_buckets))
+        samples = last["samples"] - first["samples"]
+        total = last["total"] - first["total"]
+        buckets = [right - left for left, right in zip(first_buckets, last_buckets, strict=True)]
+        if samples < 0 or total < 0 or any(value < 0 for value in buckets) or sum(buckets) != samples:
+            raise ValueError(f"node {node} diagnostic metric regressed: {name}")
+        if samples:
+            result[name] = {"samples": samples, "total_ns": total, "mean_ns": total / samples,
+                            "cumulative_max_ns": last["max"], "buckets_ns_log2": buckets}
+    return result
+
+
+def _replication_window_delta(before: dict, after: dict, node: str) -> dict | None:
+    earlier = before.get("info", {}).get("engine", {}).get("replication_windows")
+    later = after.get("info", {}).get("engine", {}).get("replication_windows")
+    if earlier is None and later is None:
+        return None
+    if not isinstance(earlier, dict) or not isinstance(later, dict):
+        raise ValueError(f"node {node} replication-window diagnostics changed availability")
+    if earlier.get("definition") != later.get("definition"):
+        raise ValueError(f"node {node} replication-window definition changed")
+    fields = ("observations", "observed_ns", "any_full_ns", "full_follower_ns")
+    delta = {}
+    for field in fields:
+        first = _nonnegative(earlier.get(field), f"node {node} replication windows {field}")
+        last = _nonnegative(later.get(field), f"node {node} replication windows {field}")
+        if last < first:
+            raise ValueError(f"node {node} replication-window counter regressed: {field}")
+        delta[field] = last - first
+    observed = delta["observed_ns"]
+    delta["any_full_fraction"] = delta["any_full_ns"] / observed if observed else None
+    delta["mean_full_followers"] = delta["full_follower_ns"] / observed if observed else None
+    delta["definition"] = later["definition"]
+    return delta
+
+
 def extract(before: dict, after: dict) -> dict:
     """Return only samples admitted after the pre-measurement status watermark."""
     before_nodes = _nodes(before)
@@ -135,6 +192,10 @@ def extract(before: dict, after: dict) -> dict:
             "measurement_operations_seen": later["operations_seen"] - watermark,
             "retained_after_total": len(later["retained"]),
             "retained_measurement_timelines": retained,
+            "measurement_metrics": _metric_deltas(before_nodes[node], after_nodes[node], node),
+            "measurement_replication_windows": _replication_window_delta(
+                before_nodes[node], after_nodes[node], node
+            ),
         }
     return {
         "schema": 1,

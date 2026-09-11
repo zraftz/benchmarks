@@ -56,6 +56,10 @@ def main() -> None:
     parser.add_argument("--prior-mode", choices=MODES, default="inline")
     parser.add_argument("--candidate-mode", choices=MODES, default="inline")
     parser.add_argument("--prior-peer-batch-size", type=int, default=1)
+    parser.add_argument("--prior-max-speculative-proposals", type=int, default=1)
+    parser.add_argument("--candidate-max-speculative-proposals", default="1")
+    parser.add_argument("--rates", default="0,100,1000")
+    parser.add_argument("--diagnostic-rates", help="defaults to all timing rates")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
     args = parser.parse_args()
@@ -64,6 +68,20 @@ def main() -> None:
         raise ValueError("distinct peer batch sizes in 1..64 are required")
     if not 1 <= args.prior_peer_batch_size <= 64:
         raise ValueError("prior peer batch size must be 1..64")
+    thresholds = [int(value) for value in args.candidate_max_speculative_proposals.split(",")]
+    if (not thresholds or len(set(thresholds)) != len(thresholds)
+            or any(value < 1 or value > 64 for value in thresholds)):
+        raise ValueError("distinct candidate speculative proposal limits in 1..64 are required")
+    if not 1 <= args.prior_max_speculative_proposals <= 64:
+        raise ValueError("prior speculative proposal limit must be 1..64")
+    rates = [int(value) for value in args.rates.split(",")]
+    if not rates or len(set(rates)) != len(rates) or any(value < 0 or value > 10_000_000 for value in rates):
+        raise ValueError("distinct offered rates in 0..10000000 are required")
+    diagnostic_rates = ([int(value) for value in args.diagnostic_rates.split(",")]
+                        if args.diagnostic_rates else rates)
+    if (not diagnostic_rates or len(set(diagnostic_rates)) != len(diagnostic_rates)
+            or any(value not in rates for value in diagnostic_rates)):
+        raise ValueError("diagnostic rates must be distinct members of the timing rates")
     delays = [int(value) for value in args.network_delays_ms.split(",")]
     if not delays or len(set(delays)) != len(delays) or any(value < 0 or value > 100 for value in delays):
         raise ValueError("distinct network delays in 0..100 are required")
@@ -85,7 +103,7 @@ def main() -> None:
             flags = ["--peer-message-stream"] if args.candidate_mode in ("messages", "pipeline") else []
             engines = "rafter,raft-rs"
             if args.candidate_mode == "pipeline":
-                flags.append("--pipelined-durability")
+                flags.extend(["--pipelined-durability", "--max-speculative-proposals", str(thresholds[0])])
                 engines = "rafter"
             subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
                 "--implementations", engines, "--ordered-apply", "--peer-batch-size", "32",
@@ -97,28 +115,39 @@ def main() -> None:
     for engine in ("raft-rs", "openraft"):
         if prior["implementations"][engine] != candidate["implementations"][engine]:
             raise RuntimeError("control implementation changed while selecting Rafter")
-    arms = [("prior", "rafter", args.prior_peer_batch_size, "prior"), ("openraft", "openraft", 1, "candidate")]
-    arms += [(f"candidate-b{cap}", "rafter", cap, "candidate") for cap in caps]
-    write_json(output / "suite.json", {"schema": 1, "arms": arms, "rates": [0, 100, 1000], "runs": 3,
+    arms = [("prior", "rafter", args.prior_peer_batch_size, "prior", args.prior_max_speculative_proposals),
+            ("openraft", "openraft", 1, "candidate", 1)]
+    label = lambda cap, threshold: (f"candidate-b{cap}" if thresholds == [1]
+                                    else f"candidate-b{cap}-s{threshold}")
+    arms += [(label(cap, threshold), "rafter", cap, "candidate", threshold)
+             for cap in caps for threshold in thresholds]
+    diagnostic_arms = (arms if len(thresholds) > 1 else
+                       [arms[0], arms[1], next((arm for arm in arms[2:] if arm[2] == 32), arms[-1])])
+    write_json(output / "suite.json", {"schema": 2, "arms": arms, "rates": rates, "runs": 3,
         "order": "rotate and reverse arms by repetition; all cases sequential on one host",
-        "diagnostics": "separate cases after timing runs; never pooled", "network_delays_ms": delays, "prior_mode": args.prior_mode, "candidate_mode": args.candidate_mode, "prior_hard_state": args.prior_hard_state, "candidate_hard_state": args.candidate_hard_state, "data_root": str(data)})
+        "diagnostics": "separate cases after timing runs; never pooled",
+        "diagnostic_arms": [arm[0] for arm in diagnostic_arms], "diagnostic_rates": diagnostic_rates,
+        "network_delays_ms": delays, "prior_mode": args.prior_mode, "candidate_mode": args.candidate_mode,
+        "prior_hard_state": args.prior_hard_state, "candidate_hard_state": args.candidate_hard_state,
+        "prior_max_speculative_proposals": args.prior_max_speculative_proposals,
+        "candidate_max_speculative_proposals": thresholds, "data_root": str(data)})
     failures = []
     ordinal = 0
     for delay in delays:
         with loopback_delay(delay) as network:
             write_json(output / f"network-{delay}ms.json", network)
             for diagnostic in (False, True):
-                diagnostic_arms = [arms[0], arms[1], next((arm for arm in arms[2:] if arm[2] == 32), arms[-1])]
                 for repeat in range(1 if diagnostic else 3):
-                    for rate in (0, 100, 1000):
-                        for label, engine, cap, binary_set in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
+                    for rate in diagnostic_rates if diagnostic else rates:
+                        for arm_label, engine, cap, binary_set, threshold in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
                             ordinal += 1
-                            name = f"{ordinal:03d}-n{delay}-{label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
+                            name = f"{ordinal:03d}-n{delay}-{arm_label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
                             options = SimpleNamespace(network_delay_ms=delay, scenario="durable-kv", smoke=False, batch_size=64,
                                 peer_batch_size=cap, diagnostics=diagnostic, duration=60, warmup=10,
                                 **mode_flags(args.prior_mode if binary_set == "prior" else args.candidate_mode, engine),
+                                max_speculative_proposals=threshold,
                                 concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
-                                read_percent=0, cas_percent=0, timeout=2, variant=label)
+                                read_percent=0, cas_percent=0, timeout=2, variant=arm_label)
                             print(f"Running {name}", flush=True)
                             try:
                                 run_case(engine, output / name, data / name, options,

@@ -44,6 +44,8 @@ pub struct Config {
     pub peer_message_stream: bool,
     #[serde(default)]
     pub pipelined_durability: bool,
+    #[serde(default = "max_speculative_proposals")]
+    pub max_speculative_proposals: usize,
 }
 fn peer_batch_size() -> usize {
     1
@@ -56,6 +58,9 @@ fn capacity() -> usize {
 }
 fn batch_size() -> usize {
     64
+}
+fn max_speculative_proposals() -> usize {
+    1
 }
 impl Config {
     pub fn load() -> Result<Self> {
@@ -76,8 +81,10 @@ impl Config {
             || c.batch_size > 64
             || c.peer_batch_size == 0
             || c.peer_batch_size > 64
+            || c.max_speculative_proposals == 0
+            || c.max_speculative_proposals > 64
         {
-            bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, batch size 1..64");
+            bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, and batch limits in 1..64");
         }
         if c.peers.get(&c.id) != Some(&c.peer) {
             bail!("own peer address does not match peers map");

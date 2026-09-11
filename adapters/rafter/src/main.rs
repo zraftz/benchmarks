@@ -15,6 +15,7 @@ struct Rafter {
     node: driver::Driver,
     ordered_apply: bool,
     empty_appends: diagnostics::EmptyAppends,
+    replication_windows: diagnostics::ReplicationWindows,
 }
 fn effects(outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
     let mut result = Vec::new();
@@ -43,6 +44,13 @@ type PeerGate = rafter_runtime::PeerBatchGate;
 type PeerGate = ();
 
 impl Rafter {
+    fn observe_replication_windows(&mut self) {
+        if !self.replication_windows.enabled() {
+            return;
+        }
+        let windows = self.node.ready().leader_replication_windows();
+        self.replication_windows.observe(windows);
+    }
     fn drive(&mut self, inputs: Vec<Input>) -> Result<Vec<Effect>> {
         let origin = inputs
             .first()
@@ -56,6 +64,9 @@ impl Rafter {
         if let Some(origin) = origin {
             self.empty_appends.record(&outputs, origin, &progress);
         }
+        if !self.node.pending() {
+            self.observe_replication_windows();
+        }
         effects(outputs, self.ordered_apply)
     }
 }
@@ -64,10 +75,15 @@ impl Engine for Rafter {
         self.node.pending()
     }
     fn complete_persistence(&mut self) -> Result<Option<Vec<Effect>>> {
-        self.node
+        let completed = self
+            .node
             .complete()?
             .map(|outputs| effects(outputs, self.ordered_apply))
-            .transpose()
+            .transpose()?;
+        if completed.is_some() {
+            self.observe_replication_windows();
+        }
+        Ok(completed)
     }
     fn term(&self) -> u64 {
         self.node.current_term().0
@@ -79,9 +95,17 @@ impl Engine for Rafter {
         rafter_storage::telemetry::set_enabled(diagnostics);
         #[cfg(not(feature = "peer-group-commit"))]
         let _ = diagnostics;
+        self.observe_replication_windows();
     }
     fn decode_peer(&self, from: u64, data: &[u8]) -> Result<Self::Peer> {
         Ok((NodeId(from), rafter_codec::decode_message(data)?))
+    }
+    fn peer_queue_metric(peer: &Self::Peer) -> Option<&'static str> {
+        matches!(
+            peer.1,
+            Message::AppendEntriesResponse(_) | Message::InstallSnapshotResponse(_)
+        )
+        .then_some("owner_replication_ack_queue_ns")
     }
     fn peer_gate(&self, max_events: usize, max_bytes: usize) -> PeerGate {
         #[cfg(feature = "peer-group-commit")]
@@ -200,7 +224,8 @@ impl Engine for Rafter {
         let persistence = serde_json::Value::Null;
         serde_json::json!({"term":self.node.current_term().0,
         "commit_index":self.node.ready().commit_index().0,"last_log_index":self.node.ready().last_log_index().0,
-        "empty_appends_by_reason":self.empty_appends.snapshot(),"persistence_pipeline":self.node.stats(),
+        "empty_appends_by_reason":self.empty_appends.snapshot(),"replication_windows":self.replication_windows.snapshot(),
+        "persistence_pipeline":self.node.stats(),
         "persistence_diagnostics":persistence,"peer_group_commit_available":cfg!(feature = "peer-group-commit"),
         "storage":"rafter native file stores","hard_state_backend":HARD_STATE_BACKEND,"election_ticks":"50 + 7*(node_id-1)"})
     }
@@ -243,9 +268,15 @@ async fn main() -> Result<()> {
         config.clone(),
         "rafter",
         Rafter {
-            node: driver::Driver::new(node, config.pipelined_durability, config.diagnostics)?,
+            node: driver::Driver::new(
+                node,
+                config.pipelined_durability,
+                config.diagnostics,
+                config.max_speculative_proposals,
+            )?,
             ordered_apply: config.ordered_apply,
             empty_appends: diagnostics::EmptyAppends::new(config.diagnostics),
+            replication_windows: diagnostics::ReplicationWindows::new(config.diagnostics),
         },
         model,
         effects(outputs, config.ordered_apply)?,
