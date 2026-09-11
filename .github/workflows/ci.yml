@@ -58,6 +58,11 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo clippy --locked -p bench-common -p raft-bench-rafter --all-targets \
+            --features peer-group-commit,ordered-apply,pipelined-durability -- -D warnings
+      - name: Rafter WAL pipeline feature tests
+        run: cargo test --locked -p raft-bench-rafter \
+          --features peer-group-commit,ordered-apply,pipelined-durability
       - name: Locked build, tests, and receipt
         run: ./raft-bench build
       - name: Real adapter smoke and recovery checks
