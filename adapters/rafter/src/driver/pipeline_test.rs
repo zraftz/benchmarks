@@ -182,9 +182,9 @@ fn combined_ack_and_proposal_share_one_synchronous_wal_step(peer_first: bool) {
     pipeline.complete().unwrap().unwrap();
 
     let inputs = if peer_first {
-        vec![ack, proposal_at(2)]
+        vec![ack.clone(), ack, proposal_at(2)]
     } else {
-        vec![proposal_at(2), ack]
+        vec![proposal_at(2), ack.clone(), ack]
     };
     let outputs = pipeline.step(inputs).unwrap();
 
@@ -199,6 +199,7 @@ fn combined_ack_and_proposal_share_one_synchronous_wal_step(peer_first: bool) {
         .iter()
         .any(|output| matches!(output, Output::Send { .. })));
     assert_eq!(pipeline.combined_peer_proposal_batches, 1);
+    assert_eq!(pipeline.combined_peer_events, 2);
     assert_eq!(pipeline.combined_peer_proposals, 1);
     assert_eq!(pipeline.synchronous_proposal_batches, 1);
     assert_eq!(pipeline.synchronous_proposals, 1);

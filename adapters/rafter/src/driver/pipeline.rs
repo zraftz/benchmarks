@@ -21,6 +21,7 @@ pub struct Pipeline {
     pub speculative_proposal_batches: u64,
     pub speculative_proposals: u64,
     pub combined_peer_proposal_batches: u64,
+    pub combined_peer_events: u64,
     pub combined_peer_proposals: u64,
     pub proposal_batch_sizes: BTreeMap<usize, u64>,
     pub max_speculative_proposals: usize,
@@ -51,6 +52,7 @@ impl Pipeline {
             speculative_proposal_batches: 0,
             speculative_proposals: 0,
             combined_peer_proposal_batches: 0,
+            combined_peer_events: 0,
             combined_peer_proposals: 0,
             proposal_batch_sizes: BTreeMap::new(),
             max_speculative_proposals,
@@ -65,6 +67,7 @@ impl Pipeline {
         }
     }
     pub fn step(&mut self, inputs: Vec<Input>) -> Result<Vec<Output>> {
+        let input_count = inputs.len();
         let proposal_count = inputs
             .iter()
             .filter(|input| matches!(input, Input::ClientProposal { .. }))
@@ -113,6 +116,9 @@ impl Pipeline {
                 if !proposals_only {
                     self.combined_peer_proposal_batches =
                         self.combined_peer_proposal_batches.saturating_add(1);
+                    self.combined_peer_events = self
+                        .combined_peer_events
+                        .saturating_add((input_count - proposal_count) as u64);
                     self.combined_peer_proposals = self
                         .combined_peer_proposals
                         .saturating_add(proposal_count as u64);
