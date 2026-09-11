@@ -234,12 +234,13 @@ fn same_turn_ready_write_and_following_ack_preserve_order_in_one_engine_step() {
     let (tx, rx) = mpsc::sync_channel(8);
     tx.send(write("key")).unwrap();
     tx.send(peer(7)).unwrap();
+    tx.send(peer(8)).unwrap();
     drop(tx);
 
     state.run(rx).unwrap();
     let (peer_first, peers, commands) = observed.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(!peer_first);
-    assert_eq!(peers, vec![7]);
+    assert_eq!(peers, vec![7, 8]);
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].key, "key");
     drop(state);
