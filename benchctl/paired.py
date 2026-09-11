@@ -29,12 +29,12 @@ def mode_flags(mode: str, engine: str = "rafter") -> dict[str, bool]:
             "pipelined_durability": mode == "pipeline" and engine == "rafter"}
 
 
-def openraft_arms(controls: list[str]) -> list[tuple[str, str, int, str, int]]:
+def openraft_arms(controls: list[str]) -> list[tuple[str, str, int, str, int, bool]]:
     if not controls or len(set(controls)) != len(controls) or any(
             control not in OPENRAFT_CONTROLS for control in controls):
         raise ValueError("distinct OpenRaft controls drawn from synchronous,async are required")
     labels = {"synchronous": "openraft", "async": "openraft-async"}
-    return [(labels[control], "openraft", 1, "candidate", 1) for control in controls]
+    return [(labels[control], "openraft", 1, "candidate", 1, False) for control in controls]
 
 
 def archive_build(destination: Path) -> dict:
@@ -67,6 +67,8 @@ def main() -> None:
     parser.add_argument("--prior-peer-batch-size", type=int, default=1)
     parser.add_argument("--prior-max-speculative-proposals", type=int, default=1)
     parser.add_argument("--candidate-max-speculative-proposals", default="1")
+    parser.add_argument("--prior-combine-peer-proposals", action="store_true")
+    parser.add_argument("--candidate-combine-peer-proposals", action="store_true")
     parser.add_argument("--rates", default="0,100,1000")
     parser.add_argument("--diagnostic-rates", help="defaults to all timing rates")
     parser.add_argument("--openraft-controls", default="synchronous",
@@ -85,6 +87,10 @@ def main() -> None:
         raise ValueError("distinct candidate speculative proposal limits in 1..64 are required")
     if not 1 <= args.prior_max_speculative_proposals <= 64:
         raise ValueError("prior speculative proposal limit must be 1..64")
+    if args.prior_combine_peer_proposals and args.prior_mode != "pipeline":
+        raise ValueError("prior combined peer/proposal steps require pipeline mode")
+    if args.candidate_combine_peer_proposals and args.candidate_mode != "pipeline":
+        raise ValueError("candidate combined peer/proposal steps require pipeline mode")
     rates = [int(value) for value in args.rates.split(",")]
     if not rates or len(set(rates)) != len(rates) or any(value < 0 or value > 10_000_000 for value in rates):
         raise ValueError("distinct offered rates in 0..10000000 are required")
@@ -117,6 +123,8 @@ def main() -> None:
             engines = "rafter,raft-rs"
             if args.candidate_mode == "pipeline":
                 flags.extend(["--pipelined-durability", "--max-speculative-proposals", str(thresholds[0])])
+                if args.candidate_combine_peer_proposals:
+                    flags.append("--combine-peer-proposals")
                 engines = "rafter"
             subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
                 "--implementations", engines, "--ordered-apply", "--peer-batch-size", "32",
@@ -128,11 +136,14 @@ def main() -> None:
     for engine in ("raft-rs", "openraft"):
         if prior["implementations"][engine] != candidate["implementations"][engine]:
             raise RuntimeError("control implementation changed while selecting Rafter")
-    arms = [("prior", "rafter", args.prior_peer_batch_size, "prior", args.prior_max_speculative_proposals),
+    arms = [("prior", "rafter", args.prior_peer_batch_size, "prior",
+             args.prior_max_speculative_proposals, args.prior_combine_peer_proposals),
             *control_arms]
-    label = lambda cap, threshold: (f"candidate-b{cap}" if thresholds == [1]
+    label = lambda cap, threshold: ((f"candidate-b{cap}" if thresholds == [1]
                                     else f"candidate-b{cap}-s{threshold}")
-    candidate_arms = [(label(cap, threshold), "rafter", cap, "candidate", threshold)
+                                    + ("-combined" if args.candidate_combine_peer_proposals else ""))
+    candidate_arms = [(label(cap, threshold), "rafter", cap, "candidate", threshold,
+                       args.candidate_combine_peer_proposals)
                       for cap in caps for threshold in thresholds]
     arms += candidate_arms
     diagnostic_arms = (arms if len(thresholds) > 1 else
@@ -146,7 +157,10 @@ def main() -> None:
         "prior_hard_state": args.prior_hard_state, "candidate_hard_state": args.candidate_hard_state,
         "openraft_controls": controls,
         "prior_max_speculative_proposals": args.prior_max_speculative_proposals,
-        "candidate_max_speculative_proposals": thresholds, "data_root": str(data)})
+        "candidate_max_speculative_proposals": thresholds,
+        "prior_combine_peer_proposals": args.prior_combine_peer_proposals,
+        "candidate_combine_peer_proposals": args.candidate_combine_peer_proposals,
+        "data_root": str(data)})
     failures = []
     ordinal = 0
     for delay in delays:
@@ -155,7 +169,7 @@ def main() -> None:
             for diagnostic in (False, True):
                 for repeat in range(1 if diagnostic else 3):
                     for rate in diagnostic_rates if diagnostic else rates:
-                        for arm_label, engine, cap, binary_set, threshold in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
+                        for arm_label, engine, cap, binary_set, threshold, combine in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
                             ordinal += 1
                             name = f"{ordinal:03d}-n{delay}-{arm_label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
                             options = SimpleNamespace(network_delay_ms=delay, scenario="durable-kv", smoke=False, batch_size=64,
@@ -163,6 +177,7 @@ def main() -> None:
                                 **mode_flags(args.prior_mode if binary_set == "prior" else args.candidate_mode, engine),
                                 openraft_async_flush=arm_label == "openraft-async",
                                 max_speculative_proposals=threshold,
+                                combine_peer_proposals=combine,
                                 concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
                                 read_percent=0, cas_percent=0, timeout=2, variant=arm_label)
                             print(f"Running {name}", flush=True)

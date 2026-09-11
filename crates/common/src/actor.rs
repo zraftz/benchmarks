@@ -63,6 +63,18 @@ pub trait Engine: Send + 'static {
     fn peer_gate(&self, max_events: usize, max_bytes: usize) -> Self::Gate;
     fn admit_peer(gate: &mut Self::Gate, peer: &Self::Peer) -> bool;
     fn peer_batch(&mut self, peers: Vec<Self::Peer>) -> Result<Vec<Effect>>;
+    /// Whether this peer batch can safely precede ready client proposals in one durable step.
+    fn can_batch_proposals_after_peer(&self, _peers: &[Self::Peer]) -> bool {
+        false
+    }
+    /// Processes a peer batch followed by client proposals in their observed order.
+    fn peer_batch_and_propose(
+        &mut self,
+        _peers: Vec<Self::Peer>,
+        _commands: Vec<Command>,
+    ) -> Result<Vec<Effect>> {
+        bail!("engine declared combined peer/proposal batching without implementing it")
+    }
     fn leader(&self) -> Option<u64>;
     fn is_leader(&self) -> bool;
     fn tick(&mut self) -> Result<Vec<Effect>>;
@@ -279,7 +291,18 @@ impl<E: Engine> State<E> {
                             }
                         }
                     }
-                    let e = self.engine.peer_batch(peers)?;
+                    let mut commands = Vec::new();
+                    if self.config.combine_peer_proposals
+                        && self.engine.can_batch_proposals_after_peer(&peers)
+                    {
+                        self.collect_ready_execute_clients(&rx, &mut deferred, &mut commands)?;
+                    }
+                    let e = if commands.is_empty() {
+                        self.engine.peer_batch(peers)?
+                    } else {
+                        self.diagnostics.proposals_submitted(&commands);
+                        self.engine.peer_batch_and_propose(peers, commands)?
+                    };
                     for queued in arrivals {
                         self.diagnostics
                             .elapsed("peer_receive_to_durable_outputs_ns", queued);
@@ -290,19 +313,7 @@ impl<E: Engine> State<E> {
                     self.diagnostics.elapsed("owner_client_queue_ns", queued);
                     let mut commands = Vec::new();
                     self.client(request, reply, queued, &mut commands)?;
-                    while commands.len() < self.config.batch_size {
-                        match deferred.pop_front().or_else(|| rx.try_recv().ok()) {
-                            Some(Input::Client(q, r, queued)) => {
-                                self.diagnostics.elapsed("owner_client_queue_ns", queued);
-                                self.client(q, r, queued, &mut commands)?;
-                            }
-                            Some(i) => {
-                                deferred.push_back(i);
-                                break;
-                            }
-                            None => break,
-                        }
-                    }
+                    self.collect_ready_clients(&rx, &mut deferred, &mut commands, false)?;
                     if !commands.is_empty() {
                         self.diagnostics.proposals_submitted(&commands);
                         let e = self.engine.propose(commands)?;
@@ -311,6 +322,38 @@ impl<E: Engine> State<E> {
                 }
             }
         }
+    }
+    fn collect_ready_execute_clients(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+        commands: &mut Vec<Command>,
+    ) -> Result<()> {
+        self.collect_ready_clients(rx, deferred, commands, true)
+    }
+    fn collect_ready_clients(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+        commands: &mut Vec<Command>,
+        execute_only: bool,
+    ) -> Result<()> {
+        while commands.len() < self.config.batch_size {
+            let Some(input) = deferred.pop_front().or_else(|| rx.try_recv().ok()) else {
+                break;
+            };
+            match input {
+                Input::Client(q, r, queued) if !execute_only || q.op == "execute" => {
+                    self.diagnostics.elapsed("owner_client_queue_ns", queued);
+                    self.client(q, r, queued, commands)?;
+                }
+                other => {
+                    deferred.push_front(other);
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
     fn client(
         &mut self,
@@ -327,6 +370,7 @@ impl<E: Engine> State<E> {
                     "diagnostics":self.diagnostics.status_snapshot(),"peer_batches":self.peer_batches,"peer_events":self.peer_events,
                     "peer_batch_sizes":self.peer_batch_sizes,
                     "peer_message_stream":self.config.peer_message_stream,
+                    "combine_peer_proposals":self.config.combine_peer_proposals,
                     "transport":self.outbound.iter().map(|(id,peer)|(id.to_string(),peer.stats())).collect::<BTreeMap<_,_>>(),
                     "peer_drops":self.dropped.load(Ordering::Relaxed)});
                 self.application.query(crate::apply_worker::Query {

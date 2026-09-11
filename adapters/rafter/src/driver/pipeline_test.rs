@@ -163,6 +163,49 @@ fn native_pipeline_fences_quorum_and_reopens_after_durable_application_completio
     assert_eq!(recovered.commit_index(), LogIndex(2));
     assert_eq!(recovered.last_log_index(), LogIndex(2));
 }
+
+#[test]
+fn same_term_ack_and_ready_proposal_share_one_synchronous_wal_step() {
+    let directory = Directory::new();
+    let (leader, mut follower) = elected(&directory.0);
+    let mut pipeline = Pipeline::new(leader, true, 8).unwrap();
+    let replicated = pipeline.step(proposal()).unwrap();
+    let response = follower
+        .step(Input::Message {
+            from: NodeId(1),
+            message: to(&replicated, 2),
+        })
+        .unwrap();
+    let ack = Input::Message {
+        from: NodeId(2),
+        message: to(&response, 1),
+    };
+    pipeline.complete().unwrap().unwrap();
+
+    let outputs = pipeline.step(vec![ack, proposal_at(2)]).unwrap();
+
+    assert!(pipeline.node.ready_node().is_some());
+    assert!(pipeline.node.pending_operation().is_none());
+    assert_eq!(pipeline.node.progress().durable, LogIndex(3));
+    assert_eq!(pipeline.node.progress().committed, LogIndex(2));
+    assert!(outputs
+        .iter()
+        .any(|output| matches!(output, Output::Apply { index, .. } if *index == LogIndex(2))));
+    assert!(outputs
+        .iter()
+        .any(|output| matches!(output, Output::Send { .. })));
+    assert_eq!(pipeline.combined_peer_proposal_batches, 1);
+    assert_eq!(pipeline.combined_peer_proposals, 1);
+    assert_eq!(pipeline.synchronous_proposal_batches, 1);
+    assert_eq!(pipeline.synchronous_proposals, 1);
+    assert_eq!(pipeline.proposal_batch_sizes, BTreeMap::from([(1, 2)]));
+    drop(pipeline);
+    drop(follower);
+    let recovered = node(&directory.0, 1, LogIndex::ZERO);
+    assert_eq!(recovered.last_log_index(), LogIndex(3));
+    assert_eq!(recovered.commit_index(), LogIndex(2));
+}
+
 #[test]
 fn ready_multi_proposal_batch_uses_synchronous_group_commit() {
     let directory = Directory::new();

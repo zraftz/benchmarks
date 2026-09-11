@@ -86,6 +86,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         getattr(options, "ordered_apply", False), getattr(options, "peer_message_stream", False),
         getattr(options, "pipelined_durability", False),
         getattr(options, "max_speculative_proposals", 1),
+        getattr(options, "combine_peer_proposals", False),
         getattr(options, "openraft_async_flush", False))
     load = None
     try:
@@ -181,7 +182,9 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         if getattr(options, "pipelined_durability", False) and options.scenario == "durable-kv":
             from .pipeline import activity
             write_json(directory / "persistence-after-load.json", after_load)
-            write_json(directory / "pipeline-activity.json", activity(before, after_load))
+            write_json(directory / "pipeline-activity.json", activity(
+                before, after_load,
+                require_combined=getattr(options, "combine_peer_proposals", False)))
         post = canaries(cluster.nodes, case_id + "post")
         write_json(directory / "after.json", protocol.statuses(cluster.nodes))
         cluster.stop_all()

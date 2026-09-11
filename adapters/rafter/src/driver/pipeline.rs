@@ -20,6 +20,8 @@ pub struct Pipeline {
     pub synchronous_proposals: u64,
     pub speculative_proposal_batches: u64,
     pub speculative_proposals: u64,
+    pub combined_peer_proposal_batches: u64,
+    pub combined_peer_proposals: u64,
     pub proposal_batch_sizes: BTreeMap<usize, u64>,
     pub max_speculative_proposals: usize,
     diagnostics: bool,
@@ -48,6 +50,8 @@ impl Pipeline {
             synchronous_proposals: 0,
             speculative_proposal_batches: 0,
             speculative_proposals: 0,
+            combined_peer_proposal_batches: 0,
+            combined_peer_proposals: 0,
             proposal_batch_sizes: BTreeMap::new(),
             max_speculative_proposals,
             diagnostics,
@@ -61,18 +65,16 @@ impl Pipeline {
         }
     }
     pub fn step(&mut self, inputs: Vec<Input>) -> Result<Vec<Output>> {
-        let proposal_count = (!inputs.is_empty()
-            && inputs
-                .iter()
-                .all(|input| matches!(input, Input::ClientProposal { .. })))
-        .then_some(inputs.len());
-        if self.diagnostics {
-            if let Some(count) = proposal_count {
-                *self.proposal_batch_sizes.entry(count).or_default() += 1;
-            }
+        let proposal_count = inputs
+            .iter()
+            .rev()
+            .take_while(|input| matches!(input, Input::ClientProposal { .. }))
+            .count();
+        let proposals_only = proposal_count != 0 && proposal_count == inputs.len();
+        if self.diagnostics && proposal_count != 0 {
+            *self.proposal_batch_sizes.entry(proposal_count).or_default() += 1;
         }
-        let outputs = if proposal_count.is_some_and(|count| count <= self.max_speculative_proposals)
-        {
+        let outputs = if proposals_only && proposal_count <= self.max_speculative_proposals {
             let proposals = inputs
                 .into_iter()
                 .map(|input| {
@@ -96,18 +98,26 @@ impl Pipeline {
                         self.speculative_proposal_batches.saturating_add(1);
                     self.speculative_proposals = self
                         .speculative_proposals
-                        .saturating_add(proposal_count.unwrap_or_default() as u64);
+                        .saturating_add(proposal_count as u64);
                     replication
                 }
                 _ => bail!("unsupported persistence preparation result"),
             }
         } else {
             let outputs = self.node.step_batch(inputs)?;
-            if let Some(count) = proposal_count {
+            if proposal_count != 0 {
                 self.synchronous_proposal_batches =
                     self.synchronous_proposal_batches.saturating_add(1);
-                self.synchronous_proposals =
-                    self.synchronous_proposals.saturating_add(count as u64);
+                self.synchronous_proposals = self
+                    .synchronous_proposals
+                    .saturating_add(proposal_count as u64);
+                if !proposals_only {
+                    self.combined_peer_proposal_batches =
+                        self.combined_peer_proposal_batches.saturating_add(1);
+                    self.combined_peer_proposals = self
+                        .combined_peer_proposals
+                        .saturating_add(proposal_count as u64);
+                }
             }
             outputs
         };

@@ -17,6 +17,16 @@ struct Rafter {
     empty_appends: diagnostics::EmptyAppends,
     replication_windows: diagnostics::ReplicationWindows,
 }
+fn can_batch_same_term_append_responses(
+    role: Role,
+    term: rafter::Term,
+    peers: &[(NodeId, Message)],
+) -> bool {
+    role == Role::Leader
+        && peers.iter().all(|(_, message)| {
+            matches!(message, Message::AppendEntriesResponse(response) if response.term == term)
+        })
+}
 fn effects(outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
     let mut result = Vec::new();
     for output in outputs {
@@ -195,6 +205,32 @@ impl Engine for Rafter {
         )
     }
 
+    fn can_batch_proposals_after_peer(&self, peers: &[Self::Peer]) -> bool {
+        can_batch_same_term_append_responses(self.node.role(), self.node.current_term(), peers)
+    }
+
+    fn peer_batch_and_propose(
+        &mut self,
+        peers: Vec<Self::Peer>,
+        commands: Vec<Command>,
+    ) -> Result<Vec<Effect>> {
+        let mut inputs = peers
+            .into_iter()
+            .map(|(from, message)| Input::Message { from, message })
+            .collect::<Vec<_>>();
+        inputs.extend(
+            commands
+                .into_iter()
+                .map(|command| {
+                    Ok(Input::ClientProposal {
+                        payload: serde_json::to_vec(&command)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        self.drive(inputs)
+    }
+
     fn propose(&mut self, commands: Vec<Command>) -> Result<Vec<Effect>> {
         let inputs = commands
             .iter()
@@ -282,4 +318,42 @@ async fn main() -> Result<()> {
         effects(outputs, config.ordered_apply)?,
     );
     net::serve(config, handler).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rafter::{AppendEntriesResponse, LogIndex, Term};
+
+    fn response(term: u64) -> (NodeId, Message) {
+        (
+            NodeId(2),
+            Message::AppendEntriesResponse(AppendEntriesResponse {
+                term: Term(term),
+                follower_id: NodeId(2),
+                success: true,
+                match_index: LogIndex(1),
+                sequence: 1,
+            }),
+        )
+    }
+
+    #[test]
+    fn only_same_term_leader_append_responses_admit_ready_proposals() {
+        assert!(can_batch_same_term_append_responses(
+            Role::Leader,
+            Term(3),
+            &[response(3)]
+        ));
+        assert!(!can_batch_same_term_append_responses(
+            Role::Follower,
+            Term(3),
+            &[response(3)]
+        ));
+        assert!(!can_batch_same_term_append_responses(
+            Role::Leader,
+            Term(3),
+            &[response(4)]
+        ));
+    }
 }

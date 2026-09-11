@@ -92,3 +92,117 @@ fn cap_leaves_work_queued_and_empty_queue_does_not_wait() {
     assert!(matches!(rx.try_recv(), Ok(Input::Peer(_, data, _)) if data == vec![3]));
     assert_eq!(take(32, 4, &rx, &mut deferred), vec![4]);
 }
+
+struct CombiningEngine {
+    combined: mpsc::Sender<(Vec<u8>, Vec<Command>)>,
+}
+impl Engine for CombiningEngine {
+    type Peer = u8;
+    type Gate = ();
+    fn decode_peer(&self, _: u64, data: &[u8]) -> Result<u8> {
+        Ok(data[0])
+    }
+    fn peer_gate(&self, _: usize, _: usize) {}
+    fn admit_peer(_: &mut (), _: &u8) -> bool {
+        true
+    }
+    fn peer_batch(&mut self, _: Vec<u8>) -> Result<Vec<Effect>> {
+        unreachable!("eligible ready proposals should share the peer step")
+    }
+    fn can_batch_proposals_after_peer(&self, _: &[u8]) -> bool {
+        true
+    }
+    fn peer_batch_and_propose(
+        &mut self,
+        peers: Vec<u8>,
+        commands: Vec<Command>,
+    ) -> Result<Vec<Effect>> {
+        self.combined.send((peers, commands)).unwrap();
+        Ok(Vec::new())
+    }
+    fn leader(&self) -> Option<u64> {
+        Some(1)
+    }
+    fn is_leader(&self) -> bool {
+        true
+    }
+    fn tick(&mut self) -> Result<Vec<Effect>> {
+        Ok(Vec::new())
+    }
+    fn propose(&mut self, _: Vec<Command>) -> Result<Vec<Effect>> {
+        unreachable!("eligible ready proposals should share the peer step")
+    }
+    fn stats(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+}
+
+#[test]
+fn same_turn_peer_ack_and_ready_write_use_one_engine_step() {
+    let path = std::env::temp_dir().join(format!("mixed-peer-proposal-{}", std::process::id()));
+    let model = DurableModel::open(&path).unwrap();
+    let (combined, observed) = mpsc::channel();
+    let mut state = State {
+        diagnostics: Diagnostics::default(),
+        config: Config {
+            id: 1,
+            cluster: "test".into(),
+            client: String::new(),
+            peer: String::new(),
+            peers: BTreeMap::new(),
+            data_dir: path.clone(),
+            tick_ms: 20,
+            capacity: 16,
+            batch_size: 8,
+            peer_batch_size: 8,
+            diagnostics: false,
+            ordered_apply: false,
+            peer_message_stream: true,
+            pipelined_durability: true,
+            max_speculative_proposals: 1,
+            combine_peer_proposals: true,
+            openraft_async_flush: false,
+        },
+        name: "test",
+        engine: CombiningEngine { combined },
+        application: application::Application::Inline(model),
+        dispatched: 0,
+        outbound: BTreeMap::new(),
+        transport_epoch: (0, None),
+        transport_generation: 0,
+        dropped: Arc::new(AtomicU64::new(0)),
+        pending: BTreeMap::new(),
+        pending_count: 0,
+        peer_batches: 0,
+        peer_events: 0,
+        peer_batch_sizes: BTreeMap::new(),
+    };
+    let (tx, rx) = mpsc::sync_channel(8);
+    tx.send(peer(7)).unwrap();
+    let (reply, _response) = oneshot::channel();
+    tx.send(Input::Client(
+        Request {
+            op: "execute".into(),
+            command: Some(Command {
+                client: "client".into(),
+                sequence: 1,
+                kind: "put".into(),
+                key: "key".into(),
+                value: "value".into(),
+                expected: None,
+            }),
+        },
+        reply,
+        None,
+    ))
+    .unwrap();
+    drop(tx);
+
+    state.run(rx).unwrap();
+    let (peers, commands) = observed.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(peers, vec![7]);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].key, "key");
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}

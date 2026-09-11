@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-def activity(before: dict, after: dict) -> dict:
+def activity(before: dict, after: dict, *, require_combined: bool = False) -> dict:
     def counters(snapshot):
         result = {}
         if {str(node) for node in snapshot} != {"1", "2", "3"}:
@@ -14,7 +14,8 @@ def activity(before: dict, after: dict) -> dict:
                 raise ValueError("pipeline activity requires enabled counters from each node")
             optional = {}
             for name in ("submitted_operations", "synchronous_proposal_batches", "synchronous_proposals",
-                         "speculative_proposal_batches", "speculative_proposals"):
+                         "speculative_proposal_batches", "speculative_proposals",
+                         "combined_peer_proposal_batches", "combined_peer_proposals"):
                 value = pipeline.get(name)
                 if value is not None and (type(value) is not int or value < 0):
                     raise ValueError(f"pipeline activity has an invalid {name} counter")
@@ -40,7 +41,8 @@ def activity(before: dict, after: dict) -> dict:
     result = {"schema": 2, "status": "passed", "completed_by_node": delta,
             "scope": "load and generator drain, before post-load canaries; not an exact measurement-window count"}
     optional_names = ("submitted_operations", "synchronous_proposal_batches", "synchronous_proposals",
-                      "speculative_proposal_batches", "speculative_proposals")
+                      "speculative_proposal_batches", "speculative_proposals",
+                      "combined_peer_proposal_batches", "combined_peer_proposals")
     for name in optional_names:
         presence = [values[name] is not None for values in (*earlier.values(), *later.values())]
         if any(presence) and not all(presence):
@@ -50,6 +52,9 @@ def activity(before: dict, after: dict) -> dict:
             if any(value < 0 for value in values.values()):
                 raise ValueError(f"pipeline {name} counter regressed")
             result[f"{name}_by_node"] = values
+    combined = result.get("combined_peer_proposal_batches_by_node")
+    if require_combined and (combined is None or sum(combined.values()) == 0):
+        raise ValueError("selected combined peer/proposal mode executed no combined steps")
     threshold_presence = [values["max_speculative_proposals"] is not None
                           for values in (*earlier.values(), *later.values())]
     if any(threshold_presence) and not all(threshold_presence):

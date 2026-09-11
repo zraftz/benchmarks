@@ -17,6 +17,8 @@ def instrumented(counts, speculative, synchronous, sizes, threshold=2):
                          "synchronous_proposals": synchronous[int(node) - 1],
                          "speculative_proposal_batches": speculative[int(node) - 1],
                          "speculative_proposals": speculative[int(node) - 1],
+                         "combined_peer_proposal_batches": synchronous[int(node) - 1],
+                         "combined_peer_proposals": synchronous[int(node) - 1],
                          "proposal_batch_sizes": sizes[int(node) - 1],
                          "max_speculative_proposals": threshold})
     return result
@@ -54,10 +56,17 @@ class PipelineActivityTests(unittest.TestCase):
     def test_threshold_and_batch_geometry_are_counter_deltas(self):
         before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3, "4": 1}, {}, {}])
         after = instrumented([9, 0, 0], [7, 0, 0], [2, 0, 0], [{"1": 7, "4": 2}, {}, {}])
-        result = activity(before, after)
+        result = activity(before, after, require_combined=True)
         self.assertEqual(result["max_speculative_proposals_by_node"], {"1": 2, "2": 2, "3": 2})
         self.assertEqual(result["speculative_proposal_batches_by_node"]["1"], 4)
+        self.assertEqual(result["combined_peer_proposal_batches_by_node"]["1"], 1)
         self.assertEqual(result["proposal_batch_sizes_by_node"]["1"], {"1": 4, "4": 1})
+
+    def test_selected_combined_mode_must_execute_a_combined_step(self):
+        before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3}, {}, {}])
+        after = instrumented([9, 0, 0], [7, 0, 0], [1, 0, 0], [{"1": 7}, {}, {}])
+        with self.assertRaisesRegex(ValueError, "executed no combined steps"):
+            activity(before, after, require_combined=True)
 
     def test_sealed_activity_compatibility_is_explicit_and_fail_closed(self):
         current = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))

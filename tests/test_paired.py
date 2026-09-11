@@ -49,8 +49,8 @@ class PairedTests(unittest.TestCase):
 
     def test_openraft_controls_are_separate_named_arms(self):
         self.assertEqual(openraft_arms(["synchronous", "async"]), [
-            ("openraft", "openraft", 1, "candidate", 1),
-            ("openraft-async", "openraft", 1, "candidate", 1),
+            ("openraft", "openraft", 1, "candidate", 1, False),
+            ("openraft-async", "openraft", 1, "candidate", 1, False),
         ])
         with self.assertRaisesRegex(ValueError, "distinct OpenRaft controls"):
             openraft_arms(["async", "async"])

@@ -145,8 +145,10 @@ def verify(directory: Path) -> dict[str, Any]:
                 errors.append("operation timeline extraction differs from status watermarks")
         if manifest.get("options", {}).get("pipelined_durability") and manifest.get("scenario") == "durable-kv":
             from .pipeline import activity, recorded_activity_matches
-            actual_activity = activity(json.loads((directory / "before.json").read_text()),
-                                       json.loads((directory / "persistence-after-load.json").read_text()))
+            actual_activity = activity(
+                json.loads((directory / "before.json").read_text()),
+                json.loads((directory / "persistence-after-load.json").read_text()),
+                require_combined=bool(manifest.get("options", {}).get("combine_peer_proposals")))
             recorded_activity = json.loads((directory / "pipeline-activity.json").read_text())
             if not recorded_activity_matches(actual_activity, recorded_activity):
                 errors.append("pipeline activity verdict differs from recorded counters")
