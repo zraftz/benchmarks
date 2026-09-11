@@ -26,14 +26,16 @@ on:
         description: Prior Rafter branch or commit for paired durable runs
         type: string
         default: bf659fdc73116c326c8b1d04024bd8b8ccc5138c
-      ordered_apply:
-        description: Enable the candidate ordered application worker
-        type: boolean
-        default: false
-      peer_message_stream:
-        description: Compare message streams with RPC using ordered application in both variants
-        type: boolean
-        default: false
+      prior_mode:
+        description: Prior Rafter embedding
+        type: choice
+        options: [inline, worker, messages]
+        default: inline
+      candidate_mode:
+        description: Candidate Rafter embedding
+        type: choice
+        options: [inline, worker, messages]
+        default: inline
       prior_peer_batch_size:
         description: Prior Rafter peer batch cap
         type: number
@@ -139,15 +141,15 @@ jobs:
         env:
           PRIOR_REF: ${{ inputs.prior_rafter_ref }}
           CANDIDATE_REF: ${{ inputs.rafter_ref }}
-          ORDERED_APPLY: ${{ inputs.ordered_apply }}
-          PEER_MESSAGE_STREAM: ${{ inputs.peer_message_stream }}
+          PRIOR_MODE: ${{ inputs.prior_mode }}
+          CANDIDATE_MODE: ${{ inputs.candidate_mode }}
           PRIOR_BATCH: ${{ inputs.prior_peer_batch_size }}
           CANDIDATE_BATCHES: ${{ inputs.peer_batch_sizes }}
         run: |
           flags=()
-          if [[ "$ORDERED_APPLY" == true ]]; then flags+=(--ordered-apply); fi
-          if [[ "$PEER_MESSAGE_STREAM" == true ]]; then flags+=(--peer-message-stream --network-delays-ms 0,2); fi
+          if [[ "$PRIOR_MODE" == messages || "$CANDIDATE_MODE" == messages ]]; then flags+=(--network-delays-ms 0,2); fi
           python3 -m benchctl.paired --prior "$PRIOR_REF" --candidate "$CANDIDATE_REF" "${flags[@]}" \
+            --prior-mode "$PRIOR_MODE" --candidate-mode "$CANDIDATE_MODE" \
             --prior-peer-batch-size "$PRIOR_BATCH" --peer-batch-sizes "$CANDIDATE_BATCHES" \
             --output results/paired --data-root "$RUNNER_TEMP/raft-bench-paired" \
             2>&1 | tee results/paired.log

@@ -68,8 +68,8 @@ Locally, build a supporting revision with `--peer-group-commit`, then run with
 `--peer-batch-size 32`. Add `--diagnostics` only for a separate instrumented run.
 
 Build and run with `--ordered-apply` to move application persistence onto one
-ordered worker per node. The paired workflow accepts the same option and a
-`prior_peer_batch_size`, so the application change can be measured at a fixed cap.
+ordered worker per node. In paired CI, select `prior_mode` and `candidate_mode`
+independently and keep `prior_peer_batch_size` fixed to isolate each change.
 
 ## Development
 
@@ -85,4 +85,6 @@ ordered worker per node. The paired workflow accepts the same option and a
 Maintained by the Rafter author. Results describe these service integrations;
 they are not upstream endorsements. Apache-2.0; see [NOTICE](NOTICE).
 
-Use `run --peer-message-stream --implementations rafter,raft-rs` to remove empty delivery replies. The RPC control remains the default. Paired CI can compare transports with ordered application enabled for both Rafter variants, first on loopback and then with 2 ms of added delay per loopback egress (clients and peers).
+Use `run --peer-message-stream --implementations rafter,raft-rs` to remove empty delivery replies. The RPC control remains the default. Paired CI selects each revision’s `inline`, `worker`, or `messages` mode independently, first on loopback and then with 2 ms of added delay per loopback egress (clients and peers).
+
+Rafter diagnostic runs also count empty appends by input reason, including full proposal windows and unanswered probes. Timing runs leave these counters disabled.

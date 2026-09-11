@@ -1,4 +1,6 @@
 //! Rafter native durable stores + shared client/transport/application embedding.
+mod diagnostics;
+
 use anyhow::Result;
 use bench_common::{
     actor::{Actor, Effect, Engine},
@@ -23,6 +25,7 @@ type Node = DurableRaftNode<HardState, FileRaftLogSegment, FileRaftSnapshotStore
 struct Rafter {
     node: Node,
     ordered_apply: bool,
+    empty_appends: diagnostics::EmptyAppends,
 }
 fn effects(outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
     let mut result = Vec::new();
@@ -50,6 +53,23 @@ type PeerGate = rafter_runtime::PeerBatchGate;
 #[cfg(not(feature = "peer-group-commit"))]
 type PeerGate = ();
 
+impl Rafter {
+    fn drive(&mut self, inputs: Vec<Input>) -> Result<Vec<Effect>> {
+        let origin = inputs
+            .first()
+            .map(|input| diagnostics::origin(input, self.node.role()));
+        let progress = if self.empty_appends.enabled() {
+            self.node.leader_replication_progress()
+        } else {
+            Vec::new()
+        };
+        let outputs = self.node.step_batch(inputs)?;
+        if let Some(origin) = origin {
+            self.empty_appends.record(&outputs, origin, &progress);
+        }
+        effects(outputs, self.ordered_apply)
+    }
+}
 impl Engine for Rafter {
     fn term(&self) -> u64 {
         self.node.current_term().0
@@ -141,19 +161,17 @@ impl Engine for Rafter {
         self.node.role() == Role::Leader
     }
     fn tick(&mut self) -> Result<Vec<Effect>> {
-        effects(self.node.step(Input::Tick)?, self.ordered_apply)
+        self.drive(vec![Input::Tick])
     }
     fn peer_batch(&mut self, peers: Vec<Self::Peer>) -> Result<Vec<Effect>> {
-        effects(
-            self.node.step_batch(
-                peers
-                    .into_iter()
-                    .map(|(from, message)| Input::Message { from, message })
-                    .collect(),
-            )?,
-            self.ordered_apply,
+        self.drive(
+            peers
+                .into_iter()
+                .map(|(from, message)| Input::Message { from, message })
+                .collect(),
         )
     }
+
     fn propose(&mut self, commands: Vec<Command>) -> Result<Vec<Effect>> {
         let inputs = commands
             .iter()
@@ -163,7 +181,7 @@ impl Engine for Rafter {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        effects(self.node.step_batch(inputs)?, self.ordered_apply)
+        self.drive(inputs)
     }
     fn stats(&self) -> serde_json::Value {
         #[cfg(feature = "peer-group-commit")]
@@ -181,6 +199,7 @@ impl Engine for Rafter {
         let persistence = serde_json::Value::Null;
         serde_json::json!({"term":self.node.current_term().0,
         "commit_index":self.node.commit_index().0,"last_log_index":self.node.last_log_index().0,
+        "empty_appends_by_reason":self.empty_appends.snapshot(),
         "persistence_diagnostics":persistence,"peer_group_commit_available":cfg!(feature = "peer-group-commit"),
         "storage":"rafter native file stores","hard_state_backend":HARD_STATE_BACKEND,"election_ticks":"50 + 7*(node_id-1)"})
     }
@@ -219,6 +238,7 @@ async fn main() -> Result<()> {
         Rafter {
             node,
             ordered_apply: config.ordered_apply,
+            empty_appends: diagnostics::EmptyAppends::new(config.diagnostics),
         },
         model,
         effects(outputs, config.ordered_apply)?,

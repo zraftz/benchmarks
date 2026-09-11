@@ -40,8 +40,8 @@ def main() -> None:
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--peer-batch-sizes", default="8,16,32,64")
     parser.add_argument("--network-delays-ms", default="0", help="explicit Linux loopback netem delays; 0 leaves networking unchanged")
-    parser.add_argument("--peer-message-stream", action="store_true")
-    parser.add_argument("--ordered-apply", action="store_true")
+    parser.add_argument("--prior-mode", choices=("inline", "worker", "messages"), default="inline")
+    parser.add_argument("--candidate-mode", choices=("inline", "worker", "messages"), default="inline")
     parser.add_argument("--prior-peer-batch-size", type=int, default=1)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
@@ -59,17 +59,17 @@ def main() -> None:
     work = ROOT / ".cache/paired" / uuid.uuid4().hex
     data = args.data_root.resolve() / work.name
     select_rafter(args.prior)
-    build("journal", peer_group_commit=args.prior_peer_batch_size > 1, ordered_apply=args.peer_message_stream)
+    build("journal", peer_group_commit=args.prior_peer_batch_size > 1, ordered_apply=args.prior_mode != "inline")
     prior = archive_build(work / "prior")
     write_json(output / "prior-build.json", prior)
     select_rafter(args.candidate)
-    build("journal", peer_group_commit=True, ordered_apply=args.ordered_apply or args.peer_message_stream)
+    build("journal", peer_group_commit=True, ordered_apply=args.candidate_mode != "inline")
     candidate = archive_build(work / "candidate")
     write_json(output / "candidate-build.json", candidate)
-    if args.ordered_apply or args.peer_message_stream:
-        scenarios = ("durable-kv", "leader-loss", "follower-catchup") if args.peer_message_stream else ("durable-kv",)
+    if args.candidate_mode != "inline":
+        scenarios = ("durable-kv", "leader-loss", "follower-catchup") if args.candidate_mode == "messages" else ("durable-kv",)
         for scenario in scenarios:
-            flags = ["--peer-message-stream"] if args.peer_message_stream else []
+            flags = ["--peer-message-stream"] if args.candidate_mode == "messages" else []
             subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
                 "--implementations", "rafter,raft-rs", "--ordered-apply", "--peer-batch-size", "32",
                 "--scenario", scenario, *flags,
@@ -84,7 +84,7 @@ def main() -> None:
     arms += [(f"candidate-b{cap}", "rafter", cap, "candidate") for cap in caps]
     write_json(output / "suite.json", {"schema": 1, "arms": arms, "rates": [0, 100, 1000], "runs": 3,
         "order": "rotate and reverse arms by repetition; all cases sequential on one host",
-        "diagnostics": "separate cases after timing runs; never pooled", "network_delays_ms": delays, "data_root": str(data)})
+        "diagnostics": "separate cases after timing runs; never pooled", "network_delays_ms": delays, "prior_mode": args.prior_mode, "candidate_mode": args.candidate_mode, "data_root": str(data)})
     failures = []
     ordinal = 0
     for delay in delays:
@@ -99,8 +99,8 @@ def main() -> None:
                             name = f"{ordinal:03d}-n{delay}-{label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
                             options = SimpleNamespace(network_delay_ms=delay, scenario="durable-kv", smoke=False, batch_size=64,
                                 peer_batch_size=cap, diagnostics=diagnostic, duration=60, warmup=10,
-                                ordered_apply=(args.peer_message_stream or (args.ordered_apply and binary_set == "candidate")) and engine == "rafter",
-                                peer_message_stream=args.peer_message_stream and binary_set == "candidate" and engine == "rafter",
+                                ordered_apply=(args.prior_mode if binary_set == "prior" else args.candidate_mode) != "inline" and engine == "rafter",
+                                peer_message_stream=(args.prior_mode if binary_set == "prior" else args.candidate_mode) == "messages" and engine == "rafter",
                                 concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
                                 read_percent=0, cas_percent=0, timeout=2, variant=label)
                             print(f"Running {name}", flush=True)
