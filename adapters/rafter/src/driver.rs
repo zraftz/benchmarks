@@ -99,6 +99,8 @@ impl Driver {
                     "speculative_proposal_batches":state.speculative_proposal_batches,
                     "speculative_proposals":state.speculative_proposals,
                     "combined_peer_proposal_batches":state.combined_peer_proposal_batches,
+                    "combined_peer_first_batches":state.combined_peer_first_batches,
+                    "combined_proposal_first_batches":state.combined_proposal_first_batches,
                     "combined_peer_events":state.combined_peer_events,
                     "combined_peer_proposals":state.combined_peer_proposals,
                     "proposal_batch_sizes":state.proposal_batch_sizes})

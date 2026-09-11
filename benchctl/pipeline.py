@@ -15,7 +15,8 @@ def activity(before: dict, after: dict, *, require_combined: bool = False) -> di
             optional = {}
             for name in ("submitted_operations", "synchronous_proposal_batches", "synchronous_proposals",
                          "speculative_proposal_batches", "speculative_proposals",
-                         "combined_peer_proposal_batches", "combined_peer_events",
+                         "combined_peer_proposal_batches", "combined_peer_first_batches",
+                         "combined_proposal_first_batches", "combined_peer_events",
                          "combined_peer_proposals"):
                 value = pipeline.get(name)
                 if value is not None and (type(value) is not int or value < 0):
@@ -43,7 +44,8 @@ def activity(before: dict, after: dict, *, require_combined: bool = False) -> di
             "scope": "load and generator drain, before post-load canaries; not an exact measurement-window count"}
     optional_names = ("submitted_operations", "synchronous_proposal_batches", "synchronous_proposals",
                       "speculative_proposal_batches", "speculative_proposals",
-                      "combined_peer_proposal_batches", "combined_peer_events",
+                      "combined_peer_proposal_batches", "combined_peer_first_batches",
+                      "combined_proposal_first_batches", "combined_peer_events",
                       "combined_peer_proposals")
     for name in optional_names:
         presence = [values[name] is not None for values in (*earlier.values(), *later.values())]

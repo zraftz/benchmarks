@@ -18,6 +18,8 @@ def instrumented(counts, speculative, synchronous, sizes, threshold=2):
                          "speculative_proposal_batches": speculative[int(node) - 1],
                          "speculative_proposals": speculative[int(node) - 1],
                          "combined_peer_proposal_batches": synchronous[int(node) - 1],
+                         "combined_peer_first_batches": synchronous[int(node) - 1],
+                         "combined_proposal_first_batches": 0,
                          "combined_peer_events": synchronous[int(node) - 1] * 2,
                          "combined_peer_proposals": synchronous[int(node) - 1],
                          "proposal_batch_sizes": sizes[int(node) - 1],
@@ -61,6 +63,8 @@ class PipelineActivityTests(unittest.TestCase):
         self.assertEqual(result["max_speculative_proposals_by_node"], {"1": 2, "2": 2, "3": 2})
         self.assertEqual(result["speculative_proposal_batches_by_node"]["1"], 4)
         self.assertEqual(result["combined_peer_proposal_batches_by_node"]["1"], 1)
+        self.assertEqual(result["combined_peer_first_batches_by_node"]["1"], 1)
+        self.assertEqual(result["combined_proposal_first_batches_by_node"]["1"], 0)
         self.assertEqual(result["combined_peer_events_by_node"]["1"], 2)
         self.assertEqual(result["proposal_batch_sizes_by_node"]["1"], {"1": 4, "4": 1})
 
