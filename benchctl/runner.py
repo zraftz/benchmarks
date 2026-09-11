@@ -85,7 +85,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         getattr(options, "peer_batch_size", 1), getattr(options, "diagnostics", False),
         getattr(options, "ordered_apply", False), getattr(options, "peer_message_stream", False),
         getattr(options, "pipelined_durability", False),
-        getattr(options, "max_speculative_proposals", 1))
+        getattr(options, "max_speculative_proposals", 1),
+        getattr(options, "openraft_async_flush", False))
     load = None
     try:
         cluster.start()

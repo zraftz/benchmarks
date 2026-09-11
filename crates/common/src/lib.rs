@@ -46,6 +46,8 @@ pub struct Config {
     pub pipelined_durability: bool,
     #[serde(default = "max_speculative_proposals")]
     pub max_speculative_proposals: usize,
+    #[serde(default)]
+    pub openraft_async_flush: bool,
 }
 fn peer_batch_size() -> usize {
     1

@@ -61,6 +61,15 @@ on:
         description: Paired diagnostic rates, comma separated and drawn from paired rates
         type: string
         default: 0,100,1000
+      openraft_controls:
+        description: OpenRaft controls, comma separated (synchronous,async)
+        type: string
+        default: synchronous,async
+      headline_openraft_control:
+        description: OpenRaft control used for the generated headline
+        type: choice
+        options: [openraft-async, openraft]
+        default: openraft-async
       scenario:
         description: Durable workload scenario
         type: choice
@@ -119,12 +128,14 @@ jobs:
           CANDIDATE_SPECULATIVE: ${{ inputs.candidate_max_speculative_proposals }}
           PAIRED_RATES: ${{ inputs.paired_rates }}
           PAIRED_DIAGNOSTIC_RATES: ${{ inputs.paired_diagnostic_rates }}
+          OPENRAFT_CONTROLS: ${{ inputs.openraft_controls }}
+          HEADLINE_OPENRAFT_CONTROL: ${{ inputs.headline_openraft_control }}
         run: |
           mkdir -p results
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'GITHUB_SHA')}, indent=2))
+          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'OPENRAFT_CONTROLS', 'HEADLINE_OPENRAFT_CONTROL', 'GITHUB_SHA')}, indent=2))
           PY
           if [[ -n "$RAFTER_REF" ]]; then
             ./raft-bench select-rafter "$RAFTER_REF" 2>&1 | tee results/selection.log
@@ -180,6 +191,7 @@ jobs:
           CANDIDATE_SPECULATIVE: ${{ inputs.candidate_max_speculative_proposals }}
           PAIRED_RATES: ${{ inputs.paired_rates }}
           PAIRED_DIAGNOSTIC_RATES: ${{ inputs.paired_diagnostic_rates }}
+          OPENRAFT_CONTROLS: ${{ inputs.openraft_controls }}
         run: |
           flags=()
           if [[ "$PRIOR_MODE" == messages || "$PRIOR_MODE" == pipeline || "$CANDIDATE_MODE" == messages || "$CANDIDATE_MODE" == pipeline ]]; then flags+=(--network-delays-ms "0,2"); fi
@@ -188,12 +200,14 @@ jobs:
             --prior-peer-batch-size "$PRIOR_BATCH" --peer-batch-sizes "$CANDIDATE_BATCHES" \
             --prior-max-speculative-proposals "$PRIOR_SPECULATIVE" --candidate-max-speculative-proposals "$CANDIDATE_SPECULATIVE" \
             --rates "$PAIRED_RATES" --diagnostic-rates "$PAIRED_DIAGNOSTIC_RATES" \
+            --openraft-controls "$OPENRAFT_CONTROLS" \
             --output results/paired --data-root "$RUNNER_TEMP/raft-bench-paired" \
             2>&1 | tee results/paired.log
       - name: Generate layered performance report
         if: always()
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEADLINE_OPENRAFT_CONTROL: ${{ inputs.headline_openraft_control }}
         run: |
           args=()
           if [[ -d results/microbench ]]; then args+=(--microbench results/microbench --micro-url "$RUN_URL"); fi
@@ -202,6 +216,7 @@ jobs:
           elif [[ -d results/baseline ]]; then
             args+=(--durable-suite results/baseline --durable-url "$RUN_URL")
           fi
+          if [[ -d results/paired ]]; then args+=(--headline-control-variant "$HEADLINE_OPENRAFT_CONTROL"); fi
           if (( ${#args[@]} > 0 )); then ./raft-bench summary "${args[@]}" --output results/summary; fi
       - name: Retain reports and evidence
         if: always()

@@ -130,7 +130,8 @@ def _candidate_variants(durable: dict, rows: list[dict]) -> tuple[list[str], lis
     return candidates, priors
 
 
-def _service_section(durable: dict | None, headline_variant: str | None) -> dict:
+def _service_section(durable: dict | None, headline_variant: str | None,
+                     headline_control_variant: str | None) -> dict:
     section = {
         "id": "complete-durable-service",
         "title": "Complete durable service",
@@ -163,10 +164,14 @@ def _service_section(durable: dict | None, headline_variant: str | None) -> dict
         return section
     openraft_variants = sorted({row["configuration"]["variant"] for row in rows
                                 if row["engine"]["name"] == "openraft"})
-    if len(openraft_variants) != 1:
-        section.update(status="not comparable", result="Expected exactly one OpenRaft control configuration.")
+    control = headline_control_variant or (openraft_variants[0] if len(openraft_variants) == 1 else None)
+    if control not in openraft_variants:
+        section.update(
+            status="not comparable",
+            result=("Select one OpenRaft control for the headline. Available variants: "
+                    + ", ".join(openraft_variants)),
+        )
         return section
-    control = openraft_variants[0]
     delays = sorted({row["workload"]["network_delay_ms"] for row in rows
                      if row["configuration"]["variant"] == selected})
     result_rows = []
@@ -288,7 +293,7 @@ def _service_section(durable: dict | None, headline_variant: str | None) -> dict
     section.update(
         status=status,
         result=(f"{example['display_name']} completed {no_delay['throughput_ratio']:.2f}× as many "
-                "durable writes per second as the tested OpenRaft integration in the no-delay condition."
+                f"durable writes per second as the tested {openraft['display_name']} integration in the no-delay condition."
                 + tail_qualification),
         conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                     f"{example['workload']['payload_bytes']}-byte writes; medians of {example['repetitions']} repetitions. "
@@ -296,6 +301,8 @@ def _service_section(durable: dict | None, headline_variant: str | None) -> dict
                     "Storage, codec, and scheduling choices differ between integrations."),
         selected_configuration={"name": example["display_name"], "variant": selected,
                                 "rafter_version": example["engine"]["version"],
+                                "openraft_control": openraft["display_name"],
+                                "openraft_variant": control,
                                 "openraft_version": openraft["engine"]["version"]},
         rows=result_rows,
         accounting={"rafter": candidate_accounting, "openraft": control_accounting},
@@ -365,13 +372,14 @@ def _failure_section(durable: dict | None, anomalies: list[dict]) -> dict:
 
 def build_summary(*, durable: dict | None = None, storage: dict | None = None,
                   micro: dict | None = None, histories: list[dict] | None = None,
-                  headline_variant: str | None = None) -> dict:
+                  headline_variant: str | None = None,
+                  headline_control_variant: str | None = None) -> dict:
     histories = histories or []
     anomalies = _history_anomalies(histories)
     sections = [
         _consensus_section(micro),
         _storage_section(storage),
-        _service_section(durable, headline_variant),
+        _service_section(durable, headline_variant, headline_control_variant),
         _failure_section(durable, anomalies),
     ]
     normalized_results = {
@@ -612,6 +620,7 @@ def _evidence_entry(label: str, path: Path, destination: Path, url: str | None) 
 def generate(*, destination: Path, durable_path: Path | None = None,
              storage_path: Path | None = None, micro_path: Path | None = None,
              history_paths: list[Path] | None = None, headline_variant: str | None = None,
+             headline_control_variant: str | None = None,
              durable_url: str | None = None, storage_url: str | None = None,
              micro_url: str | None = None, history_urls: list[str] | None = None) -> dict:
     history_paths = history_paths or []
@@ -623,7 +632,8 @@ def generate(*, destination: Path, durable_path: Path | None = None,
     micro = load_microbench(micro_path) if micro_path else None
     histories = [load_durable_suite(path) for path in history_paths]
     summary = build_summary(durable=durable, storage=storage, micro=micro,
-                            histories=histories, headline_variant=headline_variant)
+                            histories=histories, headline_variant=headline_variant,
+                            headline_control_variant=headline_control_variant)
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=False)
     evidence = {}

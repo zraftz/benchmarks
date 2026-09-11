@@ -66,7 +66,10 @@ def _engine(manifest: dict) -> dict:
 def _display_name(manifest: dict) -> str:
     engine = manifest["implementation"]
     if engine != "rafter":
-        return {"openraft": "OpenRaft", "raft-rs": "raft-rs"}.get(engine, engine)
+        if engine == "openraft":
+            return ("OpenRaft async flusher" if manifest.get("options", {}).get("openraft_async_flush")
+                    else "OpenRaft synchronous")
+        return {"raft-rs": "raft-rs"}.get(engine, engine)
     return {
         "pipeline": "Rafter pipeline",
         "messages": "Rafter synchronous messages",
@@ -125,6 +128,7 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "peer_batch_size": options.get("peer_batch_size", 1),
             "client_batch_size": options.get("batch_size"),
             "max_speculative_proposals": options.get("max_speculative_proposals", 1),
+            "openraft_async_flush": bool(options.get("openraft_async_flush", False)),
         },
         "workload": _workload(manifest, measurement),
         "completion_boundary": (measurement or {}).get("contract", CONTRACT),

@@ -27,6 +27,8 @@ def run(options) -> None:
         options.ordered_apply = options.peer_message_stream = True
     if options.peer_message_stream and "openraft" in implementations:
         raise ValueError("OpenRaft uses actual request/reply RPCs; select message engines explicitly")
+    if options.openraft_async_flush and implementations != ["openraft"]:
+        raise ValueError("the async OpenRaft control requires --implementations openraft")
     rates = [float(r) for r in options.rates.split(",")]
     if not rates or any(not math.isfinite(r) or r < 0 or r > 1e7 for r in rates):
         raise ValueError("rates must be finite numbers from 0 to 10000000")
@@ -149,6 +151,8 @@ def main() -> None:
     p.add_argument("--pipelined-durability", action="store_true", help="Rafter only; enables ordered apply and message transport")
     p.add_argument("--max-speculative-proposals", type=int, default=1,
                    help="Rafter pipeline only; largest ready proposal batch eligible for speculative replication")
+    p.add_argument("--openraft-async-flush", action="store_true",
+                   help="OpenRaft only; return append after staging and complete durability through its callback")
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
     p.add_argument("--seed-base", type=int, default=1)
@@ -165,6 +169,8 @@ def main() -> None:
     p.add_argument("--microbench", type=Path)
     p.add_argument("--history-suite", type=Path, action="append", default=[])
     p.add_argument("--headline-variant", help="explicit Rafter variant when a suite contains multiple candidate arms")
+    p.add_argument("--headline-control-variant",
+                   help="explicit OpenRaft variant when a suite contains multiple control arms")
     p.add_argument("--durable-url")
     p.add_argument("--storage-url")
     p.add_argument("--micro-url")
@@ -208,6 +214,7 @@ def main() -> None:
             generate(destination=args.output, durable_path=args.durable_suite,
                      storage_path=args.storage_suite, micro_path=args.microbench,
                      history_paths=args.history_suite, headline_variant=args.headline_variant,
+                     headline_control_variant=args.headline_control_variant,
                      durable_url=args.durable_url, storage_url=args.storage_url,
                      micro_url=args.micro_url, history_urls=args.history_url)
             print(f"Summary: {args.output / 'report.html'}")

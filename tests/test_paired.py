@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from unittest.mock import patch
-from benchctl.paired import archive_build, ordered_arms, mode_flags
+from benchctl.paired import archive_build, openraft_arms, ordered_arms, mode_flags
 from benchctl.evidence import digest
 from benchctl.results import _expected_durable_cases
 
@@ -46,3 +46,11 @@ class PairedTests(unittest.TestCase):
                  "diagnostic_arms": ["prior", "openraft", "s1", "s2", "s4", "s8"],
                  "diagnostic_rates": [0]}
         self.assertEqual(_expected_durable_cases(suite), 84)
+
+    def test_openraft_controls_are_separate_named_arms(self):
+        self.assertEqual(openraft_arms(["synchronous", "async"]), [
+            ("openraft", "openraft", 1, "candidate", 1),
+            ("openraft-async", "openraft", 1, "candidate", 1),
+        ])
+        with self.assertRaisesRegex(ValueError, "distinct OpenRaft controls"):
+            openraft_arms(["async", "async"])

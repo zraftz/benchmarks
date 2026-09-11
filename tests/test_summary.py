@@ -150,6 +150,27 @@ class SummaryTests(unittest.TestCase):
         selected = build_summary(durable=data, headline_variant="candidate-b32")["sections"][2]
         self.assertEqual(selected["status"], "measured lead")
 
+    def test_multiple_openraft_controls_require_explicit_selection(self):
+        data = durable_data()
+        extras = []
+        for case in data["cases"]:
+            if case["configuration"]["variant"] == "openraft":
+                other = copy.deepcopy(case)
+                other["configuration"]["variant"] = "openraft-async"
+                other["configuration"]["openraft_async_flush"] = True
+                other["display_name"] = "OpenRaft async flusher"
+                other["source_case"] += "-async"
+                extras.append(other)
+        data["cases"].extend(extras)
+        data["suite"]["arms"].append(["openraft-async", "openraft", 1, "candidate"])
+        section = build_summary(durable=data)["sections"][2]
+        self.assertEqual(section["status"], "not comparable")
+        selected = build_summary(
+            durable=data, headline_control_variant="openraft-async"
+        )["sections"][2]
+        self.assertEqual(selected["status"], "measured lead")
+        self.assertEqual(selected["selected_configuration"]["openraft_variant"], "openraft-async")
+
     def test_incomplete_suite_suppresses_headline(self):
         data = durable_data()
         data["qualification"] = "failed"

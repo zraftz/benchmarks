@@ -17,7 +17,7 @@ class Cluster:
                  data: Path, cluster_id: str, batch_size: int = 64, peer_batch_size: int = 1,
                  diagnostics: bool = False, ordered_apply: bool = False,
                  peer_message_stream: bool = False, pipelined_durability: bool = False,
-                 max_speculative_proposals: int = 1):
+                 max_speculative_proposals: int = 1, openraft_async_flush: bool = False):
         self.implementation, self.command = implementation, command
         self.directory, self.data = directory, data
         self.processes: dict[int, subprocess.Popen] = {}
@@ -44,7 +44,8 @@ class Cluster:
                     "tick_ms": 20, "capacity": 4096, "batch_size": batch_size,
                     "peer_batch_size": peer_batch_size, "diagnostics": diagnostics, "ordered_apply": ordered_apply,
                     "peer_message_stream": peer_message_stream, "pipelined_durability": pipelined_durability,
-                    "max_speculative_proposals": max_speculative_proposals})
+                    "max_speculative_proposals": max_speculative_proposals,
+                    "openraft_async_flush": openraft_async_flush})
         finally:
             for sock in reserved:
                 sock.close()

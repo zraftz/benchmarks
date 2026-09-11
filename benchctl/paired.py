@@ -18,6 +18,7 @@ from .network import loopback_delay
 
 
 MODES = ("inline", "worker", "messages", "pipeline")
+OPENRAFT_CONTROLS = ("synchronous", "async")
 
 
 def mode_flags(mode: str, engine: str = "rafter") -> dict[str, bool]:
@@ -26,6 +27,14 @@ def mode_flags(mode: str, engine: str = "rafter") -> dict[str, bool]:
     return {"ordered_apply": mode != "inline" and engine == "rafter",
             "peer_message_stream": mode in ("messages", "pipeline") and engine == "rafter",
             "pipelined_durability": mode == "pipeline" and engine == "rafter"}
+
+
+def openraft_arms(controls: list[str]) -> list[tuple[str, str, int, str, int]]:
+    if not controls or len(set(controls)) != len(controls) or any(
+            control not in OPENRAFT_CONTROLS for control in controls):
+        raise ValueError("distinct OpenRaft controls drawn from synchronous,async are required")
+    labels = {"synchronous": "openraft", "async": "openraft-async"}
+    return [(labels[control], "openraft", 1, "candidate", 1) for control in controls]
 
 
 def archive_build(destination: Path) -> dict:
@@ -60,6 +69,8 @@ def main() -> None:
     parser.add_argument("--candidate-max-speculative-proposals", default="1")
     parser.add_argument("--rates", default="0,100,1000")
     parser.add_argument("--diagnostic-rates", help="defaults to all timing rates")
+    parser.add_argument("--openraft-controls", default="synchronous",
+                        help="comma-separated OpenRaft controls: synchronous,async")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
     args = parser.parse_args()
@@ -82,6 +93,8 @@ def main() -> None:
     if (not diagnostic_rates or len(set(diagnostic_rates)) != len(diagnostic_rates)
             or any(value not in rates for value in diagnostic_rates)):
         raise ValueError("diagnostic rates must be distinct members of the timing rates")
+    controls = args.openraft_controls.split(",")
+    control_arms = openraft_arms(controls)
     delays = [int(value) for value in args.network_delays_ms.split(",")]
     if not delays or len(set(delays)) != len(delays) or any(value < 0 or value > 100 for value in delays):
         raise ValueError("distinct network delays in 0..100 are required")
@@ -116,19 +129,22 @@ def main() -> None:
         if prior["implementations"][engine] != candidate["implementations"][engine]:
             raise RuntimeError("control implementation changed while selecting Rafter")
     arms = [("prior", "rafter", args.prior_peer_batch_size, "prior", args.prior_max_speculative_proposals),
-            ("openraft", "openraft", 1, "candidate", 1)]
+            *control_arms]
     label = lambda cap, threshold: (f"candidate-b{cap}" if thresholds == [1]
                                     else f"candidate-b{cap}-s{threshold}")
-    arms += [(label(cap, threshold), "rafter", cap, "candidate", threshold)
-             for cap in caps for threshold in thresholds]
+    candidate_arms = [(label(cap, threshold), "rafter", cap, "candidate", threshold)
+                      for cap in caps for threshold in thresholds]
+    arms += candidate_arms
     diagnostic_arms = (arms if len(thresholds) > 1 else
-                       [arms[0], arms[1], next((arm for arm in arms[2:] if arm[2] == 32), arms[-1])])
+                       [arms[0], *control_arms,
+                        next((arm for arm in candidate_arms if arm[2] == 32), candidate_arms[-1])])
     write_json(output / "suite.json", {"schema": 2, "arms": arms, "rates": rates, "runs": 3,
         "order": "rotate and reverse arms by repetition; all cases sequential on one host",
         "diagnostics": "separate cases after timing runs; never pooled",
         "diagnostic_arms": [arm[0] for arm in diagnostic_arms], "diagnostic_rates": diagnostic_rates,
         "network_delays_ms": delays, "prior_mode": args.prior_mode, "candidate_mode": args.candidate_mode,
         "prior_hard_state": args.prior_hard_state, "candidate_hard_state": args.candidate_hard_state,
+        "openraft_controls": controls,
         "prior_max_speculative_proposals": args.prior_max_speculative_proposals,
         "candidate_max_speculative_proposals": thresholds, "data_root": str(data)})
     failures = []
@@ -145,6 +161,7 @@ def main() -> None:
                             options = SimpleNamespace(network_delay_ms=delay, scenario="durable-kv", smoke=False, batch_size=64,
                                 peer_batch_size=cap, diagnostics=diagnostic, duration=60, warmup=10,
                                 **mode_flags(args.prior_mode if binary_set == "prior" else args.candidate_mode, engine),
+                                openraft_async_flush=arm_label == "openraft-async",
                                 max_speculative_proposals=threshold,
                                 concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
                                 read_percent=0, cas_percent=0, timeout=2, variant=arm_label)
