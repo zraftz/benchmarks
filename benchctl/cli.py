@@ -110,7 +110,7 @@ def main() -> None:
     sub.add_parser("doctor", help="show required tools; makes no installations")
     p = sub.add_parser("build", help="test and build all durable adapters with locked dependencies")
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
-    p.add_argument("--rafter-hard-state", choices=("replace", "journal"), default="replace", help="journal requires a Rafter revision with RFHJ support")
+    p.add_argument("--rafter-hard-state", choices=("replace", "journal", "wal"), default="replace", help="journal and wal require a Rafter revision supporting that backend")
     p.add_argument("--peer-group-commit", action="store_true", help="requires a Rafter revision with peer batch admission and telemetry")
     p.add_argument("--ordered-apply", action="store_true", help="enable the ordered application worker API")
     p = sub.add_parser("select-rafter", help="resolve a ref and update both local manifests and lockfiles")

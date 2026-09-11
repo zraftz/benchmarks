@@ -7,9 +7,9 @@ on:
         type: string
         default: ''
       rafter_hard_state:
-        description: 'Rafter durable backend (journal requires a revision with RFHJ support)'
+        description: 'Candidate Rafter durable backend (journal/wal require matching revision support)'
         type: choice
-        options: [replace, journal]
+        options: [replace, journal, wal]
         default: replace
         required: true
       suite:
@@ -141,6 +141,7 @@ jobs:
         env:
           PRIOR_REF: ${{ inputs.prior_rafter_ref }}
           CANDIDATE_REF: ${{ inputs.rafter_ref }}
+          CANDIDATE_HARD_STATE: ${{ inputs.rafter_hard_state }}
           PRIOR_MODE: ${{ inputs.prior_mode }}
           CANDIDATE_MODE: ${{ inputs.candidate_mode }}
           PRIOR_BATCH: ${{ inputs.prior_peer_batch_size }}
@@ -148,7 +149,7 @@ jobs:
         run: |
           flags=()
           if [[ "$PRIOR_MODE" == messages || "$CANDIDATE_MODE" == messages ]]; then flags+=(--network-delays-ms 0,2); fi
-          python3 -m benchctl.paired --prior "$PRIOR_REF" --candidate "$CANDIDATE_REF" "${flags[@]}" \
+          python3 -m benchctl.paired --prior "$PRIOR_REF" --candidate "$CANDIDATE_REF" --candidate-hard-state "$CANDIDATE_HARD_STATE" "${flags[@]}" \
             --prior-mode "$PRIOR_MODE" --candidate-mode "$CANDIDATE_MODE" \
             --prior-peer-batch-size "$PRIOR_BATCH" --peer-batch-sizes "$CANDIDATE_BATCHES" \
             --output results/paired --data-root "$RUNNER_TEMP/raft-bench-paired" \

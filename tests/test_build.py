@@ -42,7 +42,7 @@ class BuildTests(unittest.TestCase):
             self.assertEqual((root / "dist/rust-tests.log").read_text(), "compiler failure")
 
     def test_cargo_output_directory_is_staged_and_hashed(self):
-        for backend in ("replace", "journal"):
+        for backend in ("replace", "journal", "wal"):
             with self.subTest(backend=backend):
                 self.check_successful_build(backend)
 
@@ -70,8 +70,8 @@ class BuildTests(unittest.TestCase):
             cargo_commands = [call.args[0] for call in commands.call_args_list if call.args[0][0] == "cargo"]
             self.assertEqual(len(cargo_commands), 2)
             for command in cargo_commands:
-                if backend == "journal":
-                    self.assertEqual(command[-2:], ["--features", "raft-bench-rafter/journal-hard-state"])
+                if backend != "replace":
+                    self.assertEqual(command[-2:], ["--features", f"raft-bench-rafter/{backend}-hard-state"])
                 else:
                     self.assertNotIn("--features", command)
             receipt = json.loads((root / "dist/build.json").read_text())

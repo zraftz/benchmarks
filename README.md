@@ -88,3 +88,9 @@ they are not upstream endorsements. Apache-2.0; see [NOTICE](NOTICE).
 Use `run --peer-message-stream --implementations rafter,raft-rs` to remove empty delivery replies. The RPC control remains the default. Paired CI selects each revision’s `inline`, `worker`, or `messages` mode independently, first on loopback and then with 2 ms of added delay per loopback egress (clients and peers).
 
 Rafter diagnostic runs also count empty appends by input reason, including full proposal windows and unanswered probes. Timing runs leave these counters disabled.
+
+Use `--rafter-hard-state wal` with a revision supporting the atomic RFWB backend.
+Paired CI uses `rafter_hard_state` for the candidate and journal for the prior;
+the CLI also accepts `--prior-hard-state`. Keep modes and batch caps equal when
+isolating the WAL change. WAL directories are a separate format with no implicit
+migration; these runs always create fresh directories.

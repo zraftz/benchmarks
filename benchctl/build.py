@@ -17,9 +17,9 @@ def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False, o
     dist.mkdir(exist_ok=True)
     # A failed rebuild must never leave an earlier receipt usable.
     (dist / "build.json").unlink(missing_ok=True)
-    if rafter_hard_state not in ("replace", "journal"):
-        raise ValueError("rafter hard state must be replace or journal")
-    selected = ["raft-bench-rafter/journal-hard-state"] if rafter_hard_state == "journal" else []
+    if rafter_hard_state not in ("replace", "journal", "wal"):
+        raise ValueError("rafter hard state must be replace, journal, or wal")
+    selected = [f"raft-bench-rafter/{rafter_hard_state}-hard-state"] if rafter_hard_state != "replace" else []
     if peer_group_commit:
         selected.append("raft-bench-rafter/peer-group-commit")
     if ordered_apply:

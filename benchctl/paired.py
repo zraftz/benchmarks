@@ -38,6 +38,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prior", required=True)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument("--prior-hard-state", choices=("replace", "journal", "wal"), default="journal")
+    parser.add_argument("--candidate-hard-state", choices=("replace", "journal", "wal"), default="journal")
     parser.add_argument("--peer-batch-sizes", default="8,16,32,64")
     parser.add_argument("--network-delays-ms", default="0", help="explicit Linux loopback netem delays; 0 leaves networking unchanged")
     parser.add_argument("--prior-mode", choices=("inline", "worker", "messages"), default="inline")
@@ -59,11 +61,11 @@ def main() -> None:
     work = ROOT / ".cache/paired" / uuid.uuid4().hex
     data = args.data_root.resolve() / work.name
     select_rafter(args.prior)
-    build("journal", peer_group_commit=args.prior_peer_batch_size > 1, ordered_apply=args.prior_mode != "inline")
+    build(args.prior_hard_state, peer_group_commit=args.prior_peer_batch_size > 1, ordered_apply=args.prior_mode != "inline")
     prior = archive_build(work / "prior")
     write_json(output / "prior-build.json", prior)
     select_rafter(args.candidate)
-    build("journal", peer_group_commit=True, ordered_apply=args.candidate_mode != "inline")
+    build(args.candidate_hard_state, peer_group_commit=True, ordered_apply=args.candidate_mode != "inline")
     candidate = archive_build(work / "candidate")
     write_json(output / "candidate-build.json", candidate)
     if args.candidate_mode != "inline":
@@ -84,7 +86,7 @@ def main() -> None:
     arms += [(f"candidate-b{cap}", "rafter", cap, "candidate") for cap in caps]
     write_json(output / "suite.json", {"schema": 1, "arms": arms, "rates": [0, 100, 1000], "runs": 3,
         "order": "rotate and reverse arms by repetition; all cases sequential on one host",
-        "diagnostics": "separate cases after timing runs; never pooled", "network_delays_ms": delays, "prior_mode": args.prior_mode, "candidate_mode": args.candidate_mode, "data_root": str(data)})
+        "diagnostics": "separate cases after timing runs; never pooled", "network_delays_ms": delays, "prior_mode": args.prior_mode, "candidate_mode": args.candidate_mode, "prior_hard_state": args.prior_hard_state, "candidate_hard_state": args.candidate_hard_state, "data_root": str(data)})
     failures = []
     ordinal = 0
     for delay in delays:

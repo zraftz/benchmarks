@@ -8,20 +8,8 @@ use bench_common::{
     net, Config,
 };
 use rafter::{Input, LogIndex, Message, NodeConfig, NodeId, Output, Role};
-use rafter_runtime::DurableRaftNode;
-#[cfg(not(feature = "journal-hard-state"))]
-use rafter_storage::{FileRaftHardStateStore as HardState, FileRaftNodeStores as NodeStores};
-use rafter_storage::{FileRaftLogSegment, FileRaftSnapshotStore};
-#[cfg(feature = "journal-hard-state")]
-use rafter_storage::{JournalRaftHardStateStore as HardState, JournalRaftNodeStores as NodeStores};
-
-const HARD_STATE_BACKEND: &str = if cfg!(feature = "journal-hard-state") {
-    "journal"
-} else {
-    "replace"
-};
-
-type Node = DurableRaftNode<HardState, FileRaftLogSegment, FileRaftSnapshotStore>;
+mod storage;
+use storage::{Node, NodeStores, HARD_STATE_BACKEND};
 struct Rafter {
     node: Node,
     ordered_apply: bool,
