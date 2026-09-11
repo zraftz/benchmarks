@@ -39,6 +39,9 @@ impl Application {
 }
 impl<E: Engine> State<E> {
     pub(super) fn dispatch_applies(&mut self) -> Result<()> {
+        if self.engine.persistence_pending() {
+            return Ok(());
+        }
         let Application::Worker(worker) = &self.application else {
             return Ok(());
         };

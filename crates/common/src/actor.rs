@@ -32,6 +32,16 @@ pub trait Engine: Send + 'static {
     type Peer;
     type Gate;
     fn start(&mut self, _diagnostics: bool) {}
+    /// One prepared local persistence operation owns consensus state until completed.
+    /// While pending, term/leader reads must use metadata retained by the owner.
+    fn persistence_pending(&self) -> bool {
+        false
+    }
+    /// Waits for that operation's identity-checked completion and returns fenced effects.
+    /// Engines release only eligible replication sends before this method succeeds.
+    fn complete_persistence(&mut self) -> Result<Option<Vec<Effect>>> {
+        Ok(None)
+    }
     fn term(&self) -> u64 {
         0
     }
@@ -179,6 +189,7 @@ impl Actor {
 }
 mod application;
 mod peer;
+mod persistence;
 
 type OutboundPeers = BTreeMap<u64, Outbound>;
 
@@ -207,6 +218,7 @@ impl<E: Engine> State<E> {
         let mut next = Instant::now() + tick;
         let mut deferred = VecDeque::new();
         loop {
+            self.complete_persistence()?;
             self.complete_applies()?;
             self.dispatch_applies()?;
             if Instant::now() >= next {
@@ -362,6 +374,13 @@ impl<E: Engine> State<E> {
         Ok(())
     }
     fn effects(&mut self, effects: Vec<Effect>) -> Result<()> {
+        if self.engine.persistence_pending()
+            && effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Apply { .. }))
+        {
+            bail!("application effect escaped pending Raft persistence")
+        }
         let epoch = (self.engine.term(), self.engine.leader());
         if epoch != self.transport_epoch {
             self.transport_epoch = epoch;
@@ -387,6 +406,9 @@ impl<E: Engine> State<E> {
                     metadata: None,
                 }),
             }
+        }
+        if self.engine.persistence_pending() {
+            return Ok(());
         }
         match &mut self.application {
             application::Application::Inline(model) => {
