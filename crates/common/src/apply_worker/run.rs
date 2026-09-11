@@ -68,10 +68,12 @@ impl<S: ApplicationStore, F: Fn()> State<S, F> {
                     self.applying.store(last, Ordering::Release);
                     self.diagnostics
                         .observe("application_batch_entries", entries.len() as u64);
+                    self.diagnostics.application_started(&entries);
                     let result = self.store.apply(&entries).and_then(|outcomes| {
                         if outcomes.len() != entries.len() {
                             bail!("application outcome count mismatch")
                         }
+                        self.diagnostics.application_durable(&entries);
                         self.durable.store(last, Ordering::Release);
                         self.applying.store(0, Ordering::Release);
                         let bytes = entries.iter().map(retained_bytes).sum();

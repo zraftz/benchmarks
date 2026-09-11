@@ -2,6 +2,7 @@
 use crate::Types;
 use anyhow::Result;
 use bench_common::{
+    diagnostics::Diagnostics,
     journal::Journal,
     model::{Applied, DurableModel, Outcome},
 };
@@ -189,24 +190,20 @@ struct AppInner {
 #[derive(Clone, Debug)]
 pub struct StateMachine {
     inner: Arc<Mutex<AppInner>>,
+    diagnostics: Diagnostics,
 }
 impl StateMachine {
-    pub fn open(path: &Path) -> Result<Self> {
-        let app = DurableModel::open(path)?;
+    pub fn open(path: &Path, diagnostics: Diagnostics) -> Result<Self> {
+        let mut app = DurableModel::open(path)?;
+        app.set_diagnostics(diagnostics.clone());
         let meta = match &app.metadata {
             Some(v) => serde_json::from_value(v.clone())?,
             None => Meta::default(),
         };
         Ok(Self {
             inner: Arc::new(Mutex::new(AppInner { app, meta })),
+            diagnostics,
         })
-    }
-    pub fn set_diagnostics(&self, enabled: bool) {
-        self.inner
-            .lock()
-            .unwrap()
-            .app
-            .set_diagnostics(bench_common::diagnostics::Diagnostics::new(enabled));
     }
     pub fn stats(&self) -> serde_json::Value {
         self.inner.lock().unwrap().app.stats()
@@ -241,6 +238,8 @@ impl RaftStateMachine<Types> for StateMachine {
         let mut meta = inner.meta.clone();
         let mut records = Vec::new();
         for entry in entries {
+            self.diagnostics
+                .raft_commit_observed(entry.log_id.index, "state_machine_apply_callback");
             meta.last = Some(entry.log_id);
             let command = match entry.payload {
                 EntryPayload::Blank => None,
@@ -259,7 +258,10 @@ impl RaftStateMachine<Types> for StateMachine {
         if let Some(last) = records.last_mut() {
             last.metadata = Some(serde_json::to_value(&meta).map_err(failure)?);
         }
+        self.diagnostics.application_dispatched(&records);
+        self.diagnostics.application_started(&records);
         let outcomes = inner.app.apply(&records).map_err(failure)?;
+        self.diagnostics.application_durable(&records);
         inner.meta = meta;
         Ok(outcomes
             .into_iter()

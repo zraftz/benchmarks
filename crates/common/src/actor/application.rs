@@ -90,6 +90,7 @@ impl<E: Engine> State<E> {
             if let (Some(c), Some(result)) = (entry.command, outcome) {
                 if let Some((submitted, replies)) = self.pending.remove(&c.identity()) {
                     self.pending_count -= replies.len();
+                    let mut completed = false;
                     for reply in replies {
                         let response = if submitted == c {
                             result.clone()
@@ -99,9 +100,17 @@ impl<E: Engine> State<E> {
                                 ..Default::default()
                             }
                         };
-                        let _ = reply.send(Reply::applied(response));
+                        let client_completion = Instant::now();
+                        let sent = reply.send(Reply::applied(response)).is_ok();
                         self.diagnostics
                             .elapsed("application_dispatch_to_client_completion_ns", queued);
+                        if sent && !completed {
+                            self.diagnostics.client_completed_at(&c, client_completion);
+                            completed = true;
+                        }
+                    }
+                    if !completed {
+                        self.diagnostics.abandon_operation(&c);
                     }
                 }
             }

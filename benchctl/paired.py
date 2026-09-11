@@ -110,7 +110,7 @@ def main() -> None:
             for diagnostic in (False, True):
                 diagnostic_arms = [arms[0], arms[1], next((arm for arm in arms[2:] if arm[2] == 32), arms[-1])]
                 for repeat in range(1 if diagnostic else 3):
-                    for rate in ([0, 1000] if diagnostic else [0, 100, 1000]):
+                    for rate in (0, 100, 1000):
                         for label, engine, cap, binary_set in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
                             ordinal += 1
                             name = f"{ordinal:03d}-n{delay}-{label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"

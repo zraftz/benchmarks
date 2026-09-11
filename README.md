@@ -73,8 +73,11 @@ message modes run with both zero and 2 ms added loopback egress delay.
 Set `prior_rafter_ref` to enable paired CI. Choose `prior_hard_state` and
 `rafter_hard_state` independently; keep both at `wal` to isolate pipelining.
 Each run uses fresh directories; the WAL has no implicit format migration.
-Build receipts and node stats record the choices. Use `--diagnostics` separately for stage counters and
-empty-append reasons; timing runs leave them disabled.
+Build receipts and node stats record the choices. Use `--diagnostics` separately for stage counters,
+empty-append reasons, and bounded sampled operation timelines; timing runs leave them disabled.
+Each timeline names the adapter's first observable Raft commit callback and the later application
+dispatch, start, durable completion, and client completion points. These are callback timestamps,
+not kernel storage-commit timestamps. Paired diagnostics cover 0, 100, and 1,000 requests/second.
 
 ## Development
 

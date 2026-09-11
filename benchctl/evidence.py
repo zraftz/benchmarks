@@ -134,6 +134,15 @@ def verify(directory: Path) -> dict[str, Any]:
             verify_report(directory)
             return {"status": "failed" if errors else "passed", "errors": errors}
         manifest = json.loads((directory / "manifest.json").read_text())
+        if manifest.get("options", {}).get("diagnostics"):
+            from .timelines import extract
+            actual_timelines = extract(
+                json.loads((directory / "before.json").read_text()),
+                json.loads((directory / "diagnostics-after-load.json").read_text()),
+            )
+            recorded_timelines = json.loads((directory / "operation-timelines.json").read_text())
+            if actual_timelines != recorded_timelines:
+                errors.append("operation timeline extraction differs from status watermarks")
         if manifest.get("options", {}).get("pipelined_durability") and manifest.get("scenario") == "durable-kv":
             from .pipeline import activity
             actual_activity = activity(json.loads((directory / "before.json").read_text()),

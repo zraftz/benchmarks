@@ -225,10 +225,19 @@ impl<E: Engine> State<E> {
                 let e = self.engine.tick()?;
                 self.effects(e)?;
                 next += tick;
-                self.pending.retain(|_, (_, senders)| {
+                let mut abandoned = Vec::new();
+                self.pending.retain(|_, (command, senders)| {
                     senders.retain(|s| !s.is_closed());
-                    !senders.is_empty()
+                    if senders.is_empty() {
+                        abandoned.push(command.clone());
+                        false
+                    } else {
+                        true
+                    }
                 });
+                for command in abandoned {
+                    self.diagnostics.abandon_operation(&command);
+                }
                 self.pending_count = self.pending.values().map(|(_, v)| v.len()).sum();
                 continue;
             }
@@ -269,12 +278,12 @@ impl<E: Engine> State<E> {
                 Input::Client(request, reply, queued) => {
                     self.diagnostics.elapsed("owner_client_queue_ns", queued);
                     let mut commands = Vec::new();
-                    self.client(request, reply, &mut commands)?;
+                    self.client(request, reply, queued, &mut commands)?;
                     while commands.len() < self.config.batch_size {
                         match deferred.pop_front().or_else(|| rx.try_recv().ok()) {
                             Some(Input::Client(q, r, queued)) => {
                                 self.diagnostics.elapsed("owner_client_queue_ns", queued);
-                                self.client(q, r, &mut commands)?;
+                                self.client(q, r, queued, &mut commands)?;
                             }
                             Some(i) => {
                                 deferred.push_back(i);
@@ -284,6 +293,7 @@ impl<E: Engine> State<E> {
                         }
                     }
                     if !commands.is_empty() {
+                        self.diagnostics.proposals_submitted(&commands);
                         let e = self.engine.propose(commands)?;
                         self.effects(e)?;
                     }
@@ -295,6 +305,7 @@ impl<E: Engine> State<E> {
         &mut self,
         q: Request,
         reply: oneshot::Sender<Reply>,
+        queued: Option<Instant>,
         commands: &mut Vec<Command>,
     ) -> Result<()> {
         match q.op.as_str() {
@@ -302,7 +313,7 @@ impl<E: Engine> State<E> {
                 let info = serde_json::json!({"implementation":self.name,"node_id":self.config.id,
                     "leader":self.engine.is_leader(),"contract":CONTRACT,"application_dispatched_index":self.dispatched,"ordered_apply":self.config.ordered_apply,
                     "engine":self.engine.stats(),"pending":self.pending_count,
-                    "diagnostics":self.diagnostics.snapshot(),"peer_batches":self.peer_batches,"peer_events":self.peer_events,
+                    "diagnostics":self.diagnostics.status_snapshot(),"peer_batches":self.peer_batches,"peer_events":self.peer_events,
                     "peer_batch_sizes":self.peer_batch_sizes,
                     "peer_message_stream":self.config.peer_message_stream,
                     "transport":self.outbound.iter().map(|(id,peer)|(id.to_string(),peer.stats())).collect::<BTreeMap<_,_>>(),
@@ -350,7 +361,8 @@ impl<E: Engine> State<E> {
                     let _ = reply.send(Reply::status("overloaded"));
                     return Ok(());
                 }
-                if let Some((prior, _)) = self.pending.get(&c.identity()) {
+                let identity = c.identity();
+                if let Some((prior, _)) = self.pending.get(&identity) {
                     if prior != &c {
                         let _ = reply.send(Reply::applied(crate::model::Outcome {
                             error: Some("identity_conflict".into()),
@@ -359,8 +371,11 @@ impl<E: Engine> State<E> {
                         return Ok(());
                     }
                 }
+                if !self.pending.contains_key(&identity) {
+                    self.diagnostics.admit_operation(&c, queued);
+                }
                 self.pending
-                    .entry(c.identity())
+                    .entry(identity)
                     .or_insert_with(|| (c.clone(), Vec::new()))
                     .1
                     .push(reply);
@@ -400,11 +415,15 @@ impl<E: Engine> State<E> {
                         self.dropped.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                Effect::Apply { index, command } => applies.push(Applied {
-                    index,
-                    command,
-                    metadata: None,
-                }),
+                Effect::Apply { index, command } => {
+                    self.diagnostics
+                        .raft_commit_observed(index, "engine_apply_effect");
+                    applies.push(Applied {
+                        index,
+                        command,
+                        metadata: None,
+                    });
+                }
             }
         }
         if self.engine.persistence_pending() {
@@ -415,7 +434,10 @@ impl<E: Engine> State<E> {
                 let started = self.diagnostics.start();
                 self.diagnostics
                     .observe("application_batch_entries", applies.len() as u64);
+                self.diagnostics.application_dispatched(&applies);
+                self.diagnostics.application_started(&applies);
                 let outcomes = model.apply(&applies)?;
+                self.diagnostics.application_durable(&applies);
                 if let Some(last) = applies.last() {
                     self.dispatched = last.index;
                     self.engine.applied(last.index);

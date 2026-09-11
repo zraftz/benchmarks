@@ -168,9 +168,16 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             raise RuntimeError(f"measurement accounting failed: {invalid}")
         cluster.wait_ready()
         protocol.leader(cluster.nodes)
+        after_load = None
+        if getattr(options, "diagnostics", False) or (
+                getattr(options, "pipelined_durability", False) and options.scenario == "durable-kv"):
+            after_load = protocol.statuses(cluster.nodes)
+        if getattr(options, "diagnostics", False):
+            from .timelines import extract
+            write_json(directory / "diagnostics-after-load.json", after_load)
+            write_json(directory / "operation-timelines.json", extract(before, after_load))
         if getattr(options, "pipelined_durability", False) and options.scenario == "durable-kv":
             from .pipeline import activity
-            after_load = protocol.statuses(cluster.nodes)
             write_json(directory / "persistence-after-load.json", after_load)
             write_json(directory / "pipeline-activity.json", activity(before, after_load))
         post = canaries(cluster.nodes, case_id + "post")

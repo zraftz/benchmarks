@@ -158,6 +158,7 @@ impl ApplyWorker {
         }
         c.entries += entries.len();
         c.bytes += bytes;
+        self.diagnostics.application_dispatched(&entries);
         let items = entries
             .into_iter()
             .map(|entry| Item {

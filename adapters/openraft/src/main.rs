@@ -4,6 +4,7 @@ mod storage;
 use anyhow::Result;
 use async_trait::async_trait;
 use bench_common::{
+    diagnostics::Diagnostics,
     model::{Command, Outcome},
     net::{self, Handler},
     Config, Reply, Request, CONTRACT,
@@ -21,6 +22,7 @@ struct Service {
     app: storage::StateMachine,
     voters: BTreeMap<u64, BasicNode>,
     admission: Arc<Semaphore>,
+    diagnostics: Diagnostics,
 }
 #[async_trait]
 impl Handler for Service {
@@ -34,6 +36,7 @@ impl Handler for Service {
                     info: Some(serde_json::json!({
                     "implementation":"openraft","node_id":self.id,"leader":m.state==ServerState::Leader,
                     "contract":CONTRACT,"application":self.app.stats(),"engine":self.logs.stats(),
+                    "diagnostics":self.diagnostics.status_snapshot(),
                     "election_timeout_ms":[1000,2000],"heartbeat_ms":100})),
                     ..Reply::default()
                 }
@@ -48,6 +51,7 @@ impl Handler for Service {
                 Err(e) => Reply::error(e),
             },
             "execute" => {
+                let ingress = self.diagnostics.start();
                 let Some(command) = q.command else {
                     return Reply::error("missing command");
                 };
@@ -65,18 +69,33 @@ impl Handler for Service {
                 let Ok(_permit) = self.admission.try_acquire() else {
                     return Reply::status("overloaded");
                 };
-                match tokio::time::timeout(Duration::from_secs(10), self.raft.client_write(command))
-                    .await
+                self.diagnostics.admit_operation(&command, ingress);
+                self.diagnostics
+                    .proposals_submitted(std::slice::from_ref(&command));
+                match tokio::time::timeout(
+                    Duration::from_secs(10),
+                    self.raft.client_write(command.clone()),
+                )
+                .await
                 {
-                    Ok(Ok(response)) => Reply::applied(response.data),
+                    Ok(Ok(response)) => {
+                        self.diagnostics.client_completed(&command);
+                        Reply::applied(response.data)
+                    }
                     // Once submitted, failure is conservatively unknown. The load generator
                     // retries the identical session/sequence rather than inventing another write.
-                    Ok(Err(e)) => Reply {
-                        status: "unknown".into(),
-                        detail: Some(e.to_string()),
-                        ..Reply::default()
-                    },
-                    Err(_) => Reply::status("unknown"),
+                    Ok(Err(e)) => {
+                        self.diagnostics.abandon_operation(&command);
+                        Reply {
+                            status: "unknown".into(),
+                            detail: Some(e.to_string()),
+                            ..Reply::default()
+                        }
+                    }
+                    Err(_) => {
+                        self.diagnostics.abandon_operation(&command);
+                        Reply::status("unknown")
+                    }
                 }
             }
             _ => Reply::error("unsupported operation"),
@@ -100,8 +119,11 @@ async fn main() -> Result<()> {
 
     let _lock = config.lock_directory("openraft")?;
     let logs = storage::LogStore::open(&config.data_dir.join("raft.wal"))?;
-    let app = storage::StateMachine::open(&config.data_dir.join("application.wal"))?;
-    app.set_diagnostics(config.diagnostics);
+    let diagnostics = Diagnostics::new(config.diagnostics);
+    let app = storage::StateMachine::open(
+        &config.data_dir.join("application.wal"),
+        diagnostics.clone(),
+    )?;
     let cfg = Arc::new(
         RaftConfig {
             cluster_name: config.cluster.clone(),
@@ -136,6 +158,7 @@ async fn main() -> Result<()> {
             .map(|&id| (id, BasicNode::default()))
             .collect(),
         admission: Arc::new(Semaphore::new(config.capacity)),
+        diagnostics,
     };
     net::serve(config, service).await?;
     raft.shutdown().await?;
