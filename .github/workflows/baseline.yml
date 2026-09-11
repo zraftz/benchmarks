@@ -18,14 +18,15 @@ on:
         options: [both, durable, microbench, rafter-only]
         default: both
         required: true
-      paired:
-        description: Compare prior Rafter, candidate batch caps, and OpenRaft on one runner
-        type: boolean
-        default: false
+      prior_hard_state:
+        description: Prior Rafter durable backend for paired comparisons
+        type: choice
+        options: [replace, journal, wal]
+        default: journal
       prior_rafter_ref:
-        description: Prior Rafter branch or commit for paired durable runs
+        description: Prior Rafter branch or commit; nonempty enables paired durable comparison
         type: string
-        default: bf659fdc73116c326c8b1d04024bd8b8ccc5138c
+        default: ''
       prior_mode:
         description: Prior Rafter embedding
         type: choice
@@ -92,12 +93,18 @@ jobs:
           RAFTER_HARD_STATE: ${{ inputs.rafter_hard_state }}
           SUITE: ${{ inputs.suite }}
           SCENARIO: ${{ inputs.scenario }}
+          PRIOR_REF: ${{ inputs.prior_rafter_ref }}
+          PRIOR_HARD_STATE: ${{ inputs.prior_hard_state }}
+          PRIOR_MODE: ${{ inputs.prior_mode }}
+          CANDIDATE_MODE: ${{ inputs.candidate_mode }}
+          PRIOR_BATCH: ${{ inputs.prior_peer_batch_size }}
+          CANDIDATE_BATCHES: ${{ inputs.peer_batch_sizes }}
         run: |
           mkdir -p results
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'GITHUB_SHA')}, indent=2))
+          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'GITHUB_SHA')}, indent=2))
           PY
           if [[ -n "$RAFTER_REF" ]]; then
             ./raft-bench select-rafter "$RAFTER_REF" 2>&1 | tee results/selection.log
@@ -107,11 +114,13 @@ jobs:
           import json, os
           with open('implementations.lock.json') as stream:
               pin = json.load(stream)['rafter']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f"revision={pin['rev']}\n")
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
               stream.write(f"Rafter: `{pin['rev']}`\n\nSuite: {os.environ['SUITE']}\n\nRafter hard state: {os.environ['RAFTER_HARD_STATE']}\n\nShared GitHub runner; compare all engines in the same run.\n")
           PY
       - name: In-memory benchmarks
-        if: inputs.suite != 'durable' && !inputs.paired
+        if: inputs.suite != 'durable' && inputs.prior_rafter_ref == ''
         env:
           SUITE: ${{ inputs.suite }}
         run: |
@@ -121,7 +130,7 @@ jobs:
           ./raft-bench verify results/microbench
       - name: Locked durable build and tests
         id: durable_build
-        if: ${{ !cancelled() && (inputs.suite == 'both' || inputs.suite == 'durable') && steps.select.outcome == 'success' && !inputs.paired }}
+        if: ${{ !cancelled() && (inputs.suite == 'both' || inputs.suite == 'durable') && steps.select.outcome == 'success' && inputs.prior_rafter_ref == '' }}
         env:
           RAFTER_HARD_STATE: ${{ inputs.rafter_hard_state }}
         run: ./raft-bench build --rafter-hard-state "$RAFTER_HARD_STATE" 2>&1 | tee results/baseline-build.log
@@ -137,10 +146,11 @@ jobs:
             --data-root "$RUNNER_TEMP/raft-bench-data" \
             --output results/baseline 2>&1 | tee results/baseline-run.log
       - name: Paired durable comparison and batch sweep
-        if: ${{ !cancelled() && inputs.paired && steps.select.outcome == 'success' }}
+        if: ${{ !cancelled() && inputs.prior_rafter_ref != '' && steps.select.outcome == 'success' }}
         env:
           PRIOR_REF: ${{ inputs.prior_rafter_ref }}
-          CANDIDATE_REF: ${{ inputs.rafter_ref }}
+          CANDIDATE_REF: ${{ steps.select.outputs.revision }}
+          PRIOR_HARD_STATE: ${{ inputs.prior_hard_state }}
           CANDIDATE_HARD_STATE: ${{ inputs.rafter_hard_state }}
           PRIOR_MODE: ${{ inputs.prior_mode }}
           CANDIDATE_MODE: ${{ inputs.candidate_mode }}
@@ -148,8 +158,8 @@ jobs:
           CANDIDATE_BATCHES: ${{ inputs.peer_batch_sizes }}
         run: |
           flags=()
-          if [[ "$PRIOR_MODE" == messages || "$PRIOR_MODE" == pipeline || "$CANDIDATE_MODE" == messages || "$CANDIDATE_MODE" == pipeline ]]; then flags+=(--network-delays-ms 0,2); fi
-          python3 -m benchctl.paired --prior "$PRIOR_REF" --candidate "$CANDIDATE_REF" --candidate-hard-state "$CANDIDATE_HARD_STATE" "${flags[@]}" \
+          if [[ "$PRIOR_MODE" == messages || "$PRIOR_MODE" == pipeline || "$CANDIDATE_MODE" == messages || "$CANDIDATE_MODE" == pipeline ]]; then flags+=(--network-delays-ms "0,2"); fi
+          python3 -m benchctl.paired --prior "$PRIOR_REF" --candidate "$CANDIDATE_REF" --prior-hard-state "$PRIOR_HARD_STATE" --candidate-hard-state "$CANDIDATE_HARD_STATE" "${flags[@]}" \
             --prior-mode "$PRIOR_MODE" --candidate-mode "$CANDIDATE_MODE" \
             --prior-peer-batch-size "$PRIOR_BATCH" --peer-batch-sizes "$CANDIDATE_BATCHES" \
             --output results/paired --data-root "$RUNNER_TEMP/raft-bench-paired" \

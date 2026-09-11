@@ -70,10 +70,10 @@ mode also enables ordered apply and message transport. Paired CI offers
 `inline`, `worker`, `messages`, and `pipeline` independently for each revision;
 message modes run with both zero and 2 ms added loopback egress delay.
 
-The workflow's `rafter_hard_state` selects the candidate backend; the prior uses
-journal. The paired CLI also accepts `--prior-hard-state`. Each run uses fresh
-directories; the WAL has no implicit format migration. Build receipts and node
-stats record the choices. Use `--diagnostics` separately for stage counters and
+Set `prior_rafter_ref` to enable paired CI. Choose `prior_hard_state` and
+`rafter_hard_state` independently; keep both at `wal` to isolate pipelining.
+Each run uses fresh directories; the WAL has no implicit format migration.
+Build receipts and node stats record the choices. Use `--diagnostics` separately for stage counters and
 empty-append reasons; timing runs leave them disabled.
 
 ## Development
