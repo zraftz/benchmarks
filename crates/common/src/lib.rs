@@ -1,6 +1,7 @@
 //! Shared *benchmark embedding*, not a production Raft transport or database.
 //! Every adapter uses the same framed client protocol and durable application journal.
 pub mod actor;
+pub mod apply_worker;
 pub mod diagnostics;
 pub mod journal;
 pub mod model;
@@ -37,6 +38,8 @@ pub struct Config {
     pub peer_batch_size: usize,
     #[serde(default)]
     pub diagnostics: bool,
+    #[serde(default)]
+    pub ordered_apply: bool,
 }
 fn peer_batch_size() -> usize {
     1
@@ -63,6 +66,7 @@ impl Config {
             || c.peers.keys().copied().collect::<Vec<_>>() != vec![1, 2, 3]
             || c.tick_ms != 20
             || c.capacity == 0
+            || (c.ordered_apply && c.capacity < 2)
             || c.capacity > 65536
             || c.batch_size == 0
             || c.batch_size > 64

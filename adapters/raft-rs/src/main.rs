@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use bench_common::{
     actor::{Actor, Effect, Engine},
     journal::Journal,
-    model::{Command, DurableModel},
+    model::{Applied, Command, DurableModel},
     net, Config,
 };
 use prost::Message as ProstMessage;
@@ -24,6 +24,7 @@ struct Record {
 struct RaftRs {
     node: RawNode<MemStorage>,
     journal: Journal,
+    ordered_apply: bool,
 }
 impl RaftRs {
     fn open(c: &Config, applied: u64) -> Result<Self> {
@@ -61,14 +62,18 @@ impl RaftRs {
         };
         let logger = slog::Logger::root(slog::Discard, slog::o!());
         let node = RawNode::new(&cfg, store, &logger)?;
-        Ok(Self { node, journal })
+        Ok(Self {
+            node,
+            journal,
+            ordered_apply: c.ordered_apply,
+        })
     }
-    fn committed(entries: Vec<Entry>, out: &mut Vec<Effect>) -> Result<()> {
+    fn committed(entries: Vec<Entry>, out: &mut Vec<Effect>, ordered: bool) -> Result<()> {
         for entry in entries {
             if entry.get_entry_type() != raft::prelude::EntryType::EntryNormal {
                 bail!("dynamic membership not supported by this scenario");
             }
-            let command = if entry.data.is_empty() {
+            let command = if ordered || entry.data.is_empty() {
                 None
             } else {
                 Some(serde_json::from_slice::<Command>(&entry.data)?)
@@ -109,21 +114,62 @@ impl RaftRs {
             }
             Self::messages(ready.take_messages(), &mut out);
             Self::messages(ready.take_persisted_messages(), &mut out);
-            Self::committed(ready.take_committed_entries(), &mut out)?;
-            let mut light = self.node.advance(ready);
+            Self::committed(ready.take_committed_entries(), &mut out, self.ordered_apply)?;
+            let mut light = self.node.advance_append(ready);
             if let Some(commit) = light.commit_index() {
                 store.wl().mut_hard_state().set_commit(commit);
             }
             Self::messages(light.take_messages(), &mut out);
-            Self::committed(light.take_committed_entries(), &mut out)?;
-            // The shared actor applies+syncs these effects before it permits another
-            // step/propose/tick. A failure exits the process; it cannot serve reads.
-            self.node.advance_apply();
+            Self::committed(light.take_committed_entries(), &mut out, self.ordered_apply)?;
         }
         Ok(out)
     }
 }
 impl Engine for RaftRs {
+    fn applied(&mut self, index: u64) {
+        self.node.advance_apply_to(index);
+    }
+    fn committed_through(&self) -> u64 {
+        self.node.raft.raft_log.committed
+    }
+    fn last_index(&self) -> u64 {
+        self.node.raft.raft_log.last_index()
+    }
+    fn committed_entries(&self, after: u64, count: usize, bytes: usize) -> Result<Vec<Applied>> {
+        let through = self.committed_through().min(after + count as u64);
+        if through <= after {
+            return Ok(Vec::new());
+        }
+        let entries = self.node.store().entries(
+            after + 1,
+            through + 1,
+            Some(bytes as u64),
+            raft::GetEntriesContext::empty(false),
+        )?;
+        let mut result = Vec::new();
+        let mut used = 0;
+        for entry in entries {
+            if entry.get_entry_type() != raft::prelude::EntryType::EntryNormal {
+                bail!("unsupported committed configuration")
+            }
+            let applied = Applied {
+                index: entry.index,
+                command: if entry.data.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::from_slice(&entry.data)?)
+                },
+                metadata: None,
+            };
+            let size = bench_common::apply_worker::payload_bytes(&applied);
+            if !result.is_empty() && used + size > bytes {
+                break;
+            }
+            used += size;
+            result.push(applied);
+        }
+        Ok(result)
+    }
     type Peer = Message;
     type Gate = ();
     fn peer_gate(&self, _: usize, _: usize) {}

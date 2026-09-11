@@ -32,6 +32,16 @@ pub trait Engine: Send + 'static {
     type Peer;
     type Gate;
     fn start(&mut self, _diagnostics: bool) {}
+    fn applied(&mut self, _index: u64) {}
+    fn committed_through(&self) -> u64 {
+        0
+    }
+    fn last_index(&self) -> u64 {
+        0
+    }
+    fn committed_entries(&self, _after: u64, _count: usize, _bytes: usize) -> Result<Vec<Applied>> {
+        bail!("ordered application is unsupported by this build")
+    }
     fn decode_peer(&self, from: u64, data: &[u8]) -> Result<Self::Peer>;
     fn peer_gate(&self, max_events: usize, max_bytes: usize) -> Self::Gate;
     fn admit_peer(gate: &mut Self::Gate, peer: &Self::Peer) -> bool;
@@ -45,15 +55,20 @@ pub trait Engine: Send + 'static {
 enum Input {
     Client(Request, oneshot::Sender<Reply>, Option<Instant>),
     Peer(u64, Vec<u8>, Option<Instant>),
+    Wake,
 }
 #[derive(Clone)]
 pub struct Actor {
-    tx: mpsc::SyncSender<Input>,
+    tx: Arc<mpsc::SyncSender<Input>>,
     diagnostics: Diagnostics,
+    client_slots: Arc<tokio::sync::Semaphore>,
 }
 #[async_trait]
 impl Handler for Actor {
     async fn client(&self, q: Request) -> Reply {
+        let Ok(_slot) = self.client_slots.try_acquire() else {
+            return Reply::status("overloaded");
+        };
         let (tx, rx) = oneshot::channel();
         match self
             .tx
@@ -83,9 +98,16 @@ impl Actor {
         mut model: DurableModel,
         recovered: Vec<Effect>,
     ) -> Self {
+        let client_limit = config
+            .capacity
+            .saturating_sub((config.capacity / 4).clamp(1, 64))
+            .max(1);
+        let client_slots = Arc::new(tokio::sync::Semaphore::new(client_limit));
         let diagnostics = Diagnostics::new(config.diagnostics);
         model.set_diagnostics(diagnostics.clone());
         let (tx, rx) = mpsc::sync_channel(config.capacity);
+        let tx = Arc::new(tx);
+        let wake = Arc::downgrade(&tx);
         let dropped = Arc::new(AtomicU64::new(0));
         let mut outbound = BTreeMap::new();
         for (&id, address) in &config.peers {
@@ -106,6 +128,20 @@ impl Actor {
             });
             outbound.insert(id, send);
         }
+        let dispatched = model.index;
+        let application = if config.ordered_apply {
+            application::Application::Worker(crate::apply_worker::ApplyWorker::start(
+                model,
+                diagnostics.clone(),
+                move || {
+                    if let Some(tx) = wake.upgrade() {
+                        let _ = tx.try_send(Input::Wake);
+                    }
+                },
+            ))
+        } else {
+            application::Application::Inline(model)
+        };
         let owner_diagnostics = diagnostics.clone();
         std::thread::spawn(move || {
             let mut state = State {
@@ -113,7 +149,8 @@ impl Actor {
                 config,
                 name,
                 engine,
-                model,
+                application,
+                dispatched,
                 outbound,
                 dropped,
                 pending: BTreeMap::new(),
@@ -128,9 +165,14 @@ impl Actor {
                 std::process::exit(1);
             }
         });
-        Self { tx, diagnostics }
+        Self {
+            tx,
+            diagnostics,
+            client_slots,
+        }
     }
 }
+mod application;
 mod peer;
 
 type OutboundPacket = (Vec<u8>, Option<Instant>);
@@ -143,7 +185,8 @@ struct State<E> {
     config: Config,
     name: &'static str,
     engine: E,
-    model: DurableModel,
+    application: application::Application,
+    dispatched: u64,
     outbound: OutboundPeers,
     dropped: Arc<AtomicU64>,
     pending: PendingCommands,
@@ -158,6 +201,8 @@ impl<E: Engine> State<E> {
         let mut next = Instant::now() + tick;
         let mut deferred = VecDeque::new();
         loop {
+            self.complete_applies()?;
+            self.dispatch_applies()?;
             if Instant::now() >= next {
                 let e = self.engine.tick()?;
                 self.effects(e)?;
@@ -179,6 +224,7 @@ impl<E: Engine> State<E> {
                 }
             };
             match input {
+                Input::Wake => continue,
                 Input::Peer(from, data, queued) => {
                     self.diagnostics.elapsed("owner_peer_queue_ns", queued);
                     let mut arrivals = vec![queued];
@@ -236,25 +282,28 @@ impl<E: Engine> State<E> {
         match q.op.as_str() {
             "status" => {
                 let info = serde_json::json!({"implementation":self.name,"node_id":self.config.id,
-                    "leader":self.engine.is_leader(),"contract":CONTRACT,"application":self.model.stats(),
+                    "leader":self.engine.is_leader(),"contract":CONTRACT,"application_dispatched_index":self.dispatched,"ordered_apply":self.config.ordered_apply,
                     "engine":self.engine.stats(),"pending":self.pending_count,
                     "diagnostics":self.diagnostics.snapshot(),"peer_batches":self.peer_batches,"peer_events":self.peer_events,
                     "peer_batch_sizes":self.peer_batch_sizes,
                     "peer_drops":self.dropped.load(Ordering::Relaxed)});
-                let _ = reply.send(Reply {
-                    status: "ok".into(),
-                    leader_id: self.engine.leader(),
-                    info: Some(info),
-                    ..Reply::default()
-                });
+                self.application.query(crate::apply_worker::Query {
+                    reply,
+                    dump: false,
+                    response: Reply {
+                        status: "ok".into(),
+                        leader_id: self.engine.leader(),
+                        info: Some(info),
+                        ..Reply::default()
+                    },
+                })?;
             }
             "dump" => {
-                let _ = reply.send(Reply {
-                    status: "ok".into(),
-                    info: Some(serde_json::json!({
-                "values":self.model.model.values,"applied_index":self.model.index})),
-                    ..Reply::default()
-                });
+                self.application.query(crate::apply_worker::Query {
+                    reply,
+                    dump: true,
+                    response: Reply::status("ok"),
+                })?;
             }
             "execute" => {
                 let Some(c) = q.command else {
@@ -273,7 +322,11 @@ impl<E: Engine> State<E> {
                     });
                     return Ok(());
                 }
-                if self.pending_count >= self.config.capacity {
+                if self.pending_count >= self.config.capacity
+                    || self
+                        .application
+                        .backpressured(self.engine.last_index(), self.dispatched)
+                {
                     let _ = reply.send(Reply::status("overloaded"));
                     return Ok(());
                 }
@@ -319,29 +372,20 @@ impl<E: Engine> State<E> {
                 }),
             }
         }
-        let started = self.diagnostics.start();
-        self.diagnostics
-            .observe("application_batch_entries", applies.len() as u64);
-        let outcomes = self.model.apply(&applies)?;
-        for (entry, outcome) in applies.into_iter().zip(outcomes) {
-            if let (Some(c), Some(result)) = (entry.command, outcome) {
-                if let Some((submitted, replies)) = self.pending.remove(&c.identity()) {
-                    self.pending_count -= replies.len();
-                    for reply in replies {
-                        let response = if submitted == c {
-                            result.clone()
-                        } else {
-                            crate::model::Outcome {
-                                error: Some("identity_conflict".into()),
-                                ..Default::default()
-                            }
-                        };
-                        let _ = reply.send(Reply::applied(response));
-                        self.diagnostics
-                            .elapsed("durable_outputs_to_client_completion_ns", started);
-                    }
+        match &mut self.application {
+            application::Application::Inline(model) => {
+                let started = self.diagnostics.start();
+                self.diagnostics
+                    .observe("application_batch_entries", applies.len() as u64);
+                let outcomes = model.apply(&applies)?;
+                if let Some(last) = applies.last() {
+                    self.dispatched = last.index;
+                    self.engine.applied(last.index);
                 }
+                let queued = vec![started; applies.len()];
+                self.resolve_applies(applies, outcomes, queued);
             }
+            application::Application::Worker(_) => self.dispatch_applies()?,
         }
         Ok(())
     }

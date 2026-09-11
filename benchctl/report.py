@@ -42,6 +42,7 @@ def render(suite: Path, destination: Path) -> None:
             variant = json.dumps({"backend": (manifest.get("build_receipt") or {}).get("rafter_hard_state_backend", "replace"),
                 "peer_batch_size": manifest["options"].get("peer_batch_size", 1),
                 "batch_size": manifest["options"].get("batch_size", 64),
+                "ordered_apply": manifest["options"].get("ordered_apply", False),
                 "peer_group_commit": (manifest.get("build_receipt") or {}).get("peer_group_commit", False),
                 "diagnostics": manifest["options"].get("diagnostics", False)}, sort_keys=True)
             key = (manifest["implementation"], revision, variant, manifest["scenario"], r["config"]["rate"],
@@ -54,7 +55,8 @@ def render(suite: Path, destination: Path) -> None:
         rates = [v["successful_ops_per_second"] for v in values]
         settings = json.loads(variant)
         mode = "diagnostics" if settings["diagnostics"] else "timing"
-        detail = f"{settings['backend']} · peers ≤{settings['peer_batch_size']} · {mode}"
+        apply = "worker" if settings["ordered_apply"] else "inline/native"
+        detail = f"{settings['backend']} · peers ≤{settings['peer_batch_size']} · {apply} · {mode}"
         config = f"{scenario} · {detail} · {payload} bytes · {concurrency} clients · {reads}% reads · {cas}% CAS"
         fields = (engine, revision[:12], config, rate, len(values), f"{median(rates):.1f}",
                   f"{min(rates):.1f}–{max(rates):.1f}", median_latency(values, "success_latency"),

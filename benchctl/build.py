@@ -12,7 +12,7 @@ from .selection import check_resolution
 IMPLEMENTATIONS = ("rafter", "raft-rs", "openraft")
 
 
-def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False) -> None:
+def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False, ordered_apply: bool = False) -> None:
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     # A failed rebuild must never leave an earlier receipt usable.
@@ -22,6 +22,8 @@ def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False) -
     selected = ["raft-bench-rafter/journal-hard-state"] if rafter_hard_state == "journal" else []
     if peer_group_commit:
         selected.append("raft-bench-rafter/peer-group-commit")
+    if ordered_apply:
+        selected.append("raft-bench-rafter/ordered-apply")
     features = ["--features", ",".join(selected)] if selected else []
     if not (ROOT / "Cargo.lock").is_file():
         raise RuntimeError("Cargo.lock is missing; restore the checked-in lockfile before building")
@@ -47,7 +49,7 @@ def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False) -
     subprocess.run(["go", "build", "-trimpath", "-o", str(dist / "raft-bench-load"), "."],
                    cwd=ROOT / "loadgen", check=True)
     record = {
-        "schema": 1, "peer_group_commit": peer_group_commit, "rafter_hard_state_backend": rafter_hard_state, "source_digest": source_digest(), "implementations": pins,
+        "schema": 1, "peer_group_commit": peer_group_commit, "ordered_apply": ordered_apply, "rafter_hard_state_backend": rafter_hard_state, "source_digest": source_digest(), "implementations": pins,
         "cargo_lock_sha256": digest(ROOT / "Cargo.lock"), "rust_tests_passed": True,
         "rustc": capture(["rustc", "-Vv"]), "cargo": capture(["cargo", "-V"]),
         "go": capture(["go", "version"]), "protoc": capture(["protoc", "--version"]),

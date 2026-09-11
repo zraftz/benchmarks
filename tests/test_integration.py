@@ -7,7 +7,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from benchctl.evidence import ROOT, verify
+from benchctl.evidence import ROOT, digest, verify
 from benchctl.runner import run_case
 
 class IntegrationTests(unittest.TestCase):
@@ -24,7 +24,9 @@ class IntegrationTests(unittest.TestCase):
             options=SimpleNamespace(scenario=scenario,smoke=True,batch_size=64,duration=2.4,warmup=.1,
                 concurrency=4,payload=128,rate=rate,keyspace=32,seed=7,read_percent=20,cas_percent=10,timeout=1.5)
             run_case("test-fixture",root/"case",root/"data",options,
-                command=[sys.executable,str(ROOT/"tests/fake_node.py")])
+                command=[sys.executable,str(ROOT/"tests/fake_node.py")],
+                build_receipt={"binaries": {"test-fixture": digest(Path(sys.executable))},
+                    "implementations": {"test-fixture": {"purpose": "tooling test only"}}})
             check=verify(root/"case")
             self.assertEqual(check["status"],"passed",check)
             r=json.loads((root/"case/measurement.json").read_text())

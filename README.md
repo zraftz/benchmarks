@@ -67,6 +67,10 @@ Diagnostic cases run separately; their timings are never pooled with the sweep.
 Locally, build a supporting revision with `--peer-group-commit`, then run with
 `--peer-batch-size 32`. Add `--diagnostics` only for a separate instrumented run.
 
+Build and run with `--ordered-apply` to move application persistence onto one
+ordered worker per node. The paired workflow accepts the same option and a
+`prior_peer_batch_size`, so the application change can be measured at a fixed cap.
+
 ## Development
 
 ```sh

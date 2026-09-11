@@ -82,7 +82,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                         "adapter storage/codec costs differ and are disclosed", "not upstream-reviewed tuning"]}
     write_json(directory / "manifest.json", manifest)
     cluster = Cluster(implementation, command, directory / "cluster", data, case_id, options.batch_size,
-        getattr(options, "peer_batch_size", 1), getattr(options, "diagnostics", False))
+        getattr(options, "peer_batch_size", 1), getattr(options, "diagnostics", False),
+        getattr(options, "ordered_apply", False))
     load = None
     try:
         cluster.start()

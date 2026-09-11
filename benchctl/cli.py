@@ -47,6 +47,8 @@ def run(options) -> None:
     receipt = json.loads(receipt_path.read_text())
     if "rafter" in implementations and options.peer_batch_size > 1 and not receipt.get("peer_group_commit"):
         raise RuntimeError("peer batching requires a build with --peer-group-commit")
+    if "rafter" in implementations and options.ordered_apply and not receipt.get("ordered_apply"):
+        raise RuntimeError("ordered application requires a build with --ordered-apply")
     if receipt.get("source_digest") != source_digest():
         raise RuntimeError("sources changed since build receipt; rebuild")
     for implementation in implementations:
@@ -108,6 +110,7 @@ def main() -> None:
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
     p.add_argument("--rafter-hard-state", choices=("replace", "journal"), default="replace", help="journal requires a Rafter revision with RFHJ support")
     p.add_argument("--peer-group-commit", action="store_true", help="requires a Rafter revision with peer batch admission and telemetry")
+    p.add_argument("--ordered-apply", action="store_true", help="enable the ordered application worker API")
     p = sub.add_parser("select-rafter", help="resolve a ref and update both local manifests and lockfiles")
     p.add_argument("ref")
     p = sub.add_parser("microbench", help="run the in-memory benchmark suite")
@@ -129,6 +132,7 @@ def main() -> None:
     p.add_argument("--read-percent", type=int, default=0)
     p.add_argument("--cas-percent", type=int, default=0)
     p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument("--ordered-apply", action="store_true")
     p.add_argument("--peer-batch-size", type=int, default=1)
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
@@ -157,7 +161,7 @@ def main() -> None:
                 from .selection import select_rafter
                 select_rafter(args.rafter_ref)
             if args.command == "build":
-                build(args.rafter_hard_state, args.peer_group_commit)
+                build(args.rafter_hard_state, args.peer_group_commit, args.ordered_apply)
             else:
                 from .microbench import run_microbench
                 run_microbench(args.mode, args.runs, args.output)
