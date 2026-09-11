@@ -42,7 +42,9 @@ def render(suite: Path, destination: Path) -> None:
             variant = json.dumps({"backend": (manifest.get("build_receipt") or {}).get("rafter_hard_state_backend", "replace"),
                 "peer_batch_size": manifest["options"].get("peer_batch_size", 1),
                 "batch_size": manifest["options"].get("batch_size", 64),
+                "network_delay_ms": manifest["options"].get("network_delay_ms", 0),
                 "ordered_apply": manifest["options"].get("ordered_apply", False),
+                "peer_message_stream": manifest["options"].get("peer_message_stream", False),
                 "peer_group_commit": (manifest.get("build_receipt") or {}).get("peer_group_commit", False),
                 "diagnostics": manifest["options"].get("diagnostics", False)}, sort_keys=True)
             key = (manifest["implementation"], revision, variant, manifest["scenario"], r["config"]["rate"],
@@ -56,7 +58,8 @@ def render(suite: Path, destination: Path) -> None:
         settings = json.loads(variant)
         mode = "diagnostics" if settings["diagnostics"] else "timing"
         apply = "worker" if settings["ordered_apply"] else "inline/native"
-        detail = f"{settings['backend']} · peers ≤{settings['peer_batch_size']} · {apply} · {mode}"
+        transport = "messages" if settings["peer_message_stream"] else "RPC"
+        detail = f"{settings['backend']} · peers ≤{settings['peer_batch_size']} · {apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
         config = f"{scenario} · {detail} · {payload} bytes · {concurrency} clients · {reads}% reads · {cas}% CAS"
         fields = (engine, revision[:12], config, rate, len(values), f"{median(rates):.1f}",
                   f"{min(rates):.1f}–{max(rates):.1f}", median_latency(values, "success_latency"),

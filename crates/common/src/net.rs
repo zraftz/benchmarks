@@ -1,5 +1,7 @@
 //! Bounded, persistent length-prefixed TCP. Plaintext, trusted benchmark networks only.
 //! Peer frame body = sender u64 (big-endian) + implementation-native RPC bytes.
+pub mod outbound;
+
 use crate::{Config, Reply, Request, FRAME_LIMIT};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -13,6 +15,9 @@ use tokio::{
 
 #[async_trait]
 pub trait Handler: Clone + Send + Sync + 'static {
+    fn message_oriented(&self) -> bool {
+        false
+    }
     async fn client(&self, request: Request) -> Reply;
     async fn peer(&self, from: u64, data: Vec<u8>) -> Result<Vec<u8>>;
 }
@@ -29,8 +34,10 @@ pub async fn write_frame(s: &mut TcpStream, data: &[u8]) -> Result<()> {
     if data.len() > FRAME_LIMIT {
         bail!("frame limit exceeded");
     }
-    s.write_u32(data.len() as u32).await?;
-    s.write_all(data).await?;
+    let mut frame = Vec::with_capacity(4 + data.len());
+    frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    frame.extend_from_slice(data);
+    s.write_all(&frame).await?;
     Ok(())
 }
 #[derive(Clone)]
@@ -77,6 +84,9 @@ impl Rpc {
     }
 }
 pub async fn serve<H: Handler>(config: Config, handler: H) -> Result<()> {
+    if config.peer_message_stream && !handler.message_oriented() {
+        bail!("this engine requires request/reply peer transport")
+    }
     let clients = TcpListener::bind(&config.client).await?;
     let peers = TcpListener::bind(&config.peer).await?;
     let cp = Arc::new(Semaphore::new(1024));
@@ -98,22 +108,47 @@ pub async fn serve<H: Handler>(config: Config, handler: H) -> Result<()> {
                 });
             },
             result=peers.accept()=>{
-                let (mut s,_)=result?;s.set_nodelay(true)?;
+                let (s,_)=result?;s.set_nodelay(true)?;
                 let Ok(permit)=pp.clone().try_acquire_owned() else {continue};
                 let h=handler.clone();let voters=config.peers.clone();let own=config.id;
+                let message_stream=config.peer_message_stream;
                 tokio::spawn(async move {
                     let _permit=permit;
-                    loop {
-                        let data=match timeout(Duration::from_secs(30),read_frame(&mut s)).await {Ok(Ok(d))=>d,_=>break};
-                        if data.len()<8 {break;}
-                        let from=u64::from_be_bytes(data[..8].try_into().unwrap());
-                        if from==own || !voters.contains_key(&from) {break;}
-                        let response=match h.peer(from,data[8..].to_vec()).await {Ok(r)=>r,Err(_)=>break};
-                        if !matches!(timeout(Duration::from_secs(10),write_frame(&mut s,&response)).await,Ok(Ok(()))) {break;}
-                    }
+                    let _ = serve_peer(s, h, voters, own, message_stream).await;
                 });
             },
             _=tokio::signal::ctrl_c()=>return Ok(()),
         }
     }
 }
+
+async fn serve_peer<H: Handler>(
+    mut stream: TcpStream,
+    handler: H,
+    voters: std::collections::BTreeMap<u64, String>,
+    own: u64,
+    message_stream: bool,
+) -> Result<()> {
+    loop {
+        let data = timeout(Duration::from_secs(30), read_frame(&mut stream)).await??;
+        if data.len() < 8 {
+            bail!("peer identity missing")
+        }
+        let from = u64::from_be_bytes(data[..8].try_into().unwrap());
+        if from == own || !voters.contains_key(&from) {
+            bail!("unknown peer")
+        }
+        let response = handler.peer(from, data[8..].to_vec()).await?;
+        if message_stream {
+            if !response.is_empty() {
+                bail!("message handler returned an RPC response")
+            }
+        } else {
+            timeout(Duration::from_secs(10), write_frame(&mut stream, &response)).await??;
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "net_test.rs"]
+mod tests;

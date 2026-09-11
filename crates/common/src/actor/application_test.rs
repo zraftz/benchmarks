@@ -126,6 +126,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         peer_batch_size: 1,
         diagnostics: false,
         ordered_apply: true,
+        peer_message_stream: false,
     };
     let mut state = State {
         diagnostics: Diagnostics::default(),
@@ -135,6 +136,8 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         application: Application::Worker(worker),
         dispatched: 1,
         outbound: BTreeMap::new(),
+        transport_epoch: (0, None),
+        transport_generation: 0,
         dropped: Arc::new(AtomicU64::new(0)),
         pending,
         pending_count: 1,

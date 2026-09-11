@@ -51,6 +51,9 @@ type PeerGate = rafter_runtime::PeerBatchGate;
 type PeerGate = ();
 
 impl Engine for Rafter {
+    fn term(&self) -> u64 {
+        self.node.current_term().0
+    }
     type Peer = (NodeId, Message);
     type Gate = PeerGate;
     fn start(&mut self, diagnostics: bool) {

@@ -30,6 +30,10 @@ on:
         description: Enable the candidate ordered application worker
         type: boolean
         default: false
+      peer_message_stream:
+        description: Compare message streams with RPC using ordered application in both variants
+        type: boolean
+        default: false
       prior_peer_batch_size:
         description: Prior Rafter peer batch cap
         type: number
@@ -76,7 +80,7 @@ jobs:
       - name: Prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler build-essential
+          sudo apt-get install -y protobuf-compiler build-essential iproute2 iputils-ping
           toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
           rustup toolchain install "$toolchain" --profile minimal
       - name: Select Rafter revision
@@ -136,11 +140,13 @@ jobs:
           PRIOR_REF: ${{ inputs.prior_rafter_ref }}
           CANDIDATE_REF: ${{ inputs.rafter_ref }}
           ORDERED_APPLY: ${{ inputs.ordered_apply }}
+          PEER_MESSAGE_STREAM: ${{ inputs.peer_message_stream }}
           PRIOR_BATCH: ${{ inputs.prior_peer_batch_size }}
           CANDIDATE_BATCHES: ${{ inputs.peer_batch_sizes }}
         run: |
           flags=()
           if [[ "$ORDERED_APPLY" == true ]]; then flags+=(--ordered-apply); fi
+          if [[ "$PEER_MESSAGE_STREAM" == true ]]; then flags+=(--peer-message-stream --network-delays-ms 0,2); fi
           python3 -m benchctl.paired --prior "$PRIOR_REF" --candidate "$CANDIDATE_REF" "${flags[@]}" \
             --prior-peer-batch-size "$PRIOR_BATCH" --peer-batch-sizes "$CANDIDATE_BATCHES" \
             --output results/paired --data-root "$RUNNER_TEMP/raft-bench-paired" \

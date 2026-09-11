@@ -126,6 +126,9 @@ impl RaftRs {
     }
 }
 impl Engine for RaftRs {
+    fn term(&self) -> u64 {
+        self.node.raft.term
+    }
     fn applied(&mut self, index: u64) {
         self.node.advance_apply_to(index);
     }

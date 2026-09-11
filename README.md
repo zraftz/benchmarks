@@ -84,3 +84,5 @@ ordered worker per node. The paired workflow accepts the same option and a
 
 Maintained by the Rafter author. Results describe these service integrations;
 they are not upstream endorsements. Apache-2.0; see [NOTICE](NOTICE).
+
+Use `run --peer-message-stream --implementations rafter,raft-rs` to remove empty delivery replies. The RPC control remains the default. Paired CI can compare transports with ordered application enabled for both Rafter variants, first on loopback and then with 2 ms of added delay per loopback egress (clients and peers).

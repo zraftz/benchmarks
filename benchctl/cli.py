@@ -21,6 +21,8 @@ def run(options) -> None:
     implementations = options.implementations.split(",")
     if not implementations or len(set(implementations)) != len(implementations) or any(i not in IMPLEMENTATIONS for i in implementations):
         raise ValueError("implementations must be distinct members of rafter,raft-rs,openraft")
+    if options.peer_message_stream and "openraft" in implementations:
+        raise ValueError("OpenRaft uses actual request/reply RPCs; select message engines explicitly")
     rates = [float(r) for r in options.rates.split(",")]
     if not rates or any(not math.isfinite(r) or r < 0 or r > 1e7 for r in rates):
         raise ValueError("rates must be finite numbers from 0 to 10000000")
@@ -134,6 +136,7 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--ordered-apply", action="store_true")
     p.add_argument("--peer-batch-size", type=int, default=1)
+    p.add_argument("--peer-message-stream", action="store_true")
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
     p.add_argument("--seed-base", type=int, default=1)

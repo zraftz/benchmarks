@@ -3,7 +3,7 @@
 use crate::{
     diagnostics::Diagnostics,
     model::{Applied, Command, DurableModel},
-    net::{Handler, Rpc},
+    net::{outbound::Outbound, Handler},
     Config, Reply, Request, CONTRACT,
 };
 use anyhow::{bail, Result};
@@ -16,7 +16,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::sync::{mpsc as async_mpsc, oneshot};
+use tokio::sync::oneshot;
 
 pub enum Effect {
     Send {
@@ -32,6 +32,9 @@ pub trait Engine: Send + 'static {
     type Peer;
     type Gate;
     fn start(&mut self, _diagnostics: bool) {}
+    fn term(&self) -> u64 {
+        0
+    }
     fn applied(&mut self, _index: u64) {}
     fn committed_through(&self) -> u64 {
         0
@@ -65,6 +68,9 @@ pub struct Actor {
 }
 #[async_trait]
 impl Handler for Actor {
+    fn message_oriented(&self) -> bool {
+        true
+    }
     async fn client(&self, q: Request) -> Reply {
         let Ok(_slot) = self.client_slots.try_acquire() else {
             return Reply::status("overloaded");
@@ -114,19 +120,16 @@ impl Actor {
             if id == config.id {
                 continue;
             }
-            let rpc = Rpc::new(address.clone(), config.id);
-            let (send, mut receive) = async_mpsc::channel::<OutboundPacket>(256);
-            let lost = dropped.clone();
-            let peer_diagnostics = diagnostics.clone();
-            tokio::spawn(async move {
-                while let Some((data, ready)) = receive.recv().await {
-                    peer_diagnostics.elapsed("peer_outbound_queue_ns", ready);
-                    if rpc.call(&data).await.is_err() {
-                        lost.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            });
-            outbound.insert(id, send);
+            outbound.insert(
+                id,
+                Outbound::start(
+                    address.clone(),
+                    config.id,
+                    config.peer_message_stream,
+                    diagnostics.clone(),
+                    dropped.clone(),
+                ),
+            );
         }
         let dispatched = model.index;
         let application = if config.ordered_apply {
@@ -155,6 +158,8 @@ impl Actor {
                 dropped,
                 pending: BTreeMap::new(),
                 pending_count: 0,
+                transport_epoch: (0, None),
+                transport_generation: 0,
                 peer_batches: 0,
                 peer_events: 0,
                 peer_batch_sizes: BTreeMap::new(),
@@ -175,8 +180,7 @@ impl Actor {
 mod application;
 mod peer;
 
-type OutboundPacket = (Vec<u8>, Option<Instant>);
-type OutboundPeers = BTreeMap<u64, async_mpsc::Sender<OutboundPacket>>;
+type OutboundPeers = BTreeMap<u64, Outbound>;
 
 type PendingCommands = BTreeMap<(String, u64), (Command, Vec<oneshot::Sender<Reply>>)>;
 
@@ -188,6 +192,8 @@ struct State<E> {
     application: application::Application,
     dispatched: u64,
     outbound: OutboundPeers,
+    transport_epoch: (u64, Option<u64>),
+    transport_generation: u64,
     dropped: Arc<AtomicU64>,
     pending: PendingCommands,
     pending_count: usize,
@@ -286,6 +292,8 @@ impl<E: Engine> State<E> {
                     "engine":self.engine.stats(),"pending":self.pending_count,
                     "diagnostics":self.diagnostics.snapshot(),"peer_batches":self.peer_batches,"peer_events":self.peer_events,
                     "peer_batch_sizes":self.peer_batch_sizes,
+                    "peer_message_stream":self.config.peer_message_stream,
+                    "transport":self.outbound.iter().map(|(id,peer)|(id.to_string(),peer.stats())).collect::<BTreeMap<_,_>>(),
                     "peer_drops":self.dropped.load(Ordering::Relaxed)});
                 self.application.query(crate::apply_worker::Query {
                     reply,
@@ -354,6 +362,14 @@ impl<E: Engine> State<E> {
         Ok(())
     }
     fn effects(&mut self, effects: Vec<Effect>) -> Result<()> {
+        let epoch = (self.engine.term(), self.engine.leader());
+        if epoch != self.transport_epoch {
+            self.transport_epoch = epoch;
+            self.transport_generation += 1;
+            for peer in self.outbound.values() {
+                peer.set_generation(self.transport_generation);
+            }
+        }
         let mut applies = Vec::new();
         for effect in effects {
             match effect {
@@ -361,7 +377,7 @@ impl<E: Engine> State<E> {
                     let Some(tx) = self.outbound.get(&to) else {
                         bail!("outbound peer not in configuration")
                     };
-                    if tx.try_send((data, self.diagnostics.start())).is_err() {
+                    if tx.try_send(data, self.diagnostics.start()).is_err() {
                         self.dropped.fetch_add(1, Ordering::Relaxed);
                     }
                 }

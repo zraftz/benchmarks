@@ -14,6 +14,7 @@ from .evidence import ROOT, digest, verify, write_json
 from .report import render
 from .runner import run_case
 from .selection import select_rafter
+from .network import loopback_delay
 
 
 def archive_build(destination: Path) -> dict:
@@ -38,6 +39,8 @@ def main() -> None:
     parser.add_argument("--prior", required=True)
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--peer-batch-sizes", default="8,16,32,64")
+    parser.add_argument("--network-delays-ms", default="0", help="explicit Linux loopback netem delays; 0 leaves networking unchanged")
+    parser.add_argument("--peer-message-stream", action="store_true")
     parser.add_argument("--ordered-apply", action="store_true")
     parser.add_argument("--prior-peer-batch-size", type=int, default=1)
     parser.add_argument("--output", type=Path, required=True)
@@ -48,23 +51,30 @@ def main() -> None:
         raise ValueError("distinct peer batch sizes in 1..64 are required")
     if not 1 <= args.prior_peer_batch_size <= 64:
         raise ValueError("prior peer batch size must be 1..64")
+    delays = [int(value) for value in args.network_delays_ms.split(",")]
+    if not delays or len(set(delays)) != len(delays) or any(value < 0 or value > 100 for value in delays):
+        raise ValueError("distinct network delays in 0..100 are required")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     work = ROOT / ".cache/paired" / uuid.uuid4().hex
     data = args.data_root.resolve() / work.name
     select_rafter(args.prior)
-    build("journal", peer_group_commit=args.prior_peer_batch_size > 1)
+    build("journal", peer_group_commit=args.prior_peer_batch_size > 1, ordered_apply=args.peer_message_stream)
     prior = archive_build(work / "prior")
     write_json(output / "prior-build.json", prior)
     select_rafter(args.candidate)
-    build("journal", peer_group_commit=True, ordered_apply=args.ordered_apply)
+    build("journal", peer_group_commit=True, ordered_apply=args.ordered_apply or args.peer_message_stream)
     candidate = archive_build(work / "candidate")
     write_json(output / "candidate-build.json", candidate)
-    if args.ordered_apply:
-        subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
-            "--implementations", "rafter,raft-rs", "--ordered-apply", "--peer-batch-size", "32",
-            "--output", str(output / "worker-smoke"), "--data-root", str(data / "smoke")],
-            cwd=ROOT, check=True)
+    if args.ordered_apply or args.peer_message_stream:
+        scenarios = ("durable-kv", "leader-loss", "follower-catchup") if args.peer_message_stream else ("durable-kv",)
+        for scenario in scenarios:
+            flags = ["--peer-message-stream"] if args.peer_message_stream else []
+            subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
+                "--implementations", "rafter,raft-rs", "--ordered-apply", "--peer-batch-size", "32",
+                "--scenario", scenario, *flags,
+                "--output", str(output / f"worker-smoke-{scenario}"), "--data-root", str(data / "smoke")],
+                cwd=ROOT, check=True)
     if prior["loadgen"] != candidate["loadgen"] or digest(ROOT / "dist/raft-bench-load") != candidate["loadgen"]:
         raise RuntimeError("paired runs require the identical load generator")
     for engine in ("raft-rs", "openraft"):
@@ -74,35 +84,39 @@ def main() -> None:
     arms += [(f"candidate-b{cap}", "rafter", cap, "candidate") for cap in caps]
     write_json(output / "suite.json", {"schema": 1, "arms": arms, "rates": [0, 100, 1000], "runs": 3,
         "order": "rotate and reverse arms by repetition; all cases sequential on one host",
-        "diagnostics": "separate cases after timing runs; never pooled", "data_root": str(data)})
+        "diagnostics": "separate cases after timing runs; never pooled", "network_delays_ms": delays, "data_root": str(data)})
     failures = []
     ordinal = 0
-    for diagnostic in (False, True):
-        diagnostic_arms = [arms[0], arms[1], next((arm for arm in arms[2:] if arm[2] == 32), arms[-1])]
-        for repeat in range(1 if diagnostic else 3):
-            for rate in ([0, 1000] if diagnostic else [0, 100, 1000]):
-                for label, engine, cap, binary_set in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
-                    ordinal += 1
-                    name = f"{ordinal:03d}-{label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
-                    options = SimpleNamespace(scenario="durable-kv", smoke=False, batch_size=64,
-                        peer_batch_size=cap, diagnostics=diagnostic, duration=60, warmup=10,
-                        ordered_apply=args.ordered_apply and binary_set == "candidate" and engine == "rafter",
-                        concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
-                        read_percent=0, cas_percent=0, timeout=2, variant=label)
-                    print(f"Running {name}", flush=True)
-                    try:
-                        run_case(engine, output / name, data / name, options,
-                            command=[str(work / binary_set / f"raft-bench-{engine}")],
-                            build_receipt=prior if binary_set == "prior" else candidate)
-                        checked = verify(output / name)
-                        if checked["status"] != "passed":
-                            raise RuntimeError(f"evidence verification failed: {checked}")
-                        # Completed evidence retains configs/logs/checksums; only the generated
-                        # live node stores are reclaimed, so a long sweep fits runner storage.
-                        shutil.rmtree(data / name)
-                    except Exception as error:
-                        failures.append({"case": name, "error": str(error)})
-                        print(f"FAILED {name}: {error}", flush=True)
+    for delay in delays:
+        with loopback_delay(delay) as network:
+            write_json(output / f"network-{delay}ms.json", network)
+            for diagnostic in (False, True):
+                diagnostic_arms = [arms[0], arms[1], next((arm for arm in arms[2:] if arm[2] == 32), arms[-1])]
+                for repeat in range(1 if diagnostic else 3):
+                    for rate in ([0, 1000] if diagnostic else [0, 100, 1000]):
+                        for label, engine, cap, binary_set in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
+                            ordinal += 1
+                            name = f"{ordinal:03d}-n{delay}-{label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
+                            options = SimpleNamespace(network_delay_ms=delay, scenario="durable-kv", smoke=False, batch_size=64,
+                                peer_batch_size=cap, diagnostics=diagnostic, duration=60, warmup=10,
+                                ordered_apply=(args.peer_message_stream or (args.ordered_apply and binary_set == "candidate")) and engine == "rafter",
+                                peer_message_stream=args.peer_message_stream and binary_set == "candidate" and engine == "rafter",
+                                concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
+                                read_percent=0, cas_percent=0, timeout=2, variant=label)
+                            print(f"Running {name}", flush=True)
+                            try:
+                                run_case(engine, output / name, data / name, options,
+                                    command=[str(work / binary_set / f"raft-bench-{engine}")],
+                                    build_receipt=prior if binary_set == "prior" else candidate)
+                                checked = verify(output / name)
+                                if checked["status"] != "passed":
+                                    raise RuntimeError(f"evidence verification failed: {checked}")
+                                # Completed evidence retains configs/logs/checksums; only the generated
+                                # live node stores are reclaimed, so a long sweep fits runner storage.
+                                shutil.rmtree(data / name)
+                            except Exception as error:
+                                failures.append({"case": name, "error": str(error)})
+                                print(f"FAILED {name}: {error}", flush=True)
     write_json(output / "completion.json", {"failures": failures})
     render(output, output / "report.html")
     if failures:
