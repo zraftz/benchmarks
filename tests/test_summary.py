@@ -33,15 +33,17 @@ def service_case(variant, engine, delay, rate, throughput, p99, *, p999=None, un
         "measurement_mode": "timing",
         "metric_definitions": {"throughput_ops_s": "ops", "client_p99_ms": "p99",
                                "client_p999_ms": "p99.9", "execution_p99_ms": "execution p99",
-                               "execution_p999_ms": "execution p99.9", "aggregate": "median"},
+                               "execution_p999_ms": "execution p99.9", "client_start_p99_ms": "start p99",
+                               "aggregate": "median"},
         "repetition": 1,
         "smoke": False,
         "qualification": "passed",
         "qualification_errors": [],
         "metrics": {"throughput_ops_s": throughput, "client_p99_ms": p99,
                     "client_p999_ms": p999, "execution_p99_ms": p99,
-                    "execution_p999_ms": p999},
+                    "execution_p999_ms": p999, "client_start_p99_ms": 0.1},
         "accounting": {"offered": 1000, "attempted": 1000 - unsent, "ok": 1000 - unsent,
+                       "completed_in_window": 1000 - unsent,
                        "errors": 0, "unknown": 0, "not_issued": unsent},
         "recovery": {"status": "passed"},
         "history_check": {"status": "passed"},
@@ -145,7 +147,8 @@ class SummaryTests(unittest.TestCase):
                 extras.append(other)
         data["cases"].extend(extras)
         data["suite"]["arms"].append(["candidate-b64", "rafter", 64, "candidate"])
-        section = build_summary(durable=data)["sections"][2]
+        summary = build_summary(durable=data)
+        section = summary["sections"][2]
         self.assertEqual(section["status"], "not comparable")
         selected = build_summary(durable=data, headline_variant="candidate-b32")["sections"][2]
         self.assertEqual(selected["status"], "measured lead")
@@ -170,6 +173,37 @@ class SummaryTests(unittest.TestCase):
         )["sections"][2]
         self.assertEqual(selected["status"], "measured lead")
         self.assertEqual(selected["selected_configuration"]["openraft_variant"], "openraft-async")
+
+    def test_capacity_curve_uses_declared_objective(self):
+        data = durable_data()
+        data["cases"] = []
+        for rate in (2000, 4000):
+            data["cases"].append(service_case(
+                "candidate-b32", "rafter", 0, rate,
+                1995 if rate == 2000 else 3980, 8 if rate == 2000 else 18,
+                p999=15 if rate == 2000 else 40,
+            ))
+            data["cases"].append(service_case(
+                "openraft", "openraft", 0, rate,
+                1990 if rate == 2000 else 3900, 12 if rate == 2000 else 25,
+                p999=30 if rate == 2000 else 60,
+            ))
+        summary = build_summary(durable=data)
+        section = summary["sections"][2]
+        self.assertEqual(section["status"], "measured lead")
+        self.assertEqual(section["rows"], [])
+        self.assertEqual(section["capacity"]["boundaries"], [{
+            "network_delay_ms": 0,
+            "maximum_tested_rate": 4000,
+            "rafter_highest_qualifying_rate": 4000,
+            "rafter_reached_tested_ceiling": True,
+            "openraft_highest_qualifying_rate": 2000,
+            "openraft_reached_tested_ceiling": False,
+        }])
+        rendered = render_markdown(summary, {})
+        self.assertIn("Useful-capacity objective", rendered)
+        self.assertIn("Execution p99/p99.9", rendered)
+        self.assertIn("Useful-capacity objective", render_html(summary, {}))
 
     def test_incomplete_suite_suppresses_headline(self):
         data = durable_data()

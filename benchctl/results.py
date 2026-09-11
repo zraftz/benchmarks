@@ -112,9 +112,10 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "client_p999_ms": measurement.get("success_latency", {}).get("p999_ms"),
             "execution_p99_ms": measurement.get("success_execution_latency", {}).get("p99_ms"),
             "execution_p999_ms": measurement.get("success_execution_latency", {}).get("p999_ms"),
+            "client_start_p99_ms": measurement.get("worker_start_lateness", {}).get("p99_ms"),
         }
         accounting = {key: measurement.get(key) for key in
-                      ("offered", "attempted", "ok", "errors", "unknown", "not_issued")}
+                      ("offered", "attempted", "ok", "completed_in_window", "errors", "unknown", "not_issued")}
     receipt = manifest.get("build_receipt") or {}
     return {
         "layer": "complete_service",
@@ -140,6 +141,7 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "client_p999_ms": "scheduled arrival to successful client completion; upper-bound histogram p99.9",
             "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
             "execution_p999_ms": "client request start to successful completion; upper-bound histogram p99.9",
+            "client_start_p99_ms": "scheduled arrival to client request start; upper-bound histogram p99",
             "aggregate": "median of per-repetition values; percentiles are not pooled",
         },
         "repetition": options.get("seed"),
@@ -241,9 +243,10 @@ def aggregate_durable(data: dict) -> list[dict]:
         if not reasons:
             row["metrics"] = {name: _median_metric(samples, name) for name in
                               ("throughput_ops_s", "client_p99_ms", "client_p999_ms",
-                               "execution_p99_ms", "execution_p999_ms")}
+                               "execution_p99_ms", "execution_p999_ms", "client_start_p99_ms")}
             row["accounting"] = {key: sum(sample["accounting"][key] for sample in samples)
-                                 for key in ("offered", "attempted", "ok", "errors", "unknown", "not_issued")}
+                                 for key in ("offered", "attempted", "ok", "completed_in_window",
+                                             "errors", "unknown", "not_issued")}
         rows.append(row)
     return rows
 

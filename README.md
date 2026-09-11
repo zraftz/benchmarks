@@ -79,7 +79,10 @@ Generate or regenerate a layered report from immutable evidence with:
 
 When a paired suite contains several candidate batch caps, pass
 `--headline-variant candidate-b32` (or another explicit variant). The report
-never selects the most attractive candidate automatically.
+never selects the most attractive candidate automatically. Paired runs may
+retain both `openraft` and `openraft-async`; pass `--headline-control-variant`
+to choose one explicitly. With more than one control, no headline is selected
+implicitly.
 
 ## Compare changes
 
@@ -96,6 +99,7 @@ runner. Timing and diagnostic cases stay separate in `results/paired/`.
 | Build `--rafter-hard-state journal` or `wal` | Select supported native storage; `replace` is the default |
 | Build/run `--pipelined-durability` | Rafter only: overlap eligible replication and local persistence |
 | Run `--max-speculative-proposals N` | Bound ready proposal batches eligible for that overlap; default 1 |
+| Run `--openraft-async-flush --implementations openraft` | Exercise OpenRaft's callback-driven ordered log flusher |
 
 Options require a Rafter revision supporting the corresponding API. Pipeline
 mode also enables ordered apply and message transport. Paired CI offers
@@ -112,6 +116,16 @@ dispatch, start, durable completion, and client completion points. These are cal
 not kernel storage-commit timestamps. Diagnostics also retain owner persistence blocking,
 replication-ack queue delay, proposal-batch distribution, and owner-observed full replication-window
 time. Paired CI can sweep speculative limits and restrict timing and diagnostic rates independently.
+It can also retain synchronous and asynchronous OpenRaft storage controls as
+separately named arms.
+
+For an offered-load envelope, set `paired_rates` to a fixed curve such as
+`1000,2000,3000,4000,6000,8000,10000,12000`, keep one Rafter batch cap and
+speculative threshold, and restrict diagnostics to one selected rate. The
+layered report declares useful capacity only when every repetition achieves at
+least 99% of offered load, p99 is at most 20 ms, p99.9 is at most 50 ms, and
+errors, unknown outcomes, and unsent requests are all zero. The detailed table
+retains every tested point and client-start waiting time.
 
 ## Development
 

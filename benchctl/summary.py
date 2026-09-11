@@ -14,6 +14,13 @@ from .results import aggregate_durable, load_durable_suite, load_microbench, loa
 
 
 MIN_MEMORY_REPETITIONS = 7
+SERVICE_OBJECTIVE = {
+    "minimum_achieved_percent": 99.0,
+    "maximum_p99_ms": 20.0,
+    "maximum_p999_ms": 50.0,
+    "require_zero_errors_unknown_and_unsent": True,
+    "evaluation": "Every repetition must meet the rate and tail limits; accounting is summed without survivor filtering.",
+}
 
 
 def _source_refs(evidence: str, cases: Iterable[str]) -> list[dict]:
@@ -130,6 +137,110 @@ def _candidate_variants(durable: dict, rows: list[dict]) -> tuple[list[str], lis
     return candidates, priors
 
 
+def _capacity_point(row: dict) -> dict:
+    offered = row["workload"]["offered_per_second"]
+    minimum_achieved = row["metrics"]["throughput_ops_s"]["min"]
+    accounting = row["accounting"]
+    loss = sum(accounting[key] for key in ("errors", "unknown", "not_issued"))
+    achieved_percent = minimum_achieved / offered * 100.0
+    p99 = row["metrics"]["client_p99_ms"]["max"]
+    p999 = row["metrics"]["client_p999_ms"]["max"]
+    return {
+        "offered_per_second": offered,
+        "minimum_achieved_ops_s": minimum_achieved,
+        "minimum_achieved_percent": achieved_percent,
+        "worst_repetition_p99_ms": p99,
+        "worst_repetition_p999_ms": p999,
+        "worst_repetition_execution_p99_ms": row["metrics"]["execution_p99_ms"]["max"],
+        "worst_repetition_execution_p999_ms": row["metrics"]["execution_p999_ms"]["max"],
+        "worst_repetition_client_start_p99_ms": row["metrics"]["client_start_p99_ms"]["max"],
+        "errors": accounting["errors"],
+        "unknown": accounting["unknown"],
+        "unsent": accounting["not_issued"],
+        "completed_after_window": accounting["ok"] - accounting["completed_in_window"],
+        "qualifies": (achieved_percent >= SERVICE_OBJECTIVE["minimum_achieved_percent"]
+                      and p99 <= SERVICE_OBJECTIVE["maximum_p99_ms"]
+                      and p999 <= SERVICE_OBJECTIVE["maximum_p999_ms"]
+                      and loss == 0),
+    }
+
+
+def _capacity_summary(rows: list[dict], candidate: str, control: str) -> dict:
+    candidate_delays = {row["workload"]["network_delay_ms"] for row in rows
+                        if row["configuration"]["variant"] == candidate}
+    control_delays = {row["workload"]["network_delay_ms"] for row in rows
+                      if row["configuration"]["variant"] == control}
+    curves = []
+    boundaries = []
+    sources = []
+    for delay in sorted(candidate_delays & control_delays):
+        candidate_rates = {row["workload"]["offered_per_second"] for row in rows
+                           if row["configuration"]["variant"] == candidate
+                           and row["workload"]["network_delay_ms"] == delay
+                           and row["workload"]["offered_per_second"] > 0}
+        control_rates = {row["workload"]["offered_per_second"] for row in rows
+                         if row["configuration"]["variant"] == control
+                         and row["workload"]["network_delay_ms"] == delay
+                         and row["workload"]["offered_per_second"] > 0}
+        common_rates = sorted(candidate_rates & control_rates)
+        if not common_rates:
+            continue
+        delay_rows = []
+        for rate in common_rates:
+            candidate_row = _one(rows, variant=candidate, rate=rate, delay=delay)
+            control_row = _one(rows, variant=control, rate=rate, delay=delay)
+            sources.extend(candidate_row["source_cases"] + control_row["source_cases"])
+            delay_rows.append({
+                "network_delay_ms": delay,
+                "offered_per_second": rate,
+                "rafter": _capacity_point(candidate_row),
+                "openraft": _capacity_point(control_row),
+            })
+        candidate_qualified = [row["offered_per_second"] for row in delay_rows if row["rafter"]["qualifies"]]
+        control_qualified = [row["offered_per_second"] for row in delay_rows if row["openraft"]["qualifies"]]
+        candidate_max = max(candidate_qualified, default=None)
+        control_max = max(control_qualified, default=None)
+        tested_max = common_rates[-1]
+        boundaries.append({
+            "network_delay_ms": delay,
+            "maximum_tested_rate": tested_max,
+            "rafter_highest_qualifying_rate": candidate_max,
+            "rafter_reached_tested_ceiling": candidate_max == tested_max,
+            "openraft_highest_qualifying_rate": control_max,
+            "openraft_reached_tested_ceiling": control_max == tested_max,
+        })
+        curves.extend(delay_rows)
+    if not boundaries:
+        return {"status": "not measured", "result": "No common fixed-rate capacity curve was selected.",
+                "objective": SERVICE_OBJECTIVE, "boundaries": [], "rows": [], "source_cases": []}
+    comparisons = []
+    for boundary in boundaries:
+        candidate_value = boundary["rafter_highest_qualifying_rate"] or 0
+        control_value = boundary["openraft_highest_qualifying_rate"] or 0
+        comparisons.append((candidate_value > control_value) - (candidate_value < control_value))
+    status = ("mixed result" if any(value < 0 for value in comparisons)
+              else "measured lead" if any(value > 0 for value in comparisons)
+              else "roughly level")
+    no_delay = next((boundary for boundary in boundaries if boundary["network_delay_ms"] == 0), boundaries[0])
+
+    def describe(prefix: str) -> str:
+        value = no_delay[f"{prefix}_highest_qualifying_rate"]
+        if value is None:
+            return "no tested rate"
+        qualifier = "at least " if no_delay[f"{prefix}_reached_tested_ceiling"] else ""
+        return f"{qualifier}{value:,.0f} writes/s"
+
+    return {
+        "status": status,
+        "result": (f"At {no_delay['network_delay_ms']} ms added egress, Rafter met the declared service objective through "
+                   f"{describe('rafter')}; the selected OpenRaft control met it through {describe('openraft')}."),
+        "objective": SERVICE_OBJECTIVE,
+        "boundaries": boundaries,
+        "rows": curves,
+        "source_cases": _source_refs("durable_service", sources),
+    }
+
+
 def _service_section(durable: dict | None, headline_variant: str | None,
                      headline_control_variant: str | None) -> dict:
     section = {
@@ -141,6 +252,8 @@ def _service_section(durable: dict | None, headline_variant: str | None,
         "conditions": None,
         "rows": [],
         "internal_comparisons": [],
+        "capacity": {"status": "not measured", "result": "No common fixed-rate capacity curve was selected.",
+                     "objective": SERVICE_OBJECTIVE, "boundaries": [], "rows": [], "source_cases": []},
         "source_cases": [],
         "comparison_kind": "competitor comparison",
     }
@@ -172,8 +285,36 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                     + ", ".join(openraft_variants)),
         )
         return section
+    capacity = _capacity_summary(rows, selected, control)
+    section["capacity"] = capacity
     delays = sorted({row["workload"]["network_delay_ms"] for row in rows
                      if row["configuration"]["variant"] == selected})
+    required_rates = {0, 100, 1000}
+    available = {(row["configuration"]["variant"], row["workload"]["network_delay_ms"],
+                  row["workload"]["offered_per_second"]) for row in rows}
+    standard_complete = all((variant, delay, rate) in available
+                            for variant in (selected, control) for delay in delays for rate in required_rates)
+    candidate_rows = [row for row in rows if row["configuration"]["variant"] == selected]
+    control_rows = [row for row in rows if row["configuration"]["variant"] == control]
+    example = candidate_rows[0]
+    openraft = control_rows[0]
+    selected_configuration = {"name": example["display_name"], "variant": selected,
+                              "rafter_version": example["engine"]["version"],
+                              "openraft_control": openraft["display_name"],
+                              "openraft_variant": control,
+                              "openraft_version": openraft["engine"]["version"]}
+    if not standard_complete:
+        if capacity["rows"]:
+            section.update(status=capacity["status"], result=capacity["result"],
+                           conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
+                                       f"{example['workload']['payload_bytes']}-byte writes; {example['repetitions']} repetitions per point. "
+                                       "Each capacity decision uses the worst repetition and complete loss accounting."),
+                           selected_configuration=selected_configuration,
+                           source_cases=capacity["source_cases"])
+        else:
+            section.update(status="not comparable",
+                           result="The standard service points are incomplete and no fixed-rate capacity curve is available.")
+        return section
     result_rows = []
     sources = []
     try:
@@ -228,8 +369,6 @@ def _service_section(durable: dict | None, headline_variant: str | None,
     except NotComparable as error:
         section.update(status="not comparable", result=str(error))
         return section
-    candidate_rows = [row for row in rows if row["configuration"]["variant"] == selected]
-    control_rows = [row for row in rows if row["configuration"]["variant"] == control]
     candidate_accounting = {key: sum(row["accounting"][key] for row in candidate_rows)
                             for key in ("errors", "unknown", "not_issued")}
     control_accounting = {key: sum(row["accounting"][key] for row in control_rows)
@@ -269,8 +408,6 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                                  "interpretation": change["label"],
                                  "latencies": latency_rows,
                                  "source_cases": _source_refs("durable_service", internal_sources)})
-    example = candidate_rows[0]
-    openraft = control_rows[0]
     interpretations = [row[key] for row in result_rows for key in
                        ("throughput_interpretation", "saturated_p99_interpretation",
                         "saturated_p999_interpretation", "p99_at_100_interpretation",
@@ -299,15 +436,11 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                     f"{example['workload']['payload_bytes']}-byte writes; medians of {example['repetitions']} repetitions. "
                     "Success requires Raft commitment and durable application completion. Added delay affects client and peer egress. "
                     "Storage, codec, and scheduling choices differ between integrations."),
-        selected_configuration={"name": example["display_name"], "variant": selected,
-                                "rafter_version": example["engine"]["version"],
-                                "openraft_control": openraft["display_name"],
-                                "openraft_variant": control,
-                                "openraft_version": openraft["engine"]["version"]},
+        selected_configuration=selected_configuration,
         rows=result_rows,
         accounting={"rafter": candidate_accounting, "openraft": control_accounting},
         internal_comparisons=internal,
-        source_cases=_source_refs("durable_service", sources),
+        source_cases=_source_refs("durable_service", sources) + capacity["source_cases"],
     )
     return section
 
@@ -480,6 +613,27 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                     scenarios = ", ".join(f"{item['scenario']} {item['status']}" for item in check["scenarios"])
                     lines.append(f"- {check['name']}: {scenarios} — {check['scope']}")
             lines.append("")
+        if section_id == "complete-durable-service" and section["capacity"]["rows"]:
+            objective = section["capacity"]["objective"]
+            lines += [f"Useful-capacity objective: every repetition achieves at least "
+                      f"{objective['minimum_achieved_percent']:.0f}% of offered load, p99 ≤ "
+                      f"{objective['maximum_p99_ms']:.0f} ms, p99.9 ≤ {objective['maximum_p999_ms']:.0f} ms, "
+                      "and zero errors, unknown outcomes, or unsent requests.", "",
+                      f"**{section['capacity']['result']}**", "",
+                      "| Added egress | Offered | Engine | Min achieved | Arrival p99/p99.9 | Execution p99/p99.9 | Start-wait p99 | Post-window | Loss | Meets objective |",
+                      "| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | :---: |"]
+            for row in section["capacity"]["rows"]:
+                for engine, label in (("rafter", "Rafter"), ("openraft", "OpenRaft")):
+                    point = row[engine]
+                    loss = point["errors"] + point["unknown"] + point["unsent"]
+                    lines.append(f"| {row['network_delay_ms']} ms | {_fmt_ops(row['offered_per_second'])}/s | {label} | "
+                                 f"{_fmt_ops(point['minimum_achieved_ops_s'])}/s ({point['minimum_achieved_percent']:.1f}%) | "
+                                 f"{_fmt_ms(point['worst_repetition_p99_ms'])} / {_fmt_ms(point['worst_repetition_p999_ms'])} | "
+                                 f"{_fmt_ms(point['worst_repetition_execution_p99_ms'])} / {_fmt_ms(point['worst_repetition_execution_p999_ms'])} | "
+                                 f"{_fmt_ms(point['worst_repetition_client_start_p99_ms'])} | "
+                                 f"{point['completed_after_window']} | {loss} | "
+                                 f"{'yes' if point['qualifies'] else 'no'} |")
+            lines.append("")
         if section.get("conditions"):
             lines += [section["conditions"], ""]
         if section.get("details"):
@@ -574,6 +728,32 @@ def render_html(summary: dict, evidence: dict) -> str:
                          ", ".join(f"{item['scenario']} {item['status']}" for item in check["scenarios"]))
                 items.append(f"<li><strong>{html.escape(check['name'])}:</strong> {html.escape(value)} — {html.escape(check['scope'])}</li>")
             content.append("<ul>" + "".join(items) + "</ul>")
+        if section_id == "complete-durable-service" and section["capacity"]["rows"]:
+            objective = section["capacity"]["objective"]
+            content.append(f"<p>Useful-capacity objective: every repetition achieves at least "
+                           f"{objective['minimum_achieved_percent']:.0f}% of offered load, p99 ≤ "
+                           f"{objective['maximum_p99_ms']:.0f} ms, p99.9 ≤ {objective['maximum_p999_ms']:.0f} ms, "
+                           "and zero errors, unknown outcomes, or unsent requests.</p>")
+            content.append(f"<p><strong>{html.escape(section['capacity']['result'])}</strong></p>")
+            capacity_body = ""
+            for row in section["capacity"]["rows"]:
+                for engine, label in (("rafter", "Rafter"), ("openraft", "OpenRaft")):
+                    point = row[engine]
+                    loss = point["errors"] + point["unknown"] + point["unsent"]
+                    capacity_body += (f"<tr><td>{row['network_delay_ms']} ms</td><td>{_fmt_ops(row['offered_per_second'])}/s</td>"
+                                      f"<td>{label}</td><td>{_fmt_ops(point['minimum_achieved_ops_s'])}/s "
+                                      f"({point['minimum_achieved_percent']:.1f}%)</td>"
+                                      f"<td>{_fmt_ms(point['worst_repetition_p99_ms'])} / "
+                                      f"{_fmt_ms(point['worst_repetition_p999_ms'])}</td>"
+                                      f"<td>{_fmt_ms(point['worst_repetition_execution_p99_ms'])} / "
+                                      f"{_fmt_ms(point['worst_repetition_execution_p999_ms'])}</td>"
+                                      f"<td>{_fmt_ms(point['worst_repetition_client_start_p99_ms'])}</td>"
+                                      f"<td>{point['completed_after_window']}</td><td>{loss}</td>"
+                                      f"<td>{'yes' if point['qualifies'] else 'no'}</td></tr>")
+            content.append("<div class='table'><table><thead><tr><th>Added egress</th><th>Offered</th><th>Engine</th>"
+                           "<th>Min achieved</th><th>Arrival p99/p99.9</th><th>Execution p99/p99.9</th>"
+                           "<th>Start-wait p99</th><th>Post-window</th>"
+                           f"<th>Loss</th><th>Meets objective</th></tr></thead><tbody>{capacity_body}</tbody></table></div>")
         if section.get("conditions"):
             content.append(f"<p class='conditions'>{html.escape(section['conditions'])}</p>")
         if section.get("details"):

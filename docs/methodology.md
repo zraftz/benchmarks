@@ -58,6 +58,15 @@ shared application journal records apply index and retry identity, synchronizes
 new files/directories, truncates incomplete trailing records on replay, and
 rejects complete records with invalid checksums.
 
+The OpenRaft baseline synchronizes each log append before invoking OpenRaft's
+flush callback. The separately named async control stages appended entries so
+they are immediately readable, publishes them through one bounded ordered
+journal worker, and invokes the callback only after synchronization. Vote,
+committed-index, and truncation writes use the same ordered worker and wait for
+a durability fence. Both controls keep identical application durability and
+client-completion contracts; reports never combine their aggregates or choose
+between them implicitly.
+
 | Metric | Meaning |
 |---|---|
 | Successes/s | Successful logical operations completed inside the measurement window |
@@ -70,6 +79,15 @@ rejects complete records with invalid checksums.
 Latency distributions are measured separately; subtracting percentiles does not
 recover a server-side percentile. Unsent work was never accepted by a server.
 A late completion is retained but does not inflate in-window throughput.
+
+Fixed offered-load curves also evaluate a declared useful-capacity objective.
+Every repetition must achieve at least 99% of the offered rate, keep arrival
+p99 at or below 20 ms and p99.9 at or below 50 ms, and record zero errors,
+unknown outcomes, and unsent requests. The decision uses the worst repetition,
+not only its median. Client-start waiting and completions after the measurement
+window remain visible as queue-pressure evidence. A highest qualifying point at
+the top of the tested curve is reported as a lower bound, never as maximum
+capacity.
 
 Every case checks a complete 64-operation Put/Get/CAS history and acknowledged
 canaries across simultaneous process restarts, before and after load. These
