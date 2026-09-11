@@ -75,80 +75,30 @@ impl Journal {
     }
     pub fn append<T: Serialize>(&mut self, record: &T) -> Result<()> {
         let started = self.diagnostics.start();
-        let bytes = serde_json::to_vec(record)?;
-        if bytes.is_empty() || bytes.len() > MAX_RECORD {
+        let mut frame = vec![0; 8];
+        serde_json::to_writer(&mut frame, record)?;
+        let payload_len = frame.len() - 8;
+        if payload_len == 0 || payload_len > MAX_RECORD {
             bail!("journal record exceeds limit");
         }
-        let checksum = crc32(&bytes);
+        let checksum = crc32(&frame[8..]);
+        frame[..4].copy_from_slice(&(payload_len as u32).to_be_bytes());
+        frame[4..8].copy_from_slice(&checksum.to_be_bytes());
         self.diagnostics.elapsed("journal_encode_ns", started);
         let started = self.diagnostics.start();
-        self.file.write_all(&(bytes.len() as u32).to_be_bytes())?;
-        self.file.write_all(&checksum.to_be_bytes())?;
-        self.file.write_all(&bytes)?;
+        self.file.write_all(&frame)?;
         self.diagnostics.elapsed("journal_write_ns", started);
         let started = self.diagnostics.start();
         self.file.sync_data()?;
         self.diagnostics.elapsed("journal_sync_ns", started);
         self.syncs += 1;
-        self.bytes += bytes.len() as u64 + 8;
+        self.bytes += frame.len() as u64;
         Ok(())
     }
 }
 pub fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for &byte in bytes {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb88320 & 0u32.wrapping_sub(crc & 1));
-        }
-    }
-    !crc
+    crc32fast::hash(bytes)
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    fn path() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "raft-bench-wal-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ))
-    }
-    #[test]
-    fn standard_crc() {
-        assert_eq!(crc32(b"123456789"), 0xcbf43926);
-    }
-    #[test]
-    fn recover_and_trim_partial_tail() {
-        let p = path();
-        let (mut j, _) = Journal::open::<Vec<u64>>(&p).unwrap();
-        j.append(&vec![1u64, 2, 3]).unwrap();
-        drop(j);
-        let len = std::fs::metadata(&p).unwrap().len();
-        OpenOptions::new()
-            .append(true)
-            .open(&p)
-            .unwrap()
-            .write_all(&[0, 0, 0])
-            .unwrap();
-        let (j, records) = Journal::open::<Vec<u64>>(&p).unwrap();
-        assert_eq!(records, vec![vec![1, 2, 3]]);
-        assert_eq!(std::fs::metadata(&p).unwrap().len(), len);
-        drop(j);
-        std::fs::remove_file(p).unwrap();
-    }
-    #[test]
-    fn reject_complete_corruption() {
-        let p = path();
-        let (mut j, _) = Journal::open::<Vec<u64>>(&p).unwrap();
-        j.append(&vec![1u64]).unwrap();
-        drop(j);
-        let mut b = std::fs::read(&p).unwrap();
-        b[8] ^= 1;
-        std::fs::write(&p, b).unwrap();
-        assert!(Journal::open::<Vec<u64>>(&p).is_err());
-        std::fs::remove_file(p).unwrap();
-    }
-}
+#[path = "journal_test.rs"]
+mod tests;
