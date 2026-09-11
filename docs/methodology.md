@@ -1,5 +1,27 @@
 # Methodology
 
+## Evidence classification
+
+The layered report classifies evidence before comparing it:
+
+| Layer | Completion question | Allowed comparison |
+|---|---|---|
+| Consensus in memory | Did the same leader-side application operation complete? | Competitors only after completion boundaries align |
+| Durable replication | Did the same Rafter durability batch complete? | Rafter storage backends; competitor claims require an equivalent contract |
+| Complete durable service | Did the client receive a result after Raft commitment and durable application? | Same workload, host, timing mode, and semantic contract |
+| Failure and sustained operation | What remained responsive and recovered during a controlled fault or soak? | Correctness checks stay separate from performance results |
+
+Normalized records retain the layer, engine/version, named configuration,
+workload, completion boundary, environment, repetitions, metric definition, and
+source cases. Comparisons fail closed when payload, concurrency, rate, fault
+scenario, completion contract, environment, or timing/diagnostic mode differs.
+Incomplete evidence suppresses the headline rather than dropping failed cases.
+Differences within an a priori ±3% band are described as roughly level.
+
+Report generation is deterministic. An LLM may later rewrite already-verified
+prose for another audience, but it must never select cases, calculate metrics,
+or produce the authoritative JSON.
+
 ## In-memory suite
 
 Three voters in one process, in-memory stores, 512-byte values for serial and
@@ -7,6 +29,12 @@ pipelined workloads, and a separate large-payload probe. Rafter and raft-rs use
 an explicit message pump; OpenRaft runs on a single-thread Tokio runtime.
 Each binary states its completion boundary in the raw JSON and report. The
 suite measures protocol/runtime work without TCP or disk persistence.
+
+The current boundaries are not identical: Rafter observes `Apply`, raft-rs
+handles the committed entry, and OpenRaft returns from `client_write()` after
+leader-side application. The layered report therefore labels the comparison
+pending qualification rather than publishing a shared leaderboard. Multi-write
+workloads are submission bursts, not continuously replenished windows.
 
 The sources were imported from Rafter; [UPSTREAM.json](../microbench/UPSTREAM.json)
 records their origin. They are maintained in this repo so changing the Rafter

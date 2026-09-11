@@ -155,6 +155,17 @@ def main() -> None:
     p = sub.add_parser("report")
     p.add_argument("suite", type=Path)
     p.add_argument("--output", type=Path, required=True)
+    p = sub.add_parser("summary", help="generate one layered HTML, Markdown, and JSON performance report")
+    p.add_argument("--durable-suite", type=Path)
+    p.add_argument("--storage-suite", type=Path)
+    p.add_argument("--microbench", type=Path)
+    p.add_argument("--history-suite", type=Path, action="append", default=[])
+    p.add_argument("--headline-variant", help="explicit Rafter variant when a suite contains multiple candidate arms")
+    p.add_argument("--durable-url")
+    p.add_argument("--storage-url")
+    p.add_argument("--micro-url")
+    p.add_argument("--history-url", action="append", default=[])
+    p.add_argument("--output", type=Path, required=True)
     p = sub.add_parser("node-configs")
     p.add_argument("--inventory", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
@@ -186,6 +197,16 @@ def main() -> None:
         elif args.command == "report":
             from .report import render
             render(args.suite, args.output)
+        elif args.command == "summary":
+            if not any((args.durable_suite, args.storage_suite, args.microbench)):
+                raise ValueError("summary requires at least one primary evidence suite")
+            from .summary import generate
+            generate(destination=args.output, durable_path=args.durable_suite,
+                     storage_path=args.storage_suite, micro_path=args.microbench,
+                     history_paths=args.history_suite, headline_variant=args.headline_variant,
+                     durable_url=args.durable_url, storage_url=args.storage_url,
+                     micro_url=args.micro_url, history_urls=args.history_url)
+            print(f"Summary: {args.output / 'report.html'}")
         elif args.command == "node-configs":
             node_configs(args.inventory, args.output)
         elif args.command == "initialize":

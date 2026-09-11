@@ -1,5 +1,9 @@
 # Raft benchmarks
 
+Current qualified evidence: [one-minute summary](reports/qualified-34609743659/summary.md) ·
+[static HTML](reports/qualified-34609743659/report.html) ·
+[normalized JSON](reports/qualified-34609743659/summary.json)
+
 Compare Rafter, raft-rs, and OpenRaft with two suites:
 
 | Suite | Measures | Output |
@@ -22,6 +26,19 @@ Download the `benchmarks-<run-id>` artifact. Open `results/microbench/report.htm
 and/or `results/baseline/report.html`. Raw measurements and source/build identity
 are alongside each report. Shared GitHub runners provide an initial reference;
 rerun all engines together when comparing changes.
+
+Selected runs also produce `results/summary/`:
+
+| File | Use |
+|---|---|
+| `report.html` | One-page implementation-performance report |
+| `summary.md` | GitHub summary, PR, or README excerpt |
+| `summary.json` | Normalized metrics and exact source-case references |
+
+The page asks four questions: consensus in memory, durable replication,
+complete durable service, and failure/sustained operation. Missing or
+incompatible evidence stays visibly unmeasured. The generator is deterministic
+and does not use an LLM or require an API key.
 
 The durable baseline runs 27 cases: three engines × three load levels × three
 repetitions, with 60 seconds measured per case. Allow about 40–60 minutes.
@@ -49,6 +66,20 @@ Results live under `results/`. Verify a case or an in-memory suite with:
 ```sh
 ./raft-bench verify <result-directory>
 ```
+
+Generate or regenerate a layered report from immutable evidence with:
+
+```sh
+./raft-bench summary \
+  --durable-suite /path/to/results/paired \
+  --storage-suite /path/to/hard-state-evidence \
+  --history-suite /path/to/prior/results/paired \
+  --output /path/to/new-report
+```
+
+When a paired suite contains several candidate batch caps, pass
+`--headline-variant candidate-b32` (or another explicit variant). The report
+never selects the most attractive candidate automatically.
 
 ## Compare changes
 

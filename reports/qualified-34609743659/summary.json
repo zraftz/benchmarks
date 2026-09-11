@@ -1,0 +1,2885 @@
+{
+  "evidence": {
+    "durable_replication": {
+      "artifact_path": ".",
+      "href": "https://github.com/zsumz/rafter/actions/runs/34599862151",
+      "label": "Storage evidence",
+      "local_root": null
+    },
+    "durable_service": {
+      "artifact_path": "results/paired",
+      "href": "https://github.com/zraftz/benchmarks/actions/runs/34609743659",
+      "label": "Detailed service results",
+      "local_root": null
+    },
+    "history_1": {
+      "artifact_path": "results/paired",
+      "href": "https://github.com/zraftz/benchmarks/actions/runs/34599945967",
+      "label": "Historical run 1",
+      "local_root": null
+    }
+  },
+  "evidence_status": {
+    "complete_durable_service": "passed",
+    "consensus_in_memory": "not measured",
+    "durable_replication": "passed"
+  },
+  "interpretation": {
+    "roughly_level_percent": 3.0,
+    "rule": "Differences within \u00b13% are roughly level; comparisons fail closed across incompatible evidence."
+  },
+  "normalized_results": {
+    "complete_durable_service": [
+      {
+        "accounting": {
+          "attempted": 382818,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 382818,
+          "ok": 382818,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "adapter_journal",
+          "mode": "public_api",
+          "peer_batch_size": 1,
+          "variant": "openraft"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 43.515903,
+            "median": 41.943039,
+            "min": 40.370175
+          },
+          "execution_p99_ms": {
+            "max": 43.515903,
+            "median": 41.943039,
+            "min": 40.370175
+          },
+          "throughput_ops_s": {
+            "max": 2146.1833333333334,
+            "median": 2116.35,
+            "min": 2114.5666666666666
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "002-n0-openraft-r1-q0-timing",
+          "012-n0-openraft-r2-q0-timing",
+          "021-n0-openraft-r3-q0-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 0,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 18000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 18000,
+          "ok": 18000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "adapter_journal",
+          "mode": "public_api",
+          "peer_batch_size": 1,
+          "variant": "openraft"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 5.898239,
+            "median": 5.373951,
+            "min": 5.046271
+          },
+          "execution_p99_ms": {
+            "max": 5.242879,
+            "median": 4.784127,
+            "min": 4.456447
+          },
+          "throughput_ops_s": {
+            "max": 100,
+            "median": 100,
+            "min": 100
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "005-n0-openraft-r1-q100-timing",
+          "015-n0-openraft-r2-q100-timing",
+          "024-n0-openraft-r3-q100-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 100,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 180000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 180000,
+          "ok": 180000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "adapter_journal",
+          "mode": "public_api",
+          "peer_batch_size": 1,
+          "variant": "openraft"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 22.282239,
+            "median": 18.087935,
+            "min": 13.500415
+          },
+          "execution_p99_ms": {
+            "max": 21.495807,
+            "median": 17.563647,
+            "min": 12.845055
+          },
+          "throughput_ops_s": {
+            "max": 999.95,
+            "median": 999.95,
+            "min": 999.95
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "008-n0-openraft-r1-q1000-timing",
+          "018-n0-openraft-r2-q1000-timing",
+          "027-n0-openraft-r3-q1000-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 1000,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 302231,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 302231,
+          "ok": 302231,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "adapter_journal",
+          "mode": "public_api",
+          "peer_batch_size": 1,
+          "variant": "openraft"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 59.244543,
+            "median": 53.477375,
+            "min": 50.855935
+          },
+          "execution_p99_ms": {
+            "max": 59.244543,
+            "median": 53.477375,
+            "min": 50.855935
+          },
+          "throughput_ops_s": {
+            "max": 1730.2833333333333,
+            "median": 1665.8833333333334,
+            "min": 1637.8166666666666
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "038-n2-openraft-r1-q0-timing",
+          "048-n2-openraft-r2-q0-timing",
+          "057-n2-openraft-r3-q0-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 0,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 18000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 18000,
+          "ok": 18000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "adapter_journal",
+          "mode": "public_api",
+          "peer_batch_size": 1,
+          "variant": "openraft"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 16.515071,
+            "median": 16.383999,
+            "min": 15.859711
+          },
+          "execution_p99_ms": {
+            "max": 15.990783,
+            "median": 15.859711,
+            "min": 15.335423
+          },
+          "throughput_ops_s": {
+            "max": 99.98333333333333,
+            "median": 99.98333333333333,
+            "min": 99.98333333333333
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "041-n2-openraft-r1-q100-timing",
+          "051-n2-openraft-r2-q100-timing",
+          "060-n2-openraft-r3-q100-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 100,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 179991,
+          "errors": 0,
+          "not_issued": 9,
+          "offered": 180000,
+          "ok": 179991,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "adapter_journal",
+          "mode": "public_api",
+          "peer_batch_size": 1,
+          "variant": "openraft"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 50.855935,
+            "median": 30.408703,
+            "min": 30.408703
+          },
+          "execution_p99_ms": {
+            "max": 42.991615,
+            "median": 29.884415,
+            "min": 29.360127
+          },
+          "throughput_ops_s": {
+            "max": 999.7333333333333,
+            "median": 999.6333333333333,
+            "min": 999.5833333333334
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "044-n2-openraft-r1-q1000-timing",
+          "054-n2-openraft-r2-q1000-timing",
+          "063-n2-openraft-r3-q1000-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 1000,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 1423243,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 1423243,
+          "ok": 1423243,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "messages",
+          "peer_batch_size": 32,
+          "variant": "prior"
+        },
+        "display_name": "Rafter synchronous messages",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 16.252927,
+            "median": 15.728639,
+            "min": 15.073279
+          },
+          "execution_p99_ms": {
+            "max": 16.252927,
+            "median": 15.728639,
+            "min": 15.073279
+          },
+          "throughput_ops_s": {
+            "max": 7951.9,
+            "median": 7906.4,
+            "min": 7859.216666666666
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "001-n0-prior-r1-q0-timing",
+          "010-n0-prior-r2-q0-timing",
+          "020-n0-prior-r3-q0-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 0,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 18000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 18000,
+          "ok": 18000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "messages",
+          "peer_batch_size": 32,
+          "variant": "prior"
+        },
+        "display_name": "Rafter synchronous messages",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 5.570559,
+            "median": 5.505023,
+            "min": 5.308415
+          },
+          "execution_p99_ms": {
+            "max": 4.915199,
+            "median": 4.653055,
+            "min": 4.456447
+          },
+          "throughput_ops_s": {
+            "max": 100,
+            "median": 100,
+            "min": 100
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "004-n0-prior-r1-q100-timing",
+          "013-n0-prior-r2-q100-timing",
+          "023-n0-prior-r3-q100-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 100,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 180000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 180000,
+          "ok": 180000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "messages",
+          "peer_batch_size": 32,
+          "variant": "prior"
+        },
+        "display_name": "Rafter synchronous messages",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 20.709375,
+            "median": 16.383999,
+            "min": 11.010047
+          },
+          "execution_p99_ms": {
+            "max": 19.922943,
+            "median": 15.859711,
+            "min": 10.485759
+          },
+          "throughput_ops_s": {
+            "max": 999.9666666666667,
+            "median": 999.95,
+            "min": 999.95
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "007-n0-prior-r1-q1000-timing",
+          "016-n0-prior-r2-q1000-timing",
+          "026-n0-prior-r3-q1000-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 1000,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 820231,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 820231,
+          "ok": 820231,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "messages",
+          "peer_batch_size": 32,
+          "variant": "prior"
+        },
+        "display_name": "Rafter synchronous messages",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 21.757951,
+            "median": 21.757951,
+            "min": 20.971519
+          },
+          "execution_p99_ms": {
+            "max": 21.757951,
+            "median": 21.757951,
+            "min": 20.971519
+          },
+          "throughput_ops_s": {
+            "max": 4575.6,
+            "median": 4553.683333333333,
+            "min": 4538.033333333334
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "037-n2-prior-r1-q0-timing",
+          "046-n2-prior-r2-q0-timing",
+          "056-n2-prior-r3-q0-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 0,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 18000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 18000,
+          "ok": 18000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "messages",
+          "peer_batch_size": 32,
+          "variant": "prior"
+        },
+        "display_name": "Rafter synchronous messages",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 15.204351,
+            "median": 15.073279,
+            "min": 14.942207
+          },
+          "execution_p99_ms": {
+            "max": 14.417919,
+            "median": 14.417919,
+            "min": 14.155775
+          },
+          "throughput_ops_s": {
+            "max": 99.98333333333333,
+            "median": 99.98333333333333,
+            "min": 99.98333333333333
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "040-n2-prior-r1-q100-timing",
+          "049-n2-prior-r2-q100-timing",
+          "059-n2-prior-r3-q100-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 100,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 180000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 180000,
+          "ok": 180000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "messages",
+          "peer_batch_size": 32,
+          "variant": "prior"
+        },
+        "display_name": "Rafter synchronous messages",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 19.660799,
+            "median": 19.136511,
+            "min": 18.612223
+          },
+          "execution_p99_ms": {
+            "max": 19.398655,
+            "median": 18.612223,
+            "min": 18.350079
+          },
+          "throughput_ops_s": {
+            "max": 999.8333333333334,
+            "median": 999.8333333333334,
+            "min": 999.8333333333334
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "043-n2-prior-r1-q1000-timing",
+          "052-n2-prior-r2-q1000-timing",
+          "062-n2-prior-r3-q1000-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 1000,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 1447801,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 1447801,
+          "ok": 1447801,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "pipeline",
+          "peer_batch_size": 32,
+          "variant": "candidate-b32"
+        },
+        "display_name": "Rafter pipeline",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 15.859711,
+            "median": 15.466495,
+            "min": 14.680063
+          },
+          "execution_p99_ms": {
+            "max": 15.859711,
+            "median": 15.466495,
+            "min": 14.680063
+          },
+          "throughput_ops_s": {
+            "max": 8258,
+            "median": 8024.983333333334,
+            "min": 7843.833333333333
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "003-n0-candidate-b32-r1-q0-timing",
+          "011-n0-candidate-b32-r2-q0-timing",
+          "019-n0-candidate-b32-r3-q0-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 0,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 18000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 18000,
+          "ok": 18000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "pipeline",
+          "peer_batch_size": 32,
+          "variant": "candidate-b32"
+        },
+        "display_name": "Rafter pipeline",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 5.505023,
+            "median": 5.308415,
+            "min": 4.653055
+          },
+          "execution_p99_ms": {
+            "max": 5.046271,
+            "median": 4.653055,
+            "min": 3.964927
+          },
+          "throughput_ops_s": {
+            "max": 100,
+            "median": 100,
+            "min": 100
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "006-n0-candidate-b32-r1-q100-timing",
+          "014-n0-candidate-b32-r2-q100-timing",
+          "022-n0-candidate-b32-r3-q100-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 100,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 180000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 180000,
+          "ok": 180000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "pipeline",
+          "peer_batch_size": 32,
+          "variant": "candidate-b32"
+        },
+        "display_name": "Rafter pipeline",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 20.447231,
+            "median": 12.713983,
+            "min": 11.141119
+          },
+          "execution_p99_ms": {
+            "max": 20.185087,
+            "median": 12.189695,
+            "min": 10.616831
+          },
+          "throughput_ops_s": {
+            "max": 999.9666666666667,
+            "median": 999.9666666666667,
+            "min": 999.9666666666667
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "009-n0-candidate-b32-r1-q1000-timing",
+          "017-n0-candidate-b32-r2-q1000-timing",
+          "025-n0-candidate-b32-r3-q1000-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 0,
+          "offered_per_second": 1000,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 844933,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 844933,
+          "ok": 844933,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "pipeline",
+          "peer_batch_size": 32,
+          "variant": "candidate-b32"
+        },
+        "display_name": "Rafter pipeline",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 21.495807,
+            "median": 20.971519,
+            "min": 20.447231
+          },
+          "execution_p99_ms": {
+            "max": 21.495807,
+            "median": 20.971519,
+            "min": 20.447231
+          },
+          "throughput_ops_s": {
+            "max": 4713.3,
+            "median": 4688.983333333334,
+            "min": 4676.733333333334
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "039-n2-candidate-b32-r1-q0-timing",
+          "047-n2-candidate-b32-r2-q0-timing",
+          "055-n2-candidate-b32-r3-q0-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 0,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 18000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 18000,
+          "ok": 18000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "pipeline",
+          "peer_batch_size": 32,
+          "variant": "candidate-b32"
+        },
+        "display_name": "Rafter pipeline",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 14.942207,
+            "median": 14.942207,
+            "min": 14.680063
+          },
+          "execution_p99_ms": {
+            "max": 14.155775,
+            "median": 14.155775,
+            "min": 14.024703
+          },
+          "throughput_ops_s": {
+            "max": 99.98333333333333,
+            "median": 99.98333333333333,
+            "min": 99.98333333333333
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "042-n2-candidate-b32-r1-q100-timing",
+          "050-n2-candidate-b32-r2-q100-timing",
+          "058-n2-candidate-b32-r3-q100-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 100,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      },
+      {
+        "accounting": {
+          "attempted": 180000,
+          "errors": 0,
+          "not_issued": 0,
+          "offered": 180000,
+          "ok": 180000,
+          "unknown": 0
+        },
+        "completion_boundary": "durable-log+durable-application-v1/logged-reads",
+        "configuration": {
+          "client_batch_size": 64,
+          "hard_state": "wal",
+          "mode": "pipeline",
+          "peer_batch_size": 32,
+          "variant": "candidate-b32"
+        },
+        "display_name": "Rafter pipeline",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "benchmark_source_digest": "ba5c78444ba3470d366234c183e5ac6c3ca28a8fc6e62d08c0db107c744ef520",
+          "cpu_model": "AMD EPYC 7763 64-Core Processor",
+          "filesystem": {
+            "fstype": "ext4",
+            "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+            "source": "/dev/sda1"
+          },
+          "load_generator_sha256": "c140bbac890e769d616bb6dd087774cc14b61d304fca0514b6840e105bc5e49f",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three processes on one host; real TCP, not three physical hosts"
+        },
+        "expected_repetitions": 3,
+        "layer": "complete_service",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median of per-repetition values; percentiles are not pooled",
+          "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+          "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+          "throughput_ops_s": "successful logical operations completed inside the measurement window per second"
+        },
+        "metrics": {
+          "client_p99_ms": {
+            "max": 22.544383,
+            "median": 20.971519,
+            "min": 20.185087
+          },
+          "execution_p99_ms": {
+            "max": 21.495807,
+            "median": 20.447231,
+            "min": 19.660799
+          },
+          "throughput_ops_s": {
+            "max": 999.8333333333334,
+            "median": 999.8333333333334,
+            "min": 999.8
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "045-n2-candidate-b32-r1-q1000-timing",
+          "053-n2-candidate-b32-r2-q1000-timing",
+          "061-n2-candidate-b32-r3-q1000-timing"
+        ],
+        "workload": {
+          "cas_percent": 0,
+          "concurrency": 64,
+          "duration_seconds": 60,
+          "network_delay_ms": 2,
+          "offered_per_second": 1000,
+          "payload_bytes": 512,
+          "read_percent": 0,
+          "scenario": "durable-kv",
+          "warmup_seconds": 10
+        }
+      }
+    ],
+    "consensus_in_memory": [],
+    "durable_replication": [
+      {
+        "completion_boundary": "rafter-bench-cluster batch completion after durable Raft state publication",
+        "configuration": {
+          "arm": "baseline",
+          "hard_state": "replace"
+        },
+        "display_name": "File replacement",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "machine": {
+            "machine": "x86_64",
+            "node": "runnervmlun5p",
+            "processor": "x86_64",
+            "release": "6.17.0-1022-azure",
+            "system": "Linux",
+            "version": "#22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026"
+          }
+        },
+        "layer": "durable_replication",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across paired repetitions; percentiles are not pooled",
+          "batch_completion_p99_ms": "proposal-batch submission to completion; median per-run p99",
+          "throughput_ops_s": "durable proposal entries completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "batch_completion_p99_ms": {
+            "max": 4.428,
+            "median": 4.14,
+            "min": 3.851
+          },
+          "throughput_ops_s": {
+            "max": 370.118,
+            "median": 354.102,
+            "min": 353.302
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "run-1-batch-1-baseline.json",
+          "run-2-batch-1-baseline.json",
+          "run-3-batch-1-baseline.json"
+        ],
+        "workload": {
+          "batch_size": 1,
+          "batches": 1000,
+          "kind": "proposal_batches",
+          "payload_bytes": 256
+        }
+      },
+      {
+        "completion_boundary": "rafter-bench-cluster batch completion after durable Raft state publication",
+        "configuration": {
+          "arm": "candidate",
+          "hard_state": "journal"
+        },
+        "display_name": "Append-only journal",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "machine": {
+            "machine": "x86_64",
+            "node": "runnervmlun5p",
+            "processor": "x86_64",
+            "release": "6.17.0-1022-azure",
+            "system": "Linux",
+            "version": "#22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026"
+          }
+        },
+        "layer": "durable_replication",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across paired repetitions; percentiles are not pooled",
+          "batch_completion_p99_ms": "proposal-batch submission to completion; median per-run p99",
+          "throughput_ops_s": "durable proposal entries completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "batch_completion_p99_ms": {
+            "max": 3.126,
+            "median": 2.813,
+            "min": 2.777
+          },
+          "throughput_ops_s": {
+            "max": 584.595,
+            "median": 571.297,
+            "min": 566.833
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "run-1-batch-1-candidate.json",
+          "run-2-batch-1-candidate.json",
+          "run-3-batch-1-candidate.json"
+        ],
+        "workload": {
+          "batch_size": 1,
+          "batches": 1000,
+          "kind": "proposal_batches",
+          "payload_bytes": 256
+        }
+      },
+      {
+        "completion_boundary": "rafter-bench-cluster batch completion after durable Raft state publication",
+        "configuration": {
+          "arm": "baseline",
+          "hard_state": "replace"
+        },
+        "display_name": "File replacement",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "machine": {
+            "machine": "x86_64",
+            "node": "runnervmlun5p",
+            "processor": "x86_64",
+            "release": "6.17.0-1022-azure",
+            "system": "Linux",
+            "version": "#22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026"
+          }
+        },
+        "layer": "durable_replication",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across paired repetitions; percentiles are not pooled",
+          "batch_completion_p99_ms": "proposal-batch submission to completion; median per-run p99",
+          "throughput_ops_s": "durable proposal entries completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "batch_completion_p99_ms": {
+            "max": 4.285,
+            "median": 4.267,
+            "min": 4.166
+          },
+          "throughput_ops_s": {
+            "max": 2804.665,
+            "median": 2784.653,
+            "min": 2691.719
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "run-1-batch-8-baseline.json",
+          "run-2-batch-8-baseline.json",
+          "run-3-batch-8-baseline.json"
+        ],
+        "workload": {
+          "batch_size": 8,
+          "batches": 1000,
+          "kind": "proposal_batches",
+          "payload_bytes": 256
+        }
+      },
+      {
+        "completion_boundary": "rafter-bench-cluster batch completion after durable Raft state publication",
+        "configuration": {
+          "arm": "candidate",
+          "hard_state": "journal"
+        },
+        "display_name": "Append-only journal",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "machine": {
+            "machine": "x86_64",
+            "node": "runnervmlun5p",
+            "processor": "x86_64",
+            "release": "6.17.0-1022-azure",
+            "system": "Linux",
+            "version": "#22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026"
+          }
+        },
+        "layer": "durable_replication",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across paired repetitions; percentiles are not pooled",
+          "batch_completion_p99_ms": "proposal-batch submission to completion; median per-run p99",
+          "throughput_ops_s": "durable proposal entries completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "batch_completion_p99_ms": {
+            "max": 3.177,
+            "median": 3.054,
+            "min": 3.025
+          },
+          "throughput_ops_s": {
+            "max": 4297.142,
+            "median": 4276.863,
+            "min": 4250.178
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "run-1-batch-8-candidate.json",
+          "run-2-batch-8-candidate.json",
+          "run-3-batch-8-candidate.json"
+        ],
+        "workload": {
+          "batch_size": 8,
+          "batches": 1000,
+          "kind": "proposal_batches",
+          "payload_bytes": 256
+        }
+      },
+      {
+        "completion_boundary": "rafter-bench-cluster batch completion after durable Raft state publication",
+        "configuration": {
+          "arm": "baseline",
+          "hard_state": "replace"
+        },
+        "display_name": "File replacement",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "machine": {
+            "machine": "x86_64",
+            "node": "runnervmlun5p",
+            "processor": "x86_64",
+            "release": "6.17.0-1022-azure",
+            "system": "Linux",
+            "version": "#22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026"
+          }
+        },
+        "layer": "durable_replication",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across paired repetitions; percentiles are not pooled",
+          "batch_completion_p99_ms": "proposal-batch submission to completion; median per-run p99",
+          "throughput_ops_s": "durable proposal entries completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "batch_completion_p99_ms": {
+            "max": 4.544,
+            "median": 4.469,
+            "min": 4.274
+          },
+          "throughput_ops_s": {
+            "max": 10706.46,
+            "median": 10561.973,
+            "min": 10076.309
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "run-1-batch-32-baseline.json",
+          "run-2-batch-32-baseline.json",
+          "run-3-batch-32-baseline.json"
+        ],
+        "workload": {
+          "batch_size": 32,
+          "batches": 1000,
+          "kind": "proposal_batches",
+          "payload_bytes": 256
+        }
+      },
+      {
+        "completion_boundary": "rafter-bench-cluster batch completion after durable Raft state publication",
+        "configuration": {
+          "arm": "candidate",
+          "hard_state": "journal"
+        },
+        "display_name": "Append-only journal",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "machine": {
+            "machine": "x86_64",
+            "node": "runnervmlun5p",
+            "processor": "x86_64",
+            "release": "6.17.0-1022-azure",
+            "system": "Linux",
+            "version": "#22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026"
+          }
+        },
+        "layer": "durable_replication",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across paired repetitions; percentiles are not pooled",
+          "batch_completion_p99_ms": "proposal-batch submission to completion; median per-run p99",
+          "throughput_ops_s": "durable proposal entries completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "batch_completion_p99_ms": {
+            "max": 3.356,
+            "median": 3.287,
+            "min": 3.036
+          },
+          "throughput_ops_s": {
+            "max": 16462.865,
+            "median": 15841.396,
+            "min": 15454.011
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "run-1-batch-32-candidate.json",
+          "run-2-batch-32-candidate.json",
+          "run-3-batch-32-candidate.json"
+        ],
+        "workload": {
+          "batch_size": 32,
+          "batches": 1000,
+          "kind": "proposal_batches",
+          "payload_bytes": 256
+        }
+      },
+      {
+        "completion_boundary": "rafter-bench-cluster batch completion after durable Raft state publication",
+        "configuration": {
+          "arm": "baseline",
+          "hard_state": "replace"
+        },
+        "display_name": "File replacement",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "machine": {
+            "machine": "x86_64",
+            "node": "runnervmlun5p",
+            "processor": "x86_64",
+            "release": "6.17.0-1022-azure",
+            "system": "Linux",
+            "version": "#22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026"
+          }
+        },
+        "layer": "durable_replication",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across paired repetitions; percentiles are not pooled",
+          "batch_completion_p99_ms": "proposal-batch submission to completion; median per-run p99",
+          "throughput_ops_s": "durable proposal entries completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "batch_completion_p99_ms": {
+            "max": 6.273,
+            "median": 4.794,
+            "min": 4.735
+          },
+          "throughput_ops_s": {
+            "max": 38187.408,
+            "median": 37010.738,
+            "min": 34729.297
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "run-1-batch-128-baseline.json",
+          "run-2-batch-128-baseline.json",
+          "run-3-batch-128-baseline.json"
+        ],
+        "workload": {
+          "batch_size": 128,
+          "batches": 1000,
+          "kind": "proposal_batches",
+          "payload_bytes": 256
+        }
+      },
+      {
+        "completion_boundary": "rafter-bench-cluster batch completion after durable Raft state publication",
+        "configuration": {
+          "arm": "candidate",
+          "hard_state": "journal"
+        },
+        "display_name": "Append-only journal",
+        "engine": {
+          "name": "rafter",
+          "version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b"
+        },
+        "environment": {
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "machine": {
+            "machine": "x86_64",
+            "node": "runnervmlun5p",
+            "processor": "x86_64",
+            "release": "6.17.0-1022-azure",
+            "system": "Linux",
+            "version": "#22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026"
+          }
+        },
+        "layer": "durable_replication",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across paired repetitions; percentiles are not pooled",
+          "batch_completion_p99_ms": "proposal-batch submission to completion; median per-run p99",
+          "throughput_ops_s": "durable proposal entries completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "batch_completion_p99_ms": {
+            "max": 4.014,
+            "median": 3.699,
+            "min": 3.526
+          },
+          "throughput_ops_s": {
+            "max": 55991.691,
+            "median": 52738.518,
+            "min": 51942.215
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 3,
+        "source_cases": [
+          "run-1-batch-128-candidate.json",
+          "run-2-batch-128-candidate.json",
+          "run-3-batch-128-candidate.json"
+        ],
+        "workload": {
+          "batch_size": 128,
+          "batches": 1000,
+          "kind": "proposal_batches",
+          "payload_bytes": 256
+        }
+      }
+    ]
+  },
+  "principle": "Where Rafter demonstrably leads, where evidence is mixed, and what remains unmeasured.",
+  "report_generator": {
+    "source_digest": "17695c6770bf0e4783b9a6926d6d194f92143a3e0a38bf964077298355006e45",
+    "uses_llm": false
+  },
+  "schema": 1,
+  "sections": [
+    {
+      "conditions": "Three voters in one process, in-memory stores, no disk synchronization or TCP.",
+      "details": [
+        "The suite exists, but no in-memory evidence set was selected for this report."
+      ],
+      "id": "consensus-in-memory",
+      "question": "How quickly can the implementation replicate and commit without disks or sockets?",
+      "result": "Comparison pending qualification.",
+      "source_cases": [],
+      "status": "pending qualification",
+      "title": "Consensus in memory"
+    },
+    {
+      "batch_p99_improvement_percent": {
+        "max": 32.05314009661835,
+        "min": 22.84105131414268
+      },
+      "comparison_kind": "internal optimization",
+      "conditions": "One identical Rafter binary, 256-byte proposals, three repetitions; batch size is explicit in every row.",
+      "id": "durable-replication",
+      "not_measured": [
+        "Combined WAL component comparison"
+      ],
+      "question": "How efficiently does Rafter make consensus state survive a restart?",
+      "result": "The append-only journal improved throughput 42.5\u201361.3% over Rafter's file-replacement backend.",
+      "rows": [
+        {
+          "append_only_journal_batch_p99_ms": 2.813,
+          "append_only_journal_ops_s": 571.297,
+          "batch_p99_improvement_percent": 32.05314009661835,
+          "batch_size": 1,
+          "file_replacement_batch_p99_ms": 4.14,
+          "file_replacement_ops_s": 354.102,
+          "interpretation": "measured lead",
+          "throughput_change_percent": 61.33684644537452
+        },
+        {
+          "append_only_journal_batch_p99_ms": 3.054,
+          "append_only_journal_ops_s": 4276.863,
+          "batch_p99_improvement_percent": 28.42746660417156,
+          "batch_size": 8,
+          "file_replacement_batch_p99_ms": 4.267,
+          "file_replacement_ops_s": 2784.653,
+          "interpretation": "measured lead",
+          "throughput_change_percent": 53.58692806608223
+        },
+        {
+          "append_only_journal_batch_p99_ms": 3.287,
+          "append_only_journal_ops_s": 15841.396,
+          "batch_p99_improvement_percent": 26.448869993287094,
+          "batch_size": 32,
+          "file_replacement_batch_p99_ms": 4.469,
+          "file_replacement_ops_s": 10561.973,
+          "interpretation": "measured lead",
+          "throughput_change_percent": 49.98519689455749
+        },
+        {
+          "append_only_journal_batch_p99_ms": 3.699,
+          "append_only_journal_ops_s": 52738.518,
+          "batch_p99_improvement_percent": 22.84105131414268,
+          "batch_size": 128,
+          "file_replacement_batch_p99_ms": 4.794,
+          "file_replacement_ops_s": 37010.738,
+          "interpretation": "measured lead",
+          "throughput_change_percent": 42.49518072295668
+        }
+      ],
+      "source_cases": [
+        {
+          "case": "run-1-batch-1-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-2-batch-1-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-3-batch-1-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-1-batch-1-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-2-batch-1-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-3-batch-1-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-1-batch-8-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-2-batch-8-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-3-batch-8-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-1-batch-8-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-2-batch-8-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-3-batch-8-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-1-batch-32-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-2-batch-32-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-3-batch-32-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-1-batch-32-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-2-batch-32-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-3-batch-32-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-1-batch-128-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-2-batch-128-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-3-batch-128-candidate.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-1-batch-128-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-2-batch-128-baseline.json",
+          "evidence": "durable_replication"
+        },
+        {
+          "case": "run-3-batch-128-baseline.json",
+          "evidence": "durable_replication"
+        }
+      ],
+      "status": "measured lead",
+      "sync_probes": {
+        "journal": {
+          "hard_state_publications": 64,
+          "scope": "fixed hard-state syscall probe; not synchronization calls per committed entry",
+          "source_case": "journal-syscalls.json",
+          "sync_calls": 64,
+          "sync_calls_per_publication": 1.0
+        },
+        "replace": {
+          "hard_state_publications": 64,
+          "scope": "fixed hard-state syscall probe; not synchronization calls per committed entry",
+          "source_case": "replace-syscalls.json",
+          "sync_calls": 128,
+          "sync_calls_per_publication": 2.0
+        }
+      },
+      "title": "Durable replication"
+    },
+    {
+      "accounting": {
+        "openraft": {
+          "errors": 0,
+          "not_issued": 9,
+          "unknown": 0
+        },
+        "rafter": {
+          "errors": 0,
+          "not_issued": 0,
+          "unknown": 0
+        }
+      },
+      "comparison_kind": "competitor comparison",
+      "conditions": "three processes on one host; real TCP, not three physical hosts; 64 clients; 512-byte writes; medians of 3 repetitions. Success requires Raft commitment and durable application completion. Added delay affects client and peer egress. Storage, codec, and scheduling choices differ between integrations.",
+      "id": "complete-durable-service",
+      "internal_comparisons": [
+        {
+          "interpretation": "roughly level",
+          "network_delay_ms": 0,
+          "prior_variant": "prior",
+          "source_cases": [
+            {
+              "case": "003-n0-candidate-b32-r1-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "011-n0-candidate-b32-r2-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "019-n0-candidate-b32-r3-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "001-n0-prior-r1-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "010-n0-prior-r2-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "020-n0-prior-r3-q0-timing",
+              "evidence": "durable_service"
+            }
+          ],
+          "throughput_change_percent": 1.4998397922358242
+        },
+        {
+          "interpretation": "roughly level",
+          "network_delay_ms": 2,
+          "prior_variant": "prior",
+          "source_cases": [
+            {
+              "case": "039-n2-candidate-b32-r1-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "047-n2-candidate-b32-r2-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "055-n2-candidate-b32-r3-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "037-n2-prior-r1-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "046-n2-prior-r2-q0-timing",
+              "evidence": "durable_service"
+            },
+            {
+              "case": "056-n2-prior-r3-q0-timing",
+              "evidence": "durable_service"
+            }
+          ],
+          "throughput_change_percent": 2.971221099403043
+        }
+      ],
+      "question": "How many durable writes can an application complete, and how long do clients wait?",
+      "result": "Rafter pipeline completed 3.79\u00d7 as many durable writes per second as the tested OpenRaft integration in the no-delay condition.",
+      "rows": [
+        {
+          "network_delay_ms": 0,
+          "openraft_p99_at_1000_ms": 18.087935,
+          "openraft_p99_at_100_ms": 5.373951,
+          "openraft_throughput_ops_s": 2116.35,
+          "p99_at_1000_improvement_percent": 29.71014657007558,
+          "p99_at_1000_interpretation": "measured lead",
+          "p99_at_100_improvement_percent": 1.2195124220522269,
+          "p99_at_100_interpretation": "roughly level",
+          "rafter_p99_at_1000_ms": 12.713983,
+          "rafter_p99_at_100_ms": 5.308415,
+          "rafter_throughput_ops_s": 8024.983333333334,
+          "throughput_interpretation": "measured lead",
+          "throughput_ratio": 3.791898000488262
+        },
+        {
+          "network_delay_ms": 2,
+          "openraft_p99_at_1000_ms": 30.408703,
+          "openraft_p99_at_100_ms": 16.383999,
+          "openraft_throughput_ops_s": 1665.8833333333334,
+          "p99_at_1000_improvement_percent": 31.03448377919965,
+          "p99_at_1000_interpretation": "measured lead",
+          "p99_at_100_improvement_percent": 8.800000537109408,
+          "p99_at_100_interpretation": "measured lead",
+          "rafter_p99_at_1000_ms": 20.971519,
+          "rafter_p99_at_100_ms": 14.942207,
+          "rafter_throughput_ops_s": 4688.983333333334,
+          "throughput_interpretation": "measured lead",
+          "throughput_ratio": 2.814712915070083
+        }
+      ],
+      "selected_configuration": {
+        "name": "Rafter pipeline",
+        "openraft_version": "0.9.24",
+        "rafter_version": "94b3cd9ac7531dfaf98eeb78e0b1c22747f8b17b",
+        "variant": "candidate-b32"
+      },
+      "source_cases": [
+        {
+          "case": "003-n0-candidate-b32-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "011-n0-candidate-b32-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "019-n0-candidate-b32-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "002-n0-openraft-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "012-n0-openraft-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "021-n0-openraft-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "006-n0-candidate-b32-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "014-n0-candidate-b32-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "022-n0-candidate-b32-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "005-n0-openraft-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "015-n0-openraft-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "024-n0-openraft-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "009-n0-candidate-b32-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "017-n0-candidate-b32-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "025-n0-candidate-b32-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "008-n0-openraft-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "018-n0-openraft-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "027-n0-openraft-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "039-n2-candidate-b32-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "047-n2-candidate-b32-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "055-n2-candidate-b32-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "038-n2-openraft-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "048-n2-openraft-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "057-n2-openraft-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "042-n2-candidate-b32-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "050-n2-candidate-b32-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "058-n2-candidate-b32-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "041-n2-openraft-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "051-n2-openraft-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "060-n2-openraft-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "045-n2-candidate-b32-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "053-n2-candidate-b32-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "061-n2-candidate-b32-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "044-n2-openraft-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "054-n2-openraft-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "063-n2-openraft-r3-q1000-timing",
+          "evidence": "durable_service"
+        }
+      ],
+      "status": "measured lead",
+      "title": "Complete durable service"
+    },
+    {
+      "checks": [
+        {
+          "name": "restart and acknowledged-canary checks",
+          "passed_cases": 75,
+          "scope": "finite histories and canaries, not every measured write or power loss"
+        },
+        {
+          "name": "linearizable qualification histories",
+          "passed_cases": 75,
+          "scope": "64-operation per-case qualification histories"
+        },
+        {
+          "name": "Rafter recovery smoke",
+          "scenarios": [
+            {
+              "scenario": "durable-kv",
+              "status": "passed"
+            },
+            {
+              "scenario": "follower-catchup",
+              "status": "passed"
+            },
+            {
+              "scenario": "leader-loss",
+              "status": "passed"
+            }
+          ],
+          "scope": "smoke correctness only; not comparative performance"
+        }
+      ],
+      "history": [
+        {
+          "case": "008-n0-openraft-r1-q1000-timing",
+          "engine": "OpenRaft",
+          "errors": 0,
+          "evidence": "history_1",
+          "run": "34599945967",
+          "unknown": 0,
+          "unsent": 14,
+          "workload": {
+            "cas_percent": 0,
+            "concurrency": 64,
+            "duration_seconds": 60,
+            "network_delay_ms": 0,
+            "offered_per_second": 1000,
+            "payload_bytes": 512,
+            "read_percent": 0,
+            "scenario": "durable-kv",
+            "warmup_seconds": 10
+          }
+        },
+        {
+          "case": "018-n0-openraft-r2-q1000-timing",
+          "engine": "OpenRaft",
+          "errors": 0,
+          "evidence": "history_1",
+          "run": "34599945967",
+          "unknown": 0,
+          "unsent": 100,
+          "workload": {
+            "cas_percent": 0,
+            "concurrency": 64,
+            "duration_seconds": 60,
+            "network_delay_ms": 0,
+            "offered_per_second": 1000,
+            "payload_bytes": 512,
+            "read_percent": 0,
+            "scenario": "durable-kv",
+            "warmup_seconds": 10
+          }
+        },
+        {
+          "case": "025-n0-candidate-b32-r3-q1000-timing",
+          "engine": "Rafter pipeline",
+          "errors": 0,
+          "evidence": "history_1",
+          "run": "34599945967",
+          "unknown": 0,
+          "unsent": 567,
+          "workload": {
+            "cas_percent": 0,
+            "concurrency": 64,
+            "duration_seconds": 60,
+            "network_delay_ms": 0,
+            "offered_per_second": 1000,
+            "payload_bytes": 512,
+            "read_percent": 0,
+            "scenario": "durable-kv",
+            "warmup_seconds": 10
+          }
+        }
+      ],
+      "id": "failure-and-sustained-operation",
+      "not_measured": [
+        "comparative leader-loss performance",
+        "comparative slow-follower performance",
+        "storage-stall recovery performance",
+        "snapshot/compaction soak and physical reclamation"
+      ],
+      "question": "Does performance remain useful during failures and over long runs?",
+      "result": "Finite recovery checks passed; comparative fault and sustained-operation performance remain unmeasured.",
+      "source_cases": [
+        {
+          "case": "001-n0-prior-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "002-n0-openraft-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "003-n0-candidate-b32-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "004-n0-prior-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "005-n0-openraft-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "006-n0-candidate-b32-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "007-n0-prior-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "008-n0-openraft-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "009-n0-candidate-b32-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "010-n0-prior-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "011-n0-candidate-b32-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "012-n0-openraft-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "013-n0-prior-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "014-n0-candidate-b32-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "015-n0-openraft-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "016-n0-prior-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "017-n0-candidate-b32-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "018-n0-openraft-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "019-n0-candidate-b32-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "020-n0-prior-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "021-n0-openraft-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "022-n0-candidate-b32-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "023-n0-prior-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "024-n0-openraft-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "025-n0-candidate-b32-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "026-n0-prior-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "027-n0-openraft-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "028-n0-prior-r1-q0-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "029-n0-openraft-r1-q0-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "030-n0-candidate-b32-r1-q0-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "031-n0-prior-r1-q100-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "032-n0-openraft-r1-q100-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "033-n0-candidate-b32-r1-q100-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "034-n0-prior-r1-q1000-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "035-n0-openraft-r1-q1000-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "036-n0-candidate-b32-r1-q1000-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "037-n2-prior-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "038-n2-openraft-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "039-n2-candidate-b32-r1-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "040-n2-prior-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "041-n2-openraft-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "042-n2-candidate-b32-r1-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "043-n2-prior-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "044-n2-openraft-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "045-n2-candidate-b32-r1-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "046-n2-prior-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "047-n2-candidate-b32-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "048-n2-openraft-r2-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "049-n2-prior-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "050-n2-candidate-b32-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "051-n2-openraft-r2-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "052-n2-prior-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "053-n2-candidate-b32-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "054-n2-openraft-r2-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "055-n2-candidate-b32-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "056-n2-prior-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "057-n2-openraft-r3-q0-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "058-n2-candidate-b32-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "059-n2-prior-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "060-n2-openraft-r3-q100-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "061-n2-candidate-b32-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "062-n2-prior-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "063-n2-openraft-r3-q1000-timing",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "064-n2-prior-r1-q0-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "065-n2-openraft-r1-q0-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "066-n2-candidate-b32-r1-q0-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "067-n2-prior-r1-q100-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "068-n2-openraft-r1-q100-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "069-n2-candidate-b32-r1-q100-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "070-n2-prior-r1-q1000-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "071-n2-openraft-r1-q1000-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "072-n2-candidate-b32-r1-q1000-trace",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "worker-smoke-durable-kv/001-rafter-r1-q0",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "worker-smoke-follower-catchup/001-rafter-r1-q0",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "worker-smoke-leader-loss/001-rafter-r1-q0",
+          "evidence": "durable_service"
+        },
+        {
+          "case": "008-n0-openraft-r1-q1000-timing",
+          "evidence": "history_1"
+        },
+        {
+          "case": "018-n0-openraft-r2-q1000-timing",
+          "evidence": "history_1"
+        },
+        {
+          "case": "025-n0-candidate-b32-r3-q1000-timing",
+          "evidence": "history_1"
+        }
+      ],
+      "status": "mixed result",
+      "title": "Failure and sustained operation"
+    }
+  ],
+  "title": "Rafter implementation performance"
+}
