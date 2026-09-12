@@ -4,6 +4,10 @@ Current qualified evidence: [one-minute summary](reports/qualified-34628543562/s
 [static HTML](reports/qualified-34628543562/report.html) ·
 [normalized JSON](reports/qualified-34628543562/summary.json)
 
+Qualified in-memory evidence: [summary](reports/qualified-in-memory-34654362991/summary.md) ·
+[HTML](reports/qualified-in-memory-34654362991/report.html) ·
+[JSON](reports/qualified-in-memory-34654362991/summary.json)
+
 Compare Rafter, raft-rs, and OpenRaft with two suites:
 
 | Suite | Measures | Output |
