@@ -68,6 +68,26 @@ def ordered_arms(arms: list, repeat: int) -> list:
     return rotated if repeat % 2 == 0 else list(reversed(rotated))
 
 
+def combined_activation_failures(output: Path, arms: list[tuple]) -> list[dict]:
+    required = {arm[0] for arm in arms if arm[5]}
+    observed = set()
+    for manifest_path in output.glob("*/manifest.json"):
+        case = manifest_path.parent
+        if (case / "failure.json").exists() or not (case / "outcome.json").exists():
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        variant = manifest.get("options", {}).get("variant")
+        if variant not in required or not (case / "pipeline-activity.json").exists():
+            continue
+        receipt = json.loads((case / "pipeline-activity.json").read_text())
+        combined = receipt.get("combined_peer_proposal_batches_by_node")
+        if isinstance(combined, dict) and sum(combined.values()) > 0:
+            observed.add(variant)
+    return [{"case": f"suite:{variant}",
+             "error": "selected combined peer/proposal mode executed no combined steps in any completed case"}
+            for variant in sorted(required - observed)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prior", required=True)
@@ -216,6 +236,7 @@ def main() -> None:
                             except Exception as error:
                                 failures.append({"case": name, "error": str(error)})
                                 print(f"FAILED {name}: {error}", flush=True)
+    failures.extend(combined_activation_failures(output, arms))
     write_json(output / "completion.json", {"failures": failures})
     render(output, output / "report.html")
     if failures:

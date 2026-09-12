@@ -3,7 +3,8 @@ import json
 import tempfile
 import unittest
 from unittest.mock import patch
-from benchctl.paired import archive_build, candidate_arms, openraft_arms, ordered_arms, mode_flags
+from benchctl.paired import (archive_build, candidate_arms, combined_activation_failures,
+                             openraft_arms, ordered_arms, mode_flags)
 from benchctl.evidence import digest
 from benchctl.results import _expected_durable_cases
 
@@ -61,3 +62,25 @@ class PairedTests(unittest.TestCase):
             ("candidate-b32-s4-combined-w16", "rafter", 32, "candidate", 4, True, 16),
             ("candidate-b32-s4-combined-w32", "rafter", 32, "candidate", 4, True, 32),
         ])
+
+    def test_combined_activity_is_required_across_suite_not_every_case(self):
+        arms = [("candidate-combined", "rafter", 32, "candidate", 4, True, 8)]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            quiet = root / "001-candidate-combined-r1-q100-timing"
+            busy = root / "002-candidate-combined-r1-q0-timing"
+            for case, batches in ((quiet, 0), (busy, 7)):
+                case.mkdir()
+                (case / "manifest.json").write_text(json.dumps({
+                    "options": {"variant": "candidate-combined"},
+                }))
+                (case / "outcome.json").write_text(json.dumps({"status": "completed"}))
+                (case / "pipeline-activity.json").write_text(json.dumps({
+                    "combined_peer_proposal_batches_by_node": {"1": batches, "2": 0, "3": 0},
+                }))
+            self.assertEqual(combined_activation_failures(root, arms), [])
+            (busy / "failure.json").write_text(json.dumps({"status": "failed"}))
+            self.assertEqual(combined_activation_failures(root, arms), [{
+                "case": "suite:candidate-combined",
+                "error": "selected combined peer/proposal mode executed no combined steps in any completed case",
+            }])

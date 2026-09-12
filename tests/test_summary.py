@@ -312,6 +312,16 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(section["status"], "mixed result")
         self.assertEqual(section["rows"], [])
 
+    def test_incomplete_case_does_not_crash_failure_summary(self):
+        data = durable_data()
+        data["qualification"] = "failed"
+        data["qualification_errors"] = ["one incomplete case"]
+        data["cases"][0]["recovery"] = None
+        data["cases"][0]["history_check"] = None
+        section = build_summary(durable=data)["sections"][3]
+        self.assertEqual(section["status"], "mixed result")
+        self.assertEqual(section["checks"][0]["passed_cases"], len(data["cases"]) - 1)
+
     def test_candidate_accounting_loss_labels_result_mixed(self):
         data = durable_data()
         candidate = next(case for case in data["cases"]

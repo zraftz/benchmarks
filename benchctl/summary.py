@@ -612,8 +612,8 @@ def _failure_section(durable: dict | None, anomalies: list[dict]) -> dict:
     }
     if durable is None:
         return section
-    recovered = [case for case in durable["cases"] if case.get("recovery", {}).get("status") == "passed"]
-    histories = [case for case in durable["cases"] if case.get("history_check", {}).get("status") == "passed"]
+    recovered = [case for case in durable["cases"] if (case.get("recovery") or {}).get("status") == "passed"]
+    histories = [case for case in durable["cases"] if (case.get("history_check") or {}).get("status") == "passed"]
     smokes = [{"scenario": smoke["scenario"], "status": smoke["status"]} for smoke in durable["smokes"]]
     section.update(
         status="mixed result",

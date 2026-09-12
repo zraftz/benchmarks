@@ -55,7 +55,7 @@ def activity(before: dict, after: dict, *, require_combined: bool = False) -> di
         raise ValueError("pipeline counters reset during the steady-state load")
     if sum(delta.values()) == 0:
         raise ValueError("selected pipeline completed no persistence operations during the load")
-    result = {"schema": 2, "status": "passed", "completed_by_node": delta,
+    result = {"schema": 3, "status": "passed", "completed_by_node": delta,
             "scope": "load and generator drain, before post-load canaries; not an exact measurement-window count"}
     optional_names = ("submitted_operations", "synchronous_proposal_batches", "synchronous_proposals",
                       "speculative_proposal_batches", "speculative_proposals",
@@ -72,8 +72,10 @@ def activity(before: dict, after: dict, *, require_combined: bool = False) -> di
                 raise ValueError(f"pipeline {name} counter regressed")
             result[f"{name}_by_node"] = values
     combined = result.get("combined_peer_proposal_batches_by_node")
-    if require_combined and (combined is None or sum(combined.values()) == 0):
-        raise ValueError("selected combined peer/proposal mode executed no combined steps")
+    result["combined_mode"] = {
+        "required_by_configuration": require_combined,
+        "observed_during_load": combined is not None and sum(combined.values()) > 0,
+    }
     threshold_presence = [values["max_speculative_proposals"] is not None
                           for values in (*earlier.values(), *later.values())]
     if any(threshold_presence) and not all(threshold_presence):
@@ -104,12 +106,18 @@ def activity(before: dict, after: dict, *, require_combined: bool = False) -> di
 
 def recorded_activity_matches(actual: dict, recorded: dict) -> bool:
     """Compare current, transitional, and legacy sealed activity verdicts."""
-    if recorded.get("schema") == 2:
+    if recorded.get("schema") == 3:
         return actual == recorded
+    if recorded.get("schema") == 2:
+        compatible = dict(actual)
+        compatible["schema"] = 2
+        compatible.pop("combined_mode", None)
+        return compatible == recorded
     if "schema" in recorded:
         return False
     compatible = dict(actual)
     compatible.pop("schema", None)
+    compatible.pop("combined_mode", None)
     legacy_fields = {"status", "completed_by_node", "scope"}
     if set(recorded) == legacy_fields:
         compatible = {key: compatible[key] for key in legacy_fields}

@@ -30,9 +30,13 @@ def instrumented(counts, speculative, synchronous, sizes, threshold=2):
 class PipelineActivityTests(unittest.TestCase):
     def test_counts_are_deltas_across_nodes_without_claiming_latency(self):
         result = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))
-        self.assertEqual(result["schema"], 2)
+        self.assertEqual(result["schema"], 3)
         self.assertEqual(result["completed_by_node"], {"1": 5, "2": 3, "3": 0})
         self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["combined_mode"], {
+            "required_by_configuration": False,
+            "observed_during_load": False,
+        })
 
     def test_fallback_or_restart_cannot_masquerade_as_exercised_pipeline(self):
         before = snapshot([7, 0, 0])
@@ -68,11 +72,14 @@ class PipelineActivityTests(unittest.TestCase):
         self.assertEqual(result["combined_peer_events_by_node"]["1"], 2)
         self.assertEqual(result["proposal_batch_sizes_by_node"]["1"], {"1": 4, "4": 1})
 
-    def test_selected_combined_mode_must_execute_a_combined_step(self):
+    def test_selected_combined_mode_records_when_no_combined_step_was_available(self):
         before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3}, {}, {}])
         after = instrumented([9, 0, 0], [7, 0, 0], [1, 0, 0], [{"1": 7}, {}, {}])
-        with self.assertRaisesRegex(ValueError, "executed no combined steps"):
-            activity(before, after, require_combined=True)
+        result = activity(before, after, require_combined=True)
+        self.assertEqual(result["combined_mode"], {
+            "required_by_configuration": True,
+            "observed_during_load": False,
+        })
 
     def test_malformed_combined_direction_or_content_counters_fail_closed(self):
         before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3}, {}, {}])
@@ -89,9 +96,13 @@ class PipelineActivityTests(unittest.TestCase):
 
     def test_sealed_activity_compatibility_is_explicit_and_fail_closed(self):
         current = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))
-        transitional = {key: value for key, value in current.items() if key != "schema"}
+        schema_two = {key: value for key, value in current.items()
+                      if key != "combined_mode"}
+        schema_two["schema"] = 2
+        transitional = {key: value for key, value in schema_two.items() if key != "schema"}
         legacy = {key: transitional[key] for key in ("status", "completed_by_node", "scope")}
         self.assertTrue(recorded_activity_matches(current, current))
+        self.assertTrue(recorded_activity_matches(current, schema_two))
         self.assertTrue(recorded_activity_matches(current, transitional))
         self.assertTrue(recorded_activity_matches(current, legacy))
         self.assertFalse(recorded_activity_matches(current, {"status": "passed"}))
