@@ -171,6 +171,7 @@ class SummaryTests(unittest.TestCase):
         summary = build_summary(durable=durable_data(), storage=storage, histories=[history])
         sections = {section["id"]: section for section in summary["sections"]}
         service = sections["complete-durable-service"]
+        self.assertTrue(service["headline_qualified"])
         self.assertEqual(service["selected_configuration"]["name"], "Rafter pipeline FIFO")
         self.assertAlmostEqual(service["rows"][0]["throughput_ratio"], 8025 / 2116)
         self.assertAlmostEqual(service["rows"][0]["rafter_p999_at_1000_ms"], 12.714 * 1.25)
@@ -355,6 +356,10 @@ class SummaryTests(unittest.TestCase):
         candidate["accounting"]["not_issued"] = 1
         section = build_summary(durable=data)["sections"][2]
         self.assertEqual(section["status"], "mixed result")
+        self.assertFalse(section["headline_qualified"])
+        self.assertIn("is not qualified", section["result"])
+        self.assertIn("1 unsent requests", section["result"])
+        self.assertNotIn("3.79×", section["result"])
         self.assertEqual(section["accounting"]["rafter"]["not_issued"], 1)
 
     def test_saturated_tail_regression_labels_result_mixed(self):

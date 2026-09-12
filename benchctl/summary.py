@@ -577,11 +577,23 @@ def _service_section(durable: dict | None, headline_variant: str | None,
             saturated_regressions.append(f"{label} was {abs(no_delay[key]):.1f}% higher")
     tail_qualification = (" At no-delay saturation, " + " and ".join(saturated_regressions)
                           + " while completing that greater load.") if saturated_regressions else ""
+    candidate_loss = sum(candidate_accounting.values())
+    if candidate_loss:
+        result = (
+            f"{example['display_name']} is not qualified: the selected cases include "
+            f"{candidate_accounting['errors']} errors, {candidate_accounting['unknown']} unknown outcomes, "
+            f"and {candidate_accounting['not_issued']} unsent requests."
+        )
+    else:
+        result = (
+            f"{example['display_name']} completed {no_delay['throughput_ratio']:.2f}× as many "
+            f"durable writes per second as the tested {openraft['display_name']} integration in the no-delay condition."
+            + tail_qualification
+        )
     section.update(
         status=status,
-        result=(f"{example['display_name']} completed {no_delay['throughput_ratio']:.2f}× as many "
-                f"durable writes per second as the tested {openraft['display_name']} integration in the no-delay condition."
-                + tail_qualification),
+        result=result,
+        headline_qualified=candidate_loss == 0,
         conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                     f"{example['workload']['payload_bytes']}-byte writes; medians of {example['repetitions']} repetitions. "
                     "Success requires Raft commitment and durable application completion. Added delay affects client and peer egress. "
