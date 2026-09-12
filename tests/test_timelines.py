@@ -103,6 +103,17 @@ class TimelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "has no replication windows"):
             configuration_receipt(before, after, 8)
 
+    def test_replication_window_configuration_rejects_malformed_runtime_status(self):
+        before = add_runtime_windows(snapshot(64, [timeline(1)]), 4)
+        after = add_runtime_windows(snapshot(128, [timeline(1), timeline(65)]), 4)
+        before["2"]["info"]["engine"] = None
+        with self.assertRaisesRegex(ValueError, "malformed engine diagnostics"):
+            configuration_receipt(before, after, 4)
+        before = add_runtime_windows(snapshot(64, [timeline(1)]), 4)
+        before["2"]["info"]["engine"]["replication_windows"]["windows"] = [{}]
+        with self.assertRaisesRegex(ValueError, "non-leader 2 reports replication windows"):
+            configuration_receipt(before, after, 4)
+
     def test_extract_uses_pre_measurement_watermark(self):
         before = snapshot(64, [timeline(1)])
         after = snapshot(128, [timeline(1), timeline(65)])

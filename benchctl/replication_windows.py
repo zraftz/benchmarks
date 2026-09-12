@@ -12,6 +12,7 @@ def _positive_int(value: Any, name: str) -> int:
 def _snapshot(snapshot: dict, name: str, expected: int) -> dict:
     if not isinstance(snapshot, dict) or not snapshot:
         raise ValueError(f"{name} status snapshot has no nodes")
+    node_ids = {_positive_int(int(node), "status node_id") for node in snapshot}
     leaders = []
     for node, status in sorted(snapshot.items(), key=lambda item: int(item[0])):
         if not isinstance(status, dict) or status.get("status") != "ok":
@@ -19,9 +20,20 @@ def _snapshot(snapshot: dict, name: str, expected: int) -> dict:
         info = status.get("info")
         if not isinstance(info, dict) or info.get("implementation") != "rafter":
             raise ValueError(f"{name} node {node} is not a Rafter status")
+        node_id = _positive_int(info.get("node_id"), "node_id")
+        if node_id != int(node):
+            raise ValueError(f"{name} node {node} reports a different node identity")
+        engine = info.get("engine")
+        if not isinstance(engine, dict):
+            raise ValueError(f"{name} node {node} has malformed engine diagnostics")
+        replication = engine.get("replication_windows")
+        if not isinstance(replication, dict):
+            raise ValueError(f"{name} node {node} has malformed replication-window diagnostics")
+        windows = replication.get("windows")
         if info.get("leader") is not True:
+            if windows != []:
+                raise ValueError(f"{name} non-leader {node} reports replication windows")
             continue
-        windows = info.get("engine", {}).get("replication_windows", {}).get("windows")
         if not isinstance(windows, list) or not windows:
             raise ValueError(f"{name} leader {node} has no replication windows")
         observed = []
@@ -44,8 +56,9 @@ def _snapshot(snapshot: dict, name: str, expected: int) -> dict:
                 "follower_id": follower,
                 "max_in_flight_batches": maximum,
             })
-        leaders.append({"node_id": _positive_int(info.get("node_id"), "node_id"),
-                        "follower_windows": observed})
+        if follower_ids != node_ids - {node_id}:
+            raise ValueError(f"{name} leader {node} replication-window membership differs")
+        leaders.append({"node_id": node_id, "follower_windows": observed})
     if not leaders:
         raise ValueError(f"{name} status snapshot has no observed leader")
     return {"leaders": leaders}
