@@ -189,24 +189,36 @@ def runtime_configuration_errors(directory: Path, manifest: dict) -> list[str]:
 
 
 def verify(directory: Path) -> dict[str, Any]:
-    errors = []
+    integrity_errors = []
+    correctness_errors = []
+    active_errors = integrity_errors
     try:
         index = json.loads((directory / "SHA256SUMS.json").read_text())["files"]
         actual = {p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file() and p.name != "SHA256SUMS.json"}
         if actual != set(index):
-            errors.append("artifact inventory changed")
+            integrity_errors.append("artifact inventory changed")
         for relative, sha in index.items():
             p = directory / relative
             if Path(relative).is_absolute() or ".." in Path(relative).parts or p.is_symlink() or not p.is_file():
-                errors.append(f"invalid artifact path: {relative}")
+                integrity_errors.append(f"invalid artifact path: {relative}")
             elif digest(p) != sha:
-                errors.append(f"checksum mismatch: {relative}")
+                integrity_errors.append(f"checksum mismatch: {relative}")
         if (directory / "provenance.json").exists():
             from .micro_report import verify_report
             verify_report(directory)
-            return {"status": "failed" if errors else "passed", "errors": errors}
+            return {
+                "status": "failed" if integrity_errors else "passed",
+                "errors": integrity_errors,
+                "verdicts": {
+                    "evidence_integrity": {
+                        "status": "failed" if integrity_errors else "passed",
+                        "errors": integrity_errors,
+                    },
+                    "correctness_checks": {"status": "not measured", "errors": []},
+                },
+            }
         manifest = json.loads((directory / "manifest.json").read_text())
-        errors.extend(runtime_configuration_errors(directory, manifest))
+        integrity_errors.extend(runtime_configuration_errors(directory, manifest))
         if manifest.get("options", {}).get("diagnostics"):
             from .timelines import extract, recorded_extract_matches
             actual_timelines = extract(
@@ -215,7 +227,7 @@ def verify(directory: Path) -> dict[str, Any]:
             )
             recorded_timelines = json.loads((directory / "operation-timelines.json").read_text())
             if not recorded_extract_matches(actual_timelines, recorded_timelines):
-                errors.append("operation timeline extraction differs from status watermarks")
+                integrity_errors.append("operation timeline extraction differs from status watermarks")
         if manifest.get("options", {}).get("pipelined_durability") and manifest.get("scenario") == "durable-kv":
             from .pipeline import activity, recorded_activity_matches
             actual_activity = activity(
@@ -224,7 +236,7 @@ def verify(directory: Path) -> dict[str, Any]:
                 require_combined=bool(manifest.get("options", {}).get("combine_peer_proposals")))
             recorded_activity = json.loads((directory / "pipeline-activity.json").read_text())
             if not recorded_activity_matches(actual_activity, recorded_activity):
-                errors.append("pipeline activity verdict differs from recorded counters")
+                integrity_errors.append("pipeline activity verdict differs from recorded counters")
         completion_priority = manifest.get("options", {}).get("durable_completion_priority")
         if completion_priority and manifest.get("scenario") == "durable-kv":
             from .completion_priority import activity as completion_priority_activity
@@ -236,22 +248,34 @@ def verify(directory: Path) -> dict[str, Any]:
                 (directory / "completion-priority-activity.json").read_text()
             )
             if actual_priority != recorded_priority:
-                errors.append("durable completion priority verdict differs from recorded counters")
+                integrity_errors.append("durable completion priority verdict differs from recorded counters")
         elif (directory / "completion-priority-activity.json").exists():
-            errors.append("unexpected durable completion priority activity receipt")
+            integrity_errors.append("unexpected durable completion priority activity receipt")
         result = json.loads((directory / "measurement.json").read_text())
-        errors.extend(validate_result(result))
+        integrity_errors.extend(validate_result(result))
+        active_errors = correctness_errors
         qualification = json.loads((directory / "qualification.json").read_text())
         recovery = json.loads((directory / "recovery.json").read_text())
         from .checker import check_history, read_history
         replay = check_history(read_history(directory / "qualification-history.jsonl"))
         if replay.get("status") != "passed":
-            errors.append("independent history recheck did not pass")
+            correctness_errors.append("independent history recheck did not pass")
         if qualification.get("status") != "passed":
-            errors.append("history qualification did not pass")
+            correctness_errors.append("history qualification did not pass")
         if recovery.get("status") != "passed":
-            errors.append("restart recovery check did not pass")
+            correctness_errors.append("restart recovery check did not pass")
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        errors.append(str(exc))
+        active_errors.append(str(exc))
+    errors = integrity_errors + correctness_errors
     return {"status": "passed" if not errors else "failed", "errors": errors,
+            "verdicts": {
+                "evidence_integrity": {
+                    "status": "passed" if not integrity_errors else "failed",
+                    "errors": integrity_errors,
+                },
+                "correctness_checks": {
+                    "status": "passed" if not correctness_errors else "failed",
+                    "errors": correctness_errors,
+                },
+            },
             "scope": "artifact integrity/accounting plus recorded finite checks; not independent certification"}

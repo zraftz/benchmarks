@@ -78,9 +78,13 @@ status requests, wake boundaries, or unsafe Raft input and restores skipped
 execute requests in their original order. It may also release an older
 application completion that is already durable before waiting for a newer Raft
 persistence operation. A client response still requires that client's own
-durable application completion. Per-case receipts record every path, and a
-paired suite fails if a current selected experiment never exercises the bounded
-lookahead. Legacy schema-1 receipts remain replayable without claiming it.
+durable application completion. Deterministic actor tests deliberately exercise
+the bounded lookahead, its scan limit, and unsafe boundaries during the locked
+Rust build. Per-case receipts separately record which paths happened under the
+measured workload. Missing workload observation is reported as incomplete
+feature coverage; it does not invalidate otherwise intact evidence or finite
+correctness checks. Legacy schema-1 receipts remain replayable without claiming
+lookahead coverage.
 
 | Metric | Meaning |
 |---|---|
@@ -103,6 +107,16 @@ not only its median. Client-start waiting and completions after the measurement
 window remain visible as queue-pressure evidence. A highest qualifying point at
 the top of the tested curve is reported as a lower bound, never as maximum
 capacity.
+
+Durable suites publish four independent verdicts. Evidence integrity covers
+expected cases, seals, recorded identities, receipts, and accounting.
+Correctness covers the finite history, restart, and smoke checks. Feature
+coverage states whether selected optimization paths occurred in the measured
+workload. The service objective evaluates achieved rate, latency, and complete
+loss accounting. A report retains measurements when feature coverage is
+incomplete or the service objective fails; it never converts either condition
+into a passing performance claim. Historical suite-level activity failures stay
+visible under their original message while being classified as feature coverage.
 
 Every case checks a complete 64-operation Put/Get/CAS history and acknowledged
 canaries across simultaneous process restarts, before and after load. These

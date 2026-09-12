@@ -68,7 +68,10 @@ class EvidenceTests(unittest.TestCase):
             }
             (p / "qualification-history.jsonl").write_text(json.dumps(event) + "\n")
             seal(p)
-            self.assertEqual(verify(p)["status"], "passed")
+            checked = verify(p)
+            self.assertEqual(checked["status"], "passed")
+            self.assertEqual(checked["verdicts"]["evidence_integrity"]["status"], "passed")
+            self.assertEqual(checked["verdicts"]["correctness_checks"]["status"], "passed")
 
     def test_new_rafter_diagnostics_require_matching_runtime_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,8 +112,10 @@ class EvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);write_json(p/"measurement.json",result());write_json(p/"qualification.json",{"status":"passed"});write_json(p/"recovery.json",{"status":"passed"})
             seal(p);(p/"measurement.json").write_text("{}")
-            self.assertEqual(verify(p)["status"],"failed")
-            self.assertTrue(any("checksum" in e for e in verify(p)["errors"]))
+            checked = verify(p)
+            self.assertEqual(checked["status"],"failed")
+            self.assertEqual(checked["verdicts"]["evidence_integrity"]["status"], "failed")
+            self.assertTrue(any("checksum" in e for e in checked["errors"]))
     def test_symlink_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);(p/"link").symlink_to("/etc/passwd")

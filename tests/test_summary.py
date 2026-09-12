@@ -5,7 +5,8 @@ import tempfile
 import unittest
 
 from benchctl.evidence import seal
-from benchctl.results import _display_name, load_microbench, load_storage_comparison
+from benchctl.results import (_display_name, _is_feature_coverage_failure,
+                              load_microbench, load_storage_comparison)
 from benchctl.summary import build_summary, render_html, render_markdown
 
 
@@ -287,6 +288,54 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("Useful-capacity objective", rendered)
         self.assertIn("Execution p99/p99.9", rendered)
         self.assertIn("Useful-capacity objective", render_html(summary, {}))
+
+    def test_capacity_curve_separates_coverage_from_service_failure(self):
+        data = durable_data()
+        data["cases"] = [
+            service_case("candidate-b32", "rafter", 0, 1000, 940, 247, p999=705, unsent=60),
+            service_case("openraft", "openraft", 0, 1000, 900, 300, p999=800, unsent=100),
+        ]
+        data["verdicts"] = {
+            "evidence_integrity": {
+                "status": "passed",
+                "scope": "expected cases, seals, identities, receipts, and accounting",
+            },
+            "correctness_checks": {
+                "status": "passed",
+                "scope": "finite history and restart checks",
+            },
+            "feature_coverage": {
+                "status": "incomplete",
+                "checks": [{
+                    "status": "incomplete",
+                    "detail": "bounded completion-priority lookahead was not observed in any completed case",
+                }],
+            },
+        }
+        section = build_summary(durable=data)["sections"][2]
+        self.assertEqual(section["status"], "mixed result")
+        self.assertEqual(section["verdicts"]["evidence_integrity"]["status"], "passed")
+        self.assertEqual(section["verdicts"]["correctness_checks"]["status"], "passed")
+        self.assertEqual(section["verdicts"]["feature_coverage"]["status"], "incomplete")
+        self.assertEqual(section["verdicts"]["service_objective"]["status"], "failed")
+        self.assertTrue(section["capacity"]["rows"])
+        rendered = render_markdown(build_summary(durable=data), {})
+        self.assertIn("| Feature coverage | incomplete | bounded completion-priority", rendered)
+        self.assertIn("| Service objective | failed |", rendered)
+
+    def test_legacy_suite_activation_failure_is_feature_coverage(self):
+        self.assertTrue(_is_feature_coverage_failure({
+            "case": "suite:candidate-commit-first",
+            "error": "selected durable completion priority executed no required prioritized work in any completed case",
+        }))
+        self.assertTrue(_is_feature_coverage_failure({
+            "case": "suite:candidate-b32",
+            "error": "selected combined peer/proposal mode executed no combined steps in any completed case",
+        }))
+        self.assertFalse(_is_feature_coverage_failure({
+            "case": "candidate-b32-n0-q1000-r1",
+            "error": "benchmark process exited 1",
+        }))
 
     def test_capacity_report_retains_every_named_variant_boundary(self):
         data = durable_data()

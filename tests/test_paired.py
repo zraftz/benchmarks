@@ -7,6 +7,7 @@ from benchctl.paired import (archive_build, candidate_arms, combined_activation_
                              completion_priority_activation_failures, openraft_arms,
                              ordered_arms, mode_flags)
 from benchctl.evidence import digest
+from benchctl.feature_coverage import verdict as feature_coverage_verdict
 from benchctl.results import _expected_durable_cases
 
 
@@ -109,7 +110,7 @@ class PairedTests(unittest.TestCase):
             )
             self.assertEqual(completion_priority_activation_failures(root, variants), [{
                 "case": "suite:candidate-commit-first",
-                "error": "selected durable completion priority executed no required prioritized work in any completed case",
+                "error": "durable completion-priority activity was not observed in any completed case",
             }])
 
     def test_current_completion_priority_requires_bounded_lookahead_activity(self):
@@ -130,8 +131,16 @@ class PairedTests(unittest.TestCase):
             variants = {"candidate-commit-first"}
             self.assertEqual(completion_priority_activation_failures(root, variants), [{
                 "case": "suite:candidate-commit-first",
-                "error": "selected durable completion priority executed no required prioritized work in any completed case",
+                "error": "bounded completion-priority lookahead was not observed in any completed case",
             }])
+            coverage = feature_coverage_verdict(
+                root, completion_priority=variants, combined=set()
+            )
+            self.assertEqual(coverage["status"], "incomplete")
+            self.assertEqual(
+                coverage["checks"][0]["observations"],
+                {"priority_paths": "passed", "bounded_lookahead": "not observed", "receipts": 1},
+            )
             receipt["observed_bounded_lookahead_during_load"] = True
             (case / "completion-priority-activity.json").write_text(json.dumps(receipt))
             self.assertEqual(completion_priority_activation_failures(root, variants), [])

@@ -9,10 +9,20 @@ from statistics import median
 from typing import Any
 
 from .evidence import CONTRACT, verify
+from .feature_coverage import verdict as feature_coverage_verdict
 
 
 def _read(path: Path) -> Any:
     return json.loads(path.read_text())
+
+
+def _is_feature_coverage_failure(item: dict) -> bool:
+    error = item.get("error", "")
+    return item.get("case", "").startswith("suite:") and (
+        "completion priority" in error
+        or "completion-priority" in error
+        or "combined peer/proposal" in error
+    )
 
 
 def _mode(options: dict) -> str:
@@ -154,6 +164,10 @@ def _normalize_case(case: Path, root: Path) -> dict:
         "smoke": bool(manifest.get("smoke")),
         "qualification": qualification,
         "qualification_errors": errors,
+        "verdicts": checked.get("verdicts", {
+            "evidence_integrity": {"status": qualification, "errors": errors},
+            "correctness_checks": {"status": qualification, "errors": errors},
+        }),
         "metrics": metrics,
         "accounting": accounting,
         "recovery": _read(case / "recovery.json") if (case / "recovery.json").exists() else None,
@@ -177,13 +191,30 @@ def load_durable_suite(directory: Path) -> dict:
     suite = _read(directory / "suite.json")
     completion = _read(directory / "completion.json")
     cases = [_normalize_case(path.parent, directory) for path in sorted(directory.glob("*/manifest.json"))]
-    reasons = [f"runner failure: {item}" for item in completion.get("failures", [])]
+    legacy_coverage_messages = []
+    runner_failures = []
+    for item in completion.get("failures", []):
+        if _is_feature_coverage_failure(item):
+            legacy_coverage_messages.append(item)
+        else:
+            runner_failures.append(item)
+    integrity_reasons = [f"runner failure: {item}" for item in runner_failures]
+    correctness_reasons = []
     expected = _expected_durable_cases(suite)
     if len(cases) != expected:
-        reasons.append(f"expected {expected} primary cases, found {len(cases)}")
-    failed = [case["source_case"] for case in cases if case["qualification"] != "passed"]
-    if failed:
-        reasons.append(f"failed or incomplete cases: {', '.join(failed)}")
+        integrity_reasons.append(f"expected {expected} primary cases, found {len(cases)}")
+    priority_variants = {case["configuration"]["variant"] for case in cases
+                         if case["configuration"]["durable_completion_priority"]}
+    combined_variants = {case["configuration"]["variant"] for case in cases
+                         if case["configuration"]["combine_peer_proposals"]}
+    feature_coverage = feature_coverage_verdict(
+        directory, completion_priority=priority_variants, combined=combined_variants
+    )
+    if legacy_coverage_messages:
+        feature_coverage["historical_runner_messages"] = legacy_coverage_messages
+    recorded_coverage = completion.get("feature_coverage")
+    if recorded_coverage is not None and recorded_coverage != feature_coverage:
+        integrity_reasons.append("recorded feature-coverage verdict differs from retained receipts")
     smokes = []
     for smoke_suite in sorted(directory.glob("worker-smoke-*")):
         smoke_completion = _read(smoke_suite / "completion.json")
@@ -198,12 +229,37 @@ def load_durable_suite(directory: Path) -> dict:
             "failures": smoke_completion.get("failures", []),
         })
         cases.extend(smoke_cases)
+    integrity_failed = [case["source_case"] for case in cases
+                        if case["verdicts"]["evidence_integrity"]["status"] != "passed"]
+    if integrity_failed:
+        integrity_reasons.append(f"evidence-integrity failures: {', '.join(integrity_failed)}")
+    correctness_failed = [case["source_case"] for case in cases
+                          if case["verdicts"]["correctness_checks"]["status"] != "passed"]
+    if correctness_failed:
+        correctness_reasons.append(f"correctness-check failures: {', '.join(correctness_failed)}")
+    failed_smokes = [smoke["scenario"] for smoke in smokes if smoke["status"] != "passed"]
+    if failed_smokes:
+        correctness_reasons.append(f"failed recovery smoke: {', '.join(failed_smokes)}")
+    reasons = integrity_reasons + correctness_reasons
     return {
         "kind": "durable_service",
         "directory": str(directory),
         "suite": suite,
         "qualification": "passed" if not reasons else "failed",
         "qualification_errors": reasons,
+        "verdicts": {
+            "evidence_integrity": {
+                "status": "passed" if not integrity_reasons else "failed",
+                "errors": integrity_reasons,
+                "scope": "expected cases, seals, identities, receipts, and accounting",
+            },
+            "correctness_checks": {
+                "status": "passed" if not correctness_reasons else "failed",
+                "errors": correctness_reasons,
+                "scope": "finite history, restart, and smoke checks; not exhaustive proof",
+            },
+            "feature_coverage": feature_coverage,
+        },
         "cases": cases,
         "smokes": smokes,
     }

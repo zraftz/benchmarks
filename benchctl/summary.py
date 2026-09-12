@@ -385,6 +385,7 @@ def _capacity_summary(rows: list[dict], candidate: str, control: str) -> dict:
 
 def _service_section(durable: dict | None, headline_variant: str | None,
                      headline_control_variant: str | None) -> dict:
+    not_measured_verdict = {"status": "not measured", "detail": "No durable-service evidence selected."}
     section = {
         "id": "complete-durable-service",
         "title": "Complete durable service",
@@ -399,9 +400,19 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                      "rows": [], "source_cases": []},
         "source_cases": [],
         "comparison_kind": "competitor comparison",
+        "verdicts": {
+            "evidence_integrity": dict(not_measured_verdict),
+            "correctness_checks": dict(not_measured_verdict),
+            "feature_coverage": dict(not_measured_verdict),
+            "service_objective": dict(not_measured_verdict),
+        },
     }
     if durable is None:
         return section
+    recorded_verdicts = durable.get("verdicts", {})
+    for name in ("evidence_integrity", "correctness_checks", "feature_coverage"):
+        if name in recorded_verdicts:
+            section["verdicts"][name] = recorded_verdicts[name]
     rows = aggregate_durable(durable)
     if durable["qualification"] != "passed" or any(row["qualification"] != "passed" for row in rows):
         section.update(status="mixed result", result="The selected service evidence is incomplete; no headline was computed.")
@@ -430,6 +441,19 @@ def _service_section(durable: dict | None, headline_variant: str | None,
         return section
     capacity = _capacity_summary(rows, selected, control)
     section["capacity"] = capacity
+    candidate_boundaries = [
+        boundary for boundary in capacity["variant_boundaries"]
+        if boundary["variant"] == selected
+    ]
+    if candidate_boundaries:
+        objective_passed = all(
+            boundary["highest_qualifying_rate"] is not None
+            for boundary in candidate_boundaries
+        )
+        section["verdicts"]["service_objective"] = {
+            "status": "passed" if objective_passed else "failed",
+            "detail": capacity["result"],
+        }
     delays = sorted({row["workload"]["network_delay_ms"] for row in rows
                      if row["configuration"]["variant"] == selected})
     required_rates = {0, 100, 1000}
@@ -452,7 +476,9 @@ def _service_section(durable: dict | None, headline_variant: str | None,
     )
     if not standard_complete:
         if capacity["variant_boundaries"]:
-            section.update(status=capacity["status"], result=capacity["result"],
+            status = ("mixed result" if section["verdicts"]["feature_coverage"]["status"] == "incomplete"
+                      else capacity["status"])
+            section.update(status=status, result=capacity["result"],
                            conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                                        f"{example['workload']['payload_bytes']}-byte writes; {example['repetitions']} repetitions per point. "
                                        "Each capacity decision uses the worst repetition and complete loss accounting. "
@@ -603,7 +629,9 @@ def _service_section(durable: dict | None, headline_variant: str | None,
     section.update(
         status=status,
         result=result,
-        headline_qualified=(candidate_loss == 0 and "measured regression" not in interpretations),
+        headline_qualified=(candidate_loss == 0 and "measured regression" not in interpretations
+                            and section["verdicts"]["feature_coverage"]["status"]
+                            in ("passed", "not selected", "not measured")),
         conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                     f"{example['workload']['payload_bytes']}-byte writes; medians of {example['repetitions']} repetitions. "
                     "Success requires Raft commitment and durable application completion. Added delay affects client and peer egress. "
@@ -683,10 +711,11 @@ def build_summary(*, durable: dict | None = None, storage: dict | None = None,
                   headline_control_variant: str | None = None) -> dict:
     histories = histories or []
     anomalies = _history_anomalies(histories)
+    service = _service_section(durable, headline_variant, headline_control_variant)
     sections = [
         _consensus_section(micro),
         _storage_section(storage),
-        _service_section(durable, headline_variant, headline_control_variant),
+        service,
         _failure_section(durable, anomalies),
     ]
     normalized_results = {
@@ -707,6 +736,7 @@ def build_summary(*, durable: dict | None = None, storage: dict | None = None,
                            "rule": "Differences within ±3% are roughly level; comparisons fail closed across incompatible evidence."},
         "report_generator": {"source_digest": source_digest(), "uses_llm": False},
         "evidence_status": evidence_status,
+        "durable_service_verdicts": service["verdicts"],
         "normalized_results": normalized_results,
         "sections": sections,
     }
@@ -729,6 +759,18 @@ def _fmt_capacity(value: float | None, reached_ceiling: bool) -> str:
         return "none"
     prefix = "at least " if reached_ceiling else ""
     return f"{prefix}{_fmt_ops(value)}/s"
+
+
+def _verdict_detail(verdict: dict) -> str:
+    if verdict.get("detail"):
+        return verdict["detail"]
+    checks = verdict.get("checks", [])
+    if checks:
+        return "; ".join(check["detail"] for check in checks)
+    errors = verdict.get("errors", [])
+    if errors:
+        return "; ".join(str(error) for error in errors)
+    return verdict.get("scope", "No additional detail.")
 
 
 def _history_groups(history: list[dict]) -> list[dict]:
@@ -756,6 +798,18 @@ def render_markdown(summary: dict, evidence: dict) -> str:
     for section_id in ("consensus-in-memory", "durable-replication", "complete-durable-service", "failure-and-sustained-operation"):
         section = sections[section_id]
         lines += [f"## {section['title']}", "", f"*{section['question']}*", "", f"**{section['result']}**", ""]
+        if section_id == "complete-durable-service":
+            labels = {
+                "evidence_integrity": "Evidence integrity",
+                "correctness_checks": "Correctness checks",
+                "feature_coverage": "Feature coverage",
+                "service_objective": "Service objective",
+            }
+            lines += ["| Verdict | Status | Detail |", "| --- | --- | --- |"]
+            for name, label in labels.items():
+                verdict = section["verdicts"][name]
+                lines.append(f"| {label} | {verdict['status']} | {_verdict_detail(verdict)} |")
+            lines.append("")
         if section_id == "consensus-in-memory" and section["rows"]:
             lines += ["| Workload | In flight | Rafter | raft-rs | OpenRaft | Rafter p99 | raft-rs p99 | OpenRaft p99 |",
                       "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
@@ -891,6 +945,20 @@ def render_html(summary: dict, evidence: dict) -> str:
         section = sections[section_id]
         content = [f"<p class='question'>{html.escape(section['question'])}</p>",
                    f"<p class='result'>{html.escape(section['result'])}</p>"]
+        if section_id == "complete-durable-service":
+            labels = {
+                "evidence_integrity": "Evidence integrity",
+                "correctness_checks": "Correctness checks",
+                "feature_coverage": "Feature coverage",
+                "service_objective": "Service objective",
+            }
+            verdict_body = "".join(
+                f"<tr><td>{html.escape(label)}</td><td>{html.escape(section['verdicts'][name]['status'])}</td>"
+                f"<td>{html.escape(_verdict_detail(section['verdicts'][name]))}</td></tr>"
+                for name, label in labels.items()
+            )
+            content.append("<div class='table'><table><thead><tr><th>Verdict</th><th>Status</th><th>Detail</th>"
+                           f"</tr></thead><tbody>{verdict_body}</tbody></table></div>")
         if section_id == "consensus-in-memory" and section["rows"]:
             body = "".join(
                 f"<tr><td>{html.escape(row['workload'])}</td><td>{row['max_in_flight']}</td>"

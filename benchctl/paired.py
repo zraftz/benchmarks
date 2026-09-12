@@ -11,6 +11,7 @@ import uuid
 
 from .build import build
 from .evidence import ROOT, digest, verify, write_json
+from .feature_coverage import combined_step_checks, completion_priority_checks, verdict as coverage_verdict
 from .report import render
 from .runner import run_case
 from .selection import select_rafter
@@ -73,42 +74,14 @@ def ordered_arms(arms: list, repeat: int) -> list:
 
 def combined_activation_failures(output: Path, arms: list[tuple]) -> list[dict]:
     required = {arm[0] for arm in arms if arm[5]}
-    observed = set()
-    for manifest_path in output.glob("*/manifest.json"):
-        case = manifest_path.parent
-        if (case / "failure.json").exists() or not (case / "outcome.json").exists():
-            continue
-        manifest = json.loads(manifest_path.read_text())
-        variant = manifest.get("options", {}).get("variant")
-        if variant not in required or not (case / "pipeline-activity.json").exists():
-            continue
-        receipt = json.loads((case / "pipeline-activity.json").read_text())
-        combined = receipt.get("combined_peer_proposal_batches_by_node")
-        if isinstance(combined, dict) and sum(combined.values()) > 0:
-            observed.add(variant)
-    return [{"case": f"suite:{variant}",
-             "error": "selected combined peer/proposal mode executed no combined steps in any completed case"}
-            for variant in sorted(required - observed)]
+    return [{"case": f"suite:{check['variant']}", "error": check["detail"]}
+            for check in combined_step_checks(output, required) if check["status"] != "passed"]
 
 
 def completion_priority_activation_failures(output: Path, variants: set[str]) -> list[dict]:
-    observed = set()
-    for manifest_path in output.glob("*/manifest.json"):
-        case = manifest_path.parent
-        if (case / "failure.json").exists() or not (case / "outcome.json").exists():
-            continue
-        manifest = json.loads(manifest_path.read_text())
-        variant = manifest.get("options", {}).get("variant")
-        receipt_path = case / "completion-priority-activity.json"
-        if variant in variants and receipt_path.exists():
-            receipt = json.loads(receipt_path.read_text())
-            if (receipt.get("observed_during_load") is True
-                    and (receipt.get("schema") != 2
-                         or receipt.get("observed_bounded_lookahead_during_load") is True)):
-                observed.add(variant)
-    return [{"case": f"suite:{variant}",
-             "error": "selected durable completion priority executed no required prioritized work in any completed case"}
-            for variant in sorted(variants - observed)]
+    return [{"case": f"suite:{check['variant']}", "error": check["detail"]}
+            for check in completion_priority_checks(output, variants)
+            if check["status"] != "passed"]
 
 
 def main() -> None:
@@ -277,14 +250,22 @@ def main() -> None:
                             except Exception as error:
                                 failures.append({"case": name, "error": str(error)})
                                 print(f"FAILED {name}: {error}", flush=True)
-    failures.extend(combined_activation_failures(output, arms))
     priority_variants = set()
     if args.prior_durable_completion_priority:
         priority_variants.add("prior")
     if args.candidate_durable_completion_priority:
         priority_variants.update(arm[0] for arm in candidates)
-    failures.extend(completion_priority_activation_failures(output, priority_variants))
-    write_json(output / "completion.json", {"failures": failures})
+    combined_variants = {arm[0] for arm in arms if arm[5]}
+    feature_coverage = coverage_verdict(
+        output,
+        completion_priority=priority_variants,
+        combined=combined_variants,
+    )
+    write_json(output / "completion.json", {
+        "schema": 2,
+        "failures": failures,
+        "feature_coverage": feature_coverage,
+    })
     render(output, output / "report.html")
     if failures:
         raise RuntimeError(f"{len(failures)} cases failed; evidence retained")
