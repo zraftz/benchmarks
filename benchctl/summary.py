@@ -241,6 +241,15 @@ def _capacity_point(row: dict) -> dict:
     }
 
 
+def _highest_contiguous_qualifying(points: list[tuple[float, dict]]) -> float | None:
+    highest = None
+    for rate, point in points:
+        if not point["qualifies"]:
+            break
+        highest = rate
+    return highest
+
+
 def _variant_capacity_boundaries(rows: list[dict]) -> tuple[list[dict], list[str]]:
     grouped = {}
     for row in rows:
@@ -263,8 +272,7 @@ def _variant_capacity_boundaries(rows: list[dict]) -> tuple[list[dict], list[str
     ):
         rates = sorted(variant_rows, key=lambda row: row["workload"]["offered_per_second"])
         points = [(row["workload"]["offered_per_second"], _capacity_point(row)) for row in rates]
-        qualified = [rate for rate, point in points if point["qualifies"]]
-        highest = max(qualified, default=None)
+        highest = _highest_contiguous_qualifying(points)
         tested_max = points[-1][0]
         example = rates[0]
         sources.extend(case for row in rates for case in row["source_cases"])
@@ -312,10 +320,12 @@ def _capacity_summary(rows: list[dict], candidate: str, control: str) -> dict:
                 "rafter": _capacity_point(candidate_row),
                 "openraft": _capacity_point(control_row),
             })
-        candidate_qualified = [row["offered_per_second"] for row in delay_rows if row["rafter"]["qualifies"]]
-        control_qualified = [row["offered_per_second"] for row in delay_rows if row["openraft"]["qualifies"]]
-        candidate_max = max(candidate_qualified, default=None)
-        control_max = max(control_qualified, default=None)
+        candidate_max = _highest_contiguous_qualifying(
+            [(row["offered_per_second"], row["rafter"]) for row in delay_rows]
+        )
+        control_max = _highest_contiguous_qualifying(
+            [(row["offered_per_second"], row["openraft"]) for row in delay_rows]
+        )
         tested_max = common_rates[-1]
         boundaries.append({
             "network_delay_ms": delay,

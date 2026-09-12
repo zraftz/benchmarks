@@ -284,6 +284,26 @@ class SummaryTests(unittest.TestCase):
             self.assertIn("Rafter synchronous messages", rendered)
             self.assertIn("at least 2,000/s", rendered)
 
+    def test_capacity_does_not_skip_a_failed_lower_rate(self):
+        data = durable_data()
+        data["cases"] = []
+        for rate, p99 in ((1000, 10), (2000, 21), (3000, 10)):
+            data["cases"].append(service_case(
+                "candidate-b32", "rafter", 0, rate, rate, p99, p999=30,
+            ))
+            data["cases"].append(service_case(
+                "openraft", "openraft", 0, rate, rate, 10, p999=30,
+            ))
+        capacity = build_summary(durable=data)["sections"][2]["capacity"]
+        candidate = next(
+            boundary for boundary in capacity["variant_boundaries"]
+            if boundary["variant"] == "candidate-b32"
+        )
+        self.assertEqual(candidate["highest_qualifying_rate"], 1000)
+        self.assertTrue(next(
+            row for row in capacity["rows"] if row["offered_per_second"] == 3000
+        )["rafter"]["qualifies"])
+
     def test_incomplete_suite_suppresses_headline(self):
         data = durable_data()
         data["qualification"] = "failed"
