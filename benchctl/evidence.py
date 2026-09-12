@@ -79,6 +79,57 @@ def proc_sample(pid: int) -> dict[str, Any]:
         return {"pid": pid, "unavailable": True}
 
 
+def system_sample(*, proc_root: Path = Path("/proc"),
+                  cgroup_root: Path = Path("/sys/fs/cgroup")) -> dict[str, Any]:
+    """Linux host-pressure counters; cumulative fields are compared between samples."""
+    result: dict[str, Any] = {}
+    try:
+        fields = (proc_root / "stat").read_text().splitlines()[0].split()
+        names = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
+                 "guest", "guest_nice")
+        if fields[0] != "cpu":
+            raise ValueError("missing aggregate cpu row")
+        result["cpu_ticks"] = {name: int(value) for name, value in zip(names, fields[1:])}
+    except (OSError, ValueError, IndexError):
+        result["cpu_ticks"] = None
+    try:
+        result["cgroup_cpu"] = {
+            key: int(value)
+            for key, value in (
+                line.split() for line in (cgroup_root / "cpu.stat").read_text().splitlines()
+            )
+        }
+    except (OSError, ValueError):
+        result["cgroup_cpu"] = None
+    pressure = {}
+    for resource in ("cpu", "io", "memory"):
+        try:
+            rows = {}
+            for line in (proc_root / "pressure" / resource).read_text().splitlines():
+                kind, *fields = line.split()
+                values = {}
+                for field in fields:
+                    key, value = field.split("=", 1)
+                    values[key] = int(value) if key == "total" else float(value)
+                rows[kind] = values
+            pressure[resource] = rows
+        except (OSError, ValueError):
+            pressure[resource] = None
+    result["pressure"] = pressure
+    try:
+        one, five, fifteen, runnable, last_pid = (proc_root / "loadavg").read_text().split()
+        result["load_average"] = {
+            "one": float(one),
+            "five": float(five),
+            "fifteen": float(fifteen),
+            "runnable": runnable,
+            "last_pid": int(last_pid),
+        }
+    except (OSError, ValueError):
+        result["load_average"] = None
+    return result
+
+
 def validate_result(r: dict[str, Any]) -> list[str]:
     errors = []
     required = ("offered", "attempted", "not_issued", "ok", "unknown", "errors", "completed_in_window", "network_attempts")

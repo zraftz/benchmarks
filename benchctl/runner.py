@@ -14,7 +14,8 @@ import uuid
 from . import protocol
 from .checker import check_history, read_history
 from .cluster import Cluster
-from .evidence import ROOT, capture, digest, host_info, proc_sample, seal, source_digest, validate_result, write_json
+from .evidence import (ROOT, capture, digest, host_info, proc_sample, seal, source_digest,
+                       system_sample, validate_result, write_json)
 
 
 def load_command(nodes: dict[int, str], directory: Path, name: str, *, duration: float,
@@ -154,7 +155,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                     restored = True
                 samples.write(json.dumps({"controller_seconds": elapsed,
                     "nodes": {i: proc_sample(p.pid) for i, p in cluster.processes.items()},
-                    "load_generator": proc_sample(load.pid)}) + "\n")
+                    "load_generator": proc_sample(load.pid),
+                    "system": system_sample()}) + "\n")
                 samples.flush()
                 time.sleep(.1 if options.smoke else 1.0)
             if load.returncode:

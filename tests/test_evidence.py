@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from benchctl.evidence import (CONTRACT, runtime_configuration_errors, seal,
-                               validate_result, verify, write_json)
+                               system_sample, validate_result, verify, write_json)
 from benchctl.replication_windows import configuration_receipt
 from tests.test_timelines import add_runtime_windows, snapshot, timeline
 
@@ -16,6 +16,27 @@ def result():
             "completed_in_window":2,"network_attempts":2,"success_histogram":h,"all_histogram":copy.deepcopy(h)}
 
 class EvidenceTests(unittest.TestCase):
+    def test_system_sample_records_pressure_and_throttling_counters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proc = root / "proc"
+            cgroup = root / "cgroup"
+            (proc / "pressure").mkdir(parents=True)
+            cgroup.mkdir()
+            (proc / "stat").write_text("cpu 1 2 3 4 5 6 7 8 9 10\n")
+            (proc / "loadavg").write_text("0.10 0.20 0.30 2/100 4321\n")
+            (cgroup / "cpu.stat").write_text("usage_usec 100\nnr_throttled 3\nthrottled_usec 40\n")
+            for resource in ("cpu", "io", "memory"):
+                (proc / "pressure" / resource).write_text(
+                    "some avg10=1.25 avg60=0.50 avg300=0.10 total=1234\n"
+                    "full avg10=0.25 avg60=0.05 avg300=0.01 total=234\n"
+                )
+            sample = system_sample(proc_root=proc, cgroup_root=cgroup)
+            self.assertEqual(sample["cpu_ticks"]["steal"], 8)
+            self.assertEqual(sample["cgroup_cpu"]["throttled_usec"], 40)
+            self.assertEqual(sample["pressure"]["io"]["some"]["total"], 1234)
+            self.assertEqual(sample["load_average"]["runnable"], "2/100")
+
     def test_fault_smoke_does_not_require_durable_kv_priority_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp)
