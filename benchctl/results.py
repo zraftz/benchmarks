@@ -70,12 +70,15 @@ def _display_name(manifest: dict) -> str:
             return ("OpenRaft async flusher" if manifest.get("options", {}).get("openraft_async_flush")
                     else "OpenRaft synchronous")
         return {"raft-rs": "raft-rs"}.get(engine, engine)
+    mode = _mode(manifest.get("options", {}))
+    if mode == "pipeline":
+        priority = manifest.get("options", {}).get("durable_completion_priority", False)
+        return "Rafter pipeline + completion priority" if priority else "Rafter pipeline FIFO"
     return {
-        "pipeline": "Rafter pipeline",
         "messages": "Rafter synchronous messages",
         "worker": "Rafter ordered worker",
         "inline": "Rafter inline",
-    }[_mode(manifest.get("options", {}))]
+    }[mode]
 
 
 def _workload(manifest: dict, measurement: dict | None) -> dict:

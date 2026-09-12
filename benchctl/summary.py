@@ -533,6 +533,8 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                     if rate != 0:
                         internal_sources.extend(candidate_rate["source_cases"] + baseline_rate["source_cases"])
                 internal.append({"network_delay_ms": delay, "prior_variant": prior,
+                                 "candidate_name": candidate["display_name"],
+                                 "prior_name": baseline["display_name"],
                                  "throughput_change_percent": change["advantage_percent"],
                                  "interpretation": change["label"],
                                  "latencies": latency_rows,
@@ -742,10 +744,13 @@ def render_markdown(summary: dict, evidence: dict) -> str:
             lines += [f"Rafter accounting: {accounting['errors']} errors · {accounting['unknown']} unknown · {accounting['not_issued']} unsent",
                       f"OpenRaft accounting: {control_accounting['errors']} errors · {control_accounting['unknown']} unknown · {control_accounting['not_issued']} unsent", ""]
             if section["internal_comparisons"]:
+                comparison = section["internal_comparisons"][0]
+                candidate_name = comparison["candidate_name"]
+                prior_name = comparison["prior_name"]
                 changes = " · ".join(f"{item['network_delay_ms']} ms: {item['throughput_change_percent']:+.1f}%"
                                      for item in section["internal_comparisons"])
-                lines += [f"Pipeline versus same-code synchronous Rafter throughput — {changes}", "",
-                          "| Added egress | Offered rate | Pipeline p99 | Synchronous p99 | Pipeline p99.9 | Synchronous p99.9 |",
+                lines += [f"{candidate_name} versus same-code {prior_name} throughput — {changes}", "",
+                          f"| Added egress | Offered rate | {candidate_name} p99 | {prior_name} p99 | {candidate_name} p99.9 | {prior_name} p99.9 |",
                           "| ---: | ---: | ---: | ---: | ---: | ---: |"]
                 for item in section["internal_comparisons"]:
                     for latency in item["latencies"]:
@@ -878,9 +883,13 @@ def render_html(summary: dict, evidence: dict) -> str:
             content.append(f"<p>Rafter accounting: {accounting['errors']} errors · {accounting['unknown']} unknown · {accounting['not_issued']} unsent<br>"
                            f"OpenRaft accounting: {control_accounting['errors']} errors · {control_accounting['unknown']} unknown · {control_accounting['not_issued']} unsent</p>")
             if section["internal_comparisons"]:
+                comparison = section["internal_comparisons"][0]
+                candidate_name = comparison["candidate_name"]
+                prior_name = comparison["prior_name"]
                 changes = " · ".join(f"{item['network_delay_ms']} ms: {item['throughput_change_percent']:+.1f}%"
                                      for item in section["internal_comparisons"])
-                content.append(f"<p>Pipeline versus same-code synchronous Rafter throughput — {html.escape(changes)}</p>")
+                content.append(f"<p>{html.escape(candidate_name)} versus same-code "
+                               f"{html.escape(prior_name)} throughput — {html.escape(changes)}</p>")
                 internal_body = ""
                 for item in section["internal_comparisons"]:
                     internal_body += "".join(
@@ -889,7 +898,8 @@ def render_html(summary: dict, evidence: dict) -> str:
                         f"<td>{_fmt_ms(latency['candidate_p999_ms'])}</td><td>{_fmt_ms(latency['prior_p999_ms'])}</td></tr>"
                         for latency in item["latencies"])
                 content.append("<div class='table'><table><thead><tr><th>Added egress</th><th>Offered rate</th>"
-                               "<th>Pipeline p99</th><th>Synchronous p99</th><th>Pipeline p99.9</th><th>Synchronous p99.9</th>"
+                               f"<th>{html.escape(candidate_name)} p99</th><th>{html.escape(prior_name)} p99</th>"
+                               f"<th>{html.escape(candidate_name)} p99.9</th><th>{html.escape(prior_name)} p99.9</th>"
                                f"</tr></thead><tbody>{internal_body}</tbody></table></div>")
         elif section_id == "failure-and-sustained-operation" and section["checks"]:
             items = []

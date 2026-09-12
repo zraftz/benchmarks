@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from benchctl.evidence import seal
-from benchctl.results import load_microbench, load_storage_comparison
+from benchctl.results import _display_name, load_microbench, load_storage_comparison
 from benchctl.summary import build_summary, render_html, render_markdown
 
 
@@ -43,7 +43,7 @@ def service_case(variant, engine, delay, rate, throughput, p99, *, p999=None, un
         "layer": "complete_service",
         "source_case": f"n{delay}-{variant}-q{rate}",
         "engine": {"name": engine, "version": "r" * 40 if engine == "rafter" else "0.9.24"},
-        "display_name": "Rafter pipeline" if variant.startswith("candidate") else ("Rafter synchronous messages" if variant == "prior" else "OpenRaft"),
+        "display_name": "Rafter pipeline FIFO" if variant.startswith("candidate") else ("Rafter synchronous messages" if variant == "prior" else "OpenRaft"),
         "configuration": {"variant": variant, "mode": mode,
                           "hard_state": "wal" if engine == "rafter" else "adapter_journal",
                           "peer_batch_size": 32 if engine == "rafter" else 1, "client_batch_size": 64},
@@ -170,7 +170,7 @@ class SummaryTests(unittest.TestCase):
         summary = build_summary(durable=durable_data(), storage=storage, histories=[history])
         sections = {section["id"]: section for section in summary["sections"]}
         service = sections["complete-durable-service"]
-        self.assertEqual(service["selected_configuration"]["name"], "Rafter pipeline")
+        self.assertEqual(service["selected_configuration"]["name"], "Rafter pipeline FIFO")
         self.assertAlmostEqual(service["rows"][0]["throughput_ratio"], 8025 / 2116)
         self.assertAlmostEqual(service["rows"][0]["rafter_p999_at_1000_ms"], 12.714 * 1.25)
         self.assertEqual(service["accounting"]["rafter"], {"errors": 0, "unknown": 0, "not_issued": 0})
@@ -227,6 +227,30 @@ class SummaryTests(unittest.TestCase):
         )["sections"][2]
         self.assertEqual(selected["status"], "measured lead")
         self.assertEqual(selected["selected_configuration"]["openraft_variant"], "openraft-async")
+
+    def test_pipeline_names_distinguish_fifo_from_completion_priority(self):
+        manifest = {"implementation": "rafter", "options": {"pipelined_durability": True}}
+        self.assertEqual(_display_name(manifest), "Rafter pipeline FIFO")
+        manifest["options"]["durable_completion_priority"] = True
+        self.assertEqual(_display_name(manifest), "Rafter pipeline + completion priority")
+
+        data = durable_data()
+        for case in data["cases"]:
+            if case["configuration"]["variant"] == "candidate-b32":
+                case["display_name"] = "Rafter pipeline + completion priority"
+            elif case["configuration"]["variant"] == "prior":
+                case["configuration"]["mode"] = "pipeline"
+                case["display_name"] = "Rafter pipeline FIFO"
+        summary = build_summary(durable=data)
+        internal = summary["sections"][2]["internal_comparisons"][0]
+        self.assertEqual(internal["candidate_name"], "Rafter pipeline + completion priority")
+        self.assertEqual(internal["prior_name"], "Rafter pipeline FIFO")
+        for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+            self.assertIn(
+                "Rafter pipeline + completion priority versus same-code Rafter pipeline FIFO",
+                rendered,
+            )
+            self.assertNotIn("same-code synchronous Rafter", rendered)
 
     def test_capacity_curve_uses_declared_objective(self):
         data = durable_data()
