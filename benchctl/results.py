@@ -61,6 +61,7 @@ def _environment(manifest: dict) -> dict:
         "logical_cpus": host.get("logical_cpus"),
         "cpu_model": _cpu_model(host),
         "filesystem": _filesystem(host),
+        "filesystem_space": host.get("filesystem_space"),
         "benchmark_source_digest": manifest.get("source_digest"),
         "load_generator_sha256": manifest.get("loadgen_sha256"),
     }

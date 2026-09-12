@@ -156,7 +156,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 samples.write(json.dumps({"controller_seconds": elapsed,
                     "nodes": {i: proc_sample(p.pid) for i, p in cluster.processes.items()},
                     "load_generator": proc_sample(load.pid),
-                    "system": system_sample()}) + "\n")
+                    "system": system_sample(data_path=data)}) + "\n")
                 samples.flush()
                 time.sleep(.1 if options.smoke else 1.0)
             if load.returncode:

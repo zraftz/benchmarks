@@ -50,11 +50,25 @@ def source_digest() -> str:
     return h.hexdigest()
 
 
+def filesystem_space(data_dir: Path) -> dict[str, int] | None:
+    try:
+        stats = os.statvfs(data_dir)
+        fragment_size = stats.f_frsize or stats.f_bsize
+        return {
+            "total_bytes": stats.f_blocks * fragment_size,
+            "free_bytes": stats.f_bfree * fragment_size,
+            "available_bytes": stats.f_bavail * fragment_size,
+        }
+    except OSError:
+        return None
+
+
 def host_info(data_dir: Path) -> dict[str, Any]:
     result = {"platform": platform.platform(), "machine": platform.machine(), "python": sys.version,
               "logical_cpus": os.cpu_count(), "data_path": str(data_dir.resolve()),
               "uname": capture(["uname", "-a"]), "cpu": capture(["lscpu"]),
               "filesystem": capture(["findmnt", "-T", str(data_dir), "-J", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"]),
+              "filesystem_space": filesystem_space(data_dir),
               "storage": capture(["lsblk", "-J", "-o", "NAME,TYPE,SIZE,ROTA,MODEL"]),
               "git": capture(["git", "rev-parse", "HEAD"]), "git_status": capture(["git", "status", "--porcelain"])}
     for name, file in (("cpu_max", "/sys/fs/cgroup/cpu.max"), ("memory_max", "/sys/fs/cgroup/memory.max")):
@@ -80,7 +94,8 @@ def proc_sample(pid: int) -> dict[str, Any]:
 
 
 def system_sample(*, proc_root: Path = Path("/proc"),
-                  cgroup_root: Path = Path("/sys/fs/cgroup")) -> dict[str, Any]:
+                  cgroup_root: Path = Path("/sys/fs/cgroup"),
+                  data_path: Path | None = None) -> dict[str, Any]:
     """Linux host-pressure counters; cumulative fields are compared between samples."""
     result: dict[str, Any] = {}
     try:
@@ -127,6 +142,38 @@ def system_sample(*, proc_root: Path = Path("/proc"),
         }
     except (OSError, ValueError):
         result["load_average"] = None
+    try:
+        devices = {}
+        for line in (proc_root / "diskstats").read_text().splitlines():
+            fields = line.split()
+            if len(fields) < 14:
+                raise ValueError("incomplete diskstats row")
+            values = [int(value) for value in fields[:2] + fields[3:]]
+            device = {
+                "major": values[0],
+                "minor": values[1],
+                "reads_completed": values[2],
+                "reads_merged": values[3],
+                "sectors_read": values[4],
+                "read_ms": values[5],
+                "writes_completed": values[6],
+                "writes_merged": values[7],
+                "sectors_written": values[8],
+                "write_ms": values[9],
+                "io_in_progress": values[10],
+                "io_ms": values[11],
+                "weighted_io_ms": values[12],
+            }
+            optional = (
+                "discards_completed", "discards_merged", "sectors_discarded",
+                "discard_ms", "flushes_completed", "flush_ms",
+            )
+            device.update(zip(optional, values[13:19]))
+            devices[fields[2]] = device
+        result["block_devices"] = devices
+    except (OSError, ValueError):
+        result["block_devices"] = None
+    result["filesystem_space"] = filesystem_space(data_path) if data_path is not None else None
     return result
 
 

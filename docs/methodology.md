@@ -133,6 +133,14 @@ remain visible and fail the job. The durable report excludes failed cases from
 aggregates; always inspect errors, unknowns, and unsent work alongside speed.
 Checksums detect artifact changes; they are not signatures.
 
+Durable cases also sample Linux PSI, CPU and cgroup throttling counters, load,
+per-process I/O, filesystem capacity, and raw `/proc/diskstats` block-device
+latency/utilization counters during the measured load. These cumulative counters
+help distinguish storage saturation from other host pressure; they do not by
+themselves identify the workload responsible for a stall. The case manifest
+records the filesystem source so block-device deltas can be interpreted against
+the selected data path.
+
 Keep default pins checked in. A requested Rafter ref is resolved once and written
 as an exact commit into both manifests, then Cargo updates their locks while
 retaining existing compatible dependencies. Builds use `--locked`. The selected
