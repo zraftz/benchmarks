@@ -259,6 +259,31 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("Execution p99/p99.9", rendered)
         self.assertIn("Useful-capacity objective", render_html(summary, {}))
 
+    def test_capacity_report_retains_every_named_variant_boundary(self):
+        data = durable_data()
+        data["cases"] = []
+        for rate in (1000, 2000):
+            data["cases"].append(service_case(
+                "candidate-b32", "rafter", 0, rate, rate,
+                8 if rate == 1000 else 21, p999=15 if rate == 1000 else 45,
+            ))
+            data["cases"].append(service_case(
+                "prior", "rafter", 0, rate, rate, 10, p999=18,
+            ))
+            data["cases"].append(service_case(
+                "openraft", "openraft", 0, rate, rate,
+                12 if rate == 1000 else 25, p999=30 if rate == 1000 else 60,
+            ))
+        summary = build_summary(durable=data)
+        capacity = summary["sections"][2]["capacity"]
+        boundaries = {row["variant"]: row for row in capacity["variant_boundaries"]}
+        self.assertEqual(boundaries["prior"]["highest_qualifying_rate"], 2000)
+        self.assertEqual(boundaries["candidate-b32"]["highest_qualifying_rate"], 1000)
+        self.assertEqual(boundaries["openraft"]["highest_qualifying_rate"], 1000)
+        for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+            self.assertIn("Rafter synchronous messages", rendered)
+            self.assertIn("at least 2,000/s", rendered)
+
     def test_incomplete_suite_suppresses_headline(self):
         data = durable_data()
         data["qualification"] = "failed"

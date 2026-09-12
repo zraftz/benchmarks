@@ -241,11 +241,51 @@ def _capacity_point(row: dict) -> dict:
     }
 
 
+def _variant_capacity_boundaries(rows: list[dict]) -> tuple[list[dict], list[str]]:
+    grouped = {}
+    for row in rows:
+        rate = row["workload"]["offered_per_second"]
+        if rate <= 0:
+            continue
+        key = (row["workload"]["network_delay_ms"], row["configuration"]["variant"])
+        grouped.setdefault(key, []).append(row)
+
+    boundaries = []
+    sources = []
+    for (delay, variant), variant_rows in sorted(
+        grouped.items(),
+        key=lambda item: (
+            item[0][0],
+            0 if item[1][0]["engine"]["name"] == "rafter" else 1,
+            item[1][0]["display_name"],
+            item[0][1],
+        ),
+    ):
+        rates = sorted(variant_rows, key=lambda row: row["workload"]["offered_per_second"])
+        points = [(row["workload"]["offered_per_second"], _capacity_point(row)) for row in rates]
+        qualified = [rate for rate, point in points if point["qualifies"]]
+        highest = max(qualified, default=None)
+        tested_max = points[-1][0]
+        example = rates[0]
+        sources.extend(case for row in rates for case in row["source_cases"])
+        boundaries.append({
+            "network_delay_ms": delay,
+            "variant": variant,
+            "display_name": example["display_name"],
+            "engine": example["engine"]["name"],
+            "highest_qualifying_rate": highest,
+            "maximum_tested_rate": tested_max,
+            "reached_tested_ceiling": highest == tested_max,
+        })
+    return boundaries, sources
+
+
 def _capacity_summary(rows: list[dict], candidate: str, control: str) -> dict:
     candidate_delays = {row["workload"]["network_delay_ms"] for row in rows
                         if row["configuration"]["variant"] == candidate}
     control_delays = {row["workload"]["network_delay_ms"] for row in rows
                       if row["configuration"]["variant"] == control}
+    variant_boundaries, variant_sources = _variant_capacity_boundaries(rows)
     curves = []
     boundaries = []
     sources = []
@@ -288,7 +328,8 @@ def _capacity_summary(rows: list[dict], candidate: str, control: str) -> dict:
         curves.extend(delay_rows)
     if not boundaries:
         return {"status": "not measured", "result": "No common fixed-rate capacity curve was selected.",
-                "objective": SERVICE_OBJECTIVE, "boundaries": [], "rows": [], "source_cases": []}
+                "objective": SERVICE_OBJECTIVE, "boundaries": [], "variant_boundaries": variant_boundaries,
+                "rows": [], "source_cases": _source_refs("durable_service", dict.fromkeys(variant_sources))}
     comparisons = []
     for boundary in boundaries:
         candidate_value = boundary["rafter_highest_qualifying_rate"] or 0
@@ -312,8 +353,9 @@ def _capacity_summary(rows: list[dict], candidate: str, control: str) -> dict:
                    f"{describe('rafter')}; the selected OpenRaft control met it through {describe('openraft')}."),
         "objective": SERVICE_OBJECTIVE,
         "boundaries": boundaries,
+        "variant_boundaries": variant_boundaries,
         "rows": curves,
-        "source_cases": _source_refs("durable_service", sources),
+        "source_cases": _source_refs("durable_service", dict.fromkeys(sources + variant_sources)),
     }
 
 
@@ -329,7 +371,8 @@ def _service_section(durable: dict | None, headline_variant: str | None,
         "rows": [],
         "internal_comparisons": [],
         "capacity": {"status": "not measured", "result": "No common fixed-rate capacity curve was selected.",
-                     "objective": SERVICE_OBJECTIVE, "boundaries": [], "rows": [], "source_cases": []},
+                     "objective": SERVICE_OBJECTIVE, "boundaries": [], "variant_boundaries": [],
+                     "rows": [], "source_cases": []},
         "source_cases": [],
         "comparison_kind": "competitor comparison",
     }
@@ -380,7 +423,7 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                               "openraft_variant": control,
                               "openraft_version": openraft["engine"]["version"]}
     if not standard_complete:
-        if capacity["rows"]:
+        if capacity["variant_boundaries"]:
             section.update(status=capacity["status"], result=capacity["result"],
                            conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                                        f"{example['workload']['payload_bytes']}-byte writes; {example['repetitions']} repetitions per point. "
@@ -626,6 +669,13 @@ def _fmt_us(value: float) -> str:
     return f"{value:,.1f} µs"
 
 
+def _fmt_capacity(value: float | None, reached_ceiling: bool) -> str:
+    if value is None:
+        return "none"
+    prefix = "at least " if reached_ceiling else ""
+    return f"{prefix}{_fmt_ops(value)}/s"
+
+
 def render_markdown(summary: dict, evidence: dict) -> str:
     sections = {section["id"]: section for section in summary["sections"]}
     lines = [f"# {summary['title']}", "", summary["principle"], ""]
@@ -702,14 +752,24 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                     scenarios = ", ".join(f"{item['scenario']} {item['status']}" for item in check["scenarios"])
                     lines.append(f"- {check['name']}: {scenarios} — {check['scope']}")
             lines.append("")
-        if section_id == "complete-durable-service" and section["capacity"]["rows"]:
+        if section_id == "complete-durable-service" and section["capacity"]["variant_boundaries"]:
             objective = section["capacity"]["objective"]
             lines += [f"Useful-capacity objective: every repetition achieves at least "
                       f"{objective['minimum_achieved_percent']:.0f}% of offered load, p99 ≤ "
                       f"{objective['maximum_p99_ms']:.0f} ms, p99.9 ≤ {objective['maximum_p999_ms']:.0f} ms, "
                       "and zero errors, unknown outcomes, or unsent requests.", "",
                       f"**{section['capacity']['result']}**", "",
-                      "| Added egress | Offered | Engine | Min achieved | Arrival p99/p99.9 | Execution p99/p99.9 | Start-wait p99 | Post-window | Loss | Meets objective |",
+                      "| Added egress | Configuration | Highest qualifying rate | Tested through |",
+                      "| ---: | --- | ---: | ---: |"]
+            for boundary in section["capacity"]["variant_boundaries"]:
+                lines.append(
+                    f"| {boundary['network_delay_ms']} ms | {boundary['display_name']} | "
+                    f"{_fmt_capacity(boundary['highest_qualifying_rate'], boundary['reached_tested_ceiling'])} | "
+                    f"{_fmt_ops(boundary['maximum_tested_rate'])}/s |"
+                )
+            lines.append("")
+        if section_id == "complete-durable-service" and section["capacity"]["rows"]:
+            lines += ["| Added egress | Offered | Engine | Min achieved | Arrival p99/p99.9 | Execution p99/p99.9 | Start-wait p99 | Post-window | Loss | Meets objective |",
                       "| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | :---: |"]
             for row in section["capacity"]["rows"]:
                 for engine, label in (("rafter", "Rafter"), ("openraft", "OpenRaft")):
@@ -828,13 +888,24 @@ def render_html(summary: dict, evidence: dict) -> str:
                          ", ".join(f"{item['scenario']} {item['status']}" for item in check["scenarios"]))
                 items.append(f"<li><strong>{html.escape(check['name'])}:</strong> {html.escape(value)} — {html.escape(check['scope'])}</li>")
             content.append("<ul>" + "".join(items) + "</ul>")
-        if section_id == "complete-durable-service" and section["capacity"]["rows"]:
+        if section_id == "complete-durable-service" and section["capacity"]["variant_boundaries"]:
             objective = section["capacity"]["objective"]
             content.append(f"<p>Useful-capacity objective: every repetition achieves at least "
                            f"{objective['minimum_achieved_percent']:.0f}% of offered load, p99 ≤ "
                            f"{objective['maximum_p99_ms']:.0f} ms, p99.9 ≤ {objective['maximum_p999_ms']:.0f} ms, "
                            "and zero errors, unknown outcomes, or unsent requests.</p>")
             content.append(f"<p><strong>{html.escape(section['capacity']['result'])}</strong></p>")
+            boundary_body = "".join(
+                f"<tr><td>{boundary['network_delay_ms']} ms</td>"
+                f"<td>{html.escape(boundary['display_name'])}</td>"
+                f"<td>{_fmt_capacity(boundary['highest_qualifying_rate'], boundary['reached_tested_ceiling'])}</td>"
+                f"<td>{_fmt_ops(boundary['maximum_tested_rate'])}/s</td></tr>"
+                for boundary in section["capacity"]["variant_boundaries"]
+            )
+            content.append("<div class='table'><table><thead><tr><th>Added egress</th><th>Configuration</th>"
+                           "<th>Highest qualifying rate</th><th>Tested through</th>"
+                           f"</tr></thead><tbody>{boundary_body}</tbody></table></div>")
+        if section_id == "complete-durable-service" and section["capacity"]["rows"]:
             capacity_body = ""
             for row in section["capacity"]["rows"]:
                 for engine, label in (("rafter", "Rafter"), ("openraft", "OpenRaft")):
