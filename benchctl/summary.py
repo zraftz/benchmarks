@@ -651,7 +651,8 @@ def _failure_section(durable: dict | None, anomalies: list[dict]) -> dict:
         "checks": [],
         "history": anomalies,
         "not_measured": ["comparative leader-loss performance", "comparative slow-follower performance",
-                         "storage-stall recovery performance", "snapshot/compaction soak and physical reclamation"],
+                         "storage-stall recovery performance",
+                         "snapshot/compaction and WAL-reclamation soak performance"],
         "source_cases": [],
     }
     if durable is None:
