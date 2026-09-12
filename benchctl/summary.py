@@ -563,6 +563,10 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                         "saturated_p999_interpretation", "p99_at_100_interpretation",
                         "p999_at_100_interpretation", "p99_at_1000_interpretation",
                         "p999_at_1000_interpretation")]
+    tail_interpretations = [row[key] for row in result_rows for key in
+                            ("saturated_p99_interpretation", "saturated_p999_interpretation",
+                             "p99_at_100_interpretation", "p999_at_100_interpretation",
+                             "p99_at_1000_interpretation", "p999_at_1000_interpretation")]
     if any(candidate_accounting.values()) or "measured regression" in interpretations:
         status = "mixed result"
     elif all(row["throughput_interpretation"] == "roughly level" for row in result_rows):
@@ -590,10 +594,16 @@ def _service_section(durable: dict | None, headline_variant: str | None,
             f"durable writes per second as the tested {openraft['display_name']} integration in the no-delay condition."
             + tail_qualification
         )
+        tail_regressions = tail_interpretations.count("measured regression")
+        if tail_regressions:
+            result += (
+                f" Across the displayed loads, {tail_regressions} of {len(tail_interpretations)} "
+                "p99 and p99.9 comparisons were regressions."
+            )
     section.update(
         status=status,
         result=result,
-        headline_qualified=candidate_loss == 0,
+        headline_qualified=(candidate_loss == 0 and "measured regression" not in interpretations),
         conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                     f"{example['workload']['payload_bytes']}-byte writes; medians of {example['repetitions']} repetitions. "
                     "Success requires Raft commitment and durable application completion. Added delay affects client and peer egress. "

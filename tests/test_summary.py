@@ -375,7 +375,9 @@ class SummaryTests(unittest.TestCase):
         candidate["metrics"]["client_p99_ms"] = control["metrics"]["client_p99_ms"] * 1.2
         section = build_summary(durable=data)["sections"][2]
         self.assertEqual(section["status"], "mixed result")
+        self.assertFalse(section["headline_qualified"])
         self.assertEqual(section["rows"][0]["saturated_p99_interpretation"], "measured regression")
+        self.assertIn("1 of 12", section["result"])
 
     def test_storage_loader_recomputes_raw_receipts(self):
         with tempfile.TemporaryDirectory() as temp:
