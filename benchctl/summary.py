@@ -730,6 +730,25 @@ def _fmt_capacity(value: float | None, reached_ceiling: bool) -> str:
     return f"{prefix}{_fmt_ops(value)}/s"
 
 
+def _history_groups(history: list[dict]) -> list[dict]:
+    """Keep the reader summary short while the normalized JSON retains every case."""
+    groups: dict[tuple[str, str], dict] = {}
+    for item in history:
+        key = (item["evidence"], item["run"])
+        group = groups.setdefault(key, {
+            "evidence": item["evidence"],
+            "run": item["run"],
+            "cases": 0,
+            "unsent": 0,
+            "unknown": 0,
+            "errors": 0,
+        })
+        group["cases"] += 1
+        for field in ("unsent", "unknown", "errors"):
+            group[field] += item[field]
+    return list(groups.values())
+
+
 def render_markdown(summary: dict, evidence: dict) -> str:
     sections = {section["id"]: section for section in summary["sections"]}
     lines = [f"# {summary['title']}", "", summary["principle"], ""]
@@ -846,9 +865,11 @@ def render_markdown(summary: dict, evidence: dict) -> str:
             lines += [*(f"- {detail}" for detail in section["details"]), ""]
         if section.get("history"):
             lines += ["Visible history:", ""]
-            for item in section["history"]:
-                lines.append(f"- Run {item['run']}, `{item['case']}`: {item['unsent']} unsent, "
-                             f"{item['unknown']} unknown, {item['errors']} errors.")
+            for group in _history_groups(section["history"]):
+                noun = "case" if group["cases"] == 1 else "cases"
+                lines.append(f"- Run {group['run']}: {group['cases']} affected {noun}, "
+                             f"{group['unsent']} unsent, {group['unknown']} unknown, "
+                             f"{group['errors']} errors. Individual cases remain in `summary.json`.")
             lines.append("")
         if section.get("not_measured"):
             lines += ["Not yet measured: " + "; ".join(section["not_measured"]) + ".", ""]
@@ -992,9 +1013,12 @@ def render_html(summary: dict, evidence: dict) -> str:
         if section.get("details"):
             content.append("<ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in section["details"]) + "</ul>")
         if section.get("history"):
-            items = "".join(f"<li>Run {html.escape(item['run'])}, <code>{html.escape(item['case'])}</code>: "
-                            f"{item['unsent']} unsent, {item['unknown']} unknown, {item['errors']} errors.</li>"
-                            for item in section["history"])
+            items = ""
+            for group in _history_groups(section["history"]):
+                noun = "case" if group["cases"] == 1 else "cases"
+                items += (f"<li>Run {html.escape(group['run'])}: {group['cases']} affected {noun}, "
+                          f"{group['unsent']} unsent, {group['unknown']} unknown, "
+                          f"{group['errors']} errors. Individual cases remain in <code>summary.json</code>.</li>")
             content.append("<details><summary>Visible history</summary><ul>" + items + "</ul></details>")
         if section.get("not_measured"):
             content.append("<p><strong>Not yet measured:</strong> "

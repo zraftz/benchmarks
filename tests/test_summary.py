@@ -189,7 +189,9 @@ class SummaryTests(unittest.TestCase):
             self.assertIn("8,025", rendered)
             self.assertIn("3.79", rendered)
             self.assertIn("p99.9", rendered)
-            self.assertIn("567 unsent", rendered)
+            self.assertIn("576 unsent", rendered)
+            self.assertIn("2 affected cases", rendered)
+            self.assertIn("Individual cases remain in", rendered)
             self.assertIn("Selected identities: Rafter aaaaaaaaaaaa; OpenRaft 0.9.24.", rendered)
         self.assertIn('"rafter_throughput_ops_s": 8025', json.dumps(summary, sort_keys=True))
 

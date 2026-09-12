@@ -124,3 +124,7 @@ as an exact commit into both manifests, then Cargo updates their locks while
 retaining existing compatible dependencies. Builds use `--locked`. The selected
 locks are uploaded, including any transitive dependency changes the ref requires.
 Re-run the controls on the same hardware when testing a new Rafter revision.
+Process samples retain host CPU, cgroup throttling, load average, and Linux
+pressure counters when the operating system exposes them. They are diagnostic
+context, not an automatic rule for deleting or accepting a run; anomalous and
+failed evidence remains visible.

@@ -125,7 +125,9 @@ Each timeline names the adapter's first observable Raft commit callback and the 
 dispatch, start, durable completion, and client completion points. These are callback timestamps,
 not kernel storage-commit timestamps. Diagnostics also retain owner persistence blocking,
 replication-ack queue delay, proposal-batch distribution, and owner-observed full replication-window
-time. Paired CI can sweep speculative limits and restrict timing and diagnostic rates independently.
+time. Per-process samples retain host CPU, cgroup throttling, load, and Linux pressure counters when
+available; these explain anomalous runs but never silently exclude them. Paired CI can sweep
+speculative limits and restrict timing and diagnostic rates independently.
 It can also retain synchronous and asynchronous OpenRaft storage controls as
 separately named arms.
 
