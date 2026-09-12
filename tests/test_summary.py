@@ -42,7 +42,7 @@ def service_case(variant, engine, delay, rate, throughput, p99, *, p999=None, un
     return {
         "layer": "complete_service",
         "source_case": f"n{delay}-{variant}-q{rate}",
-        "engine": {"name": engine, "version": "r" * 40 if engine == "rafter" else "0.9.24"},
+        "engine": {"name": engine, "version": "a" * 40 if engine == "rafter" else "0.9.24"},
         "display_name": "Rafter pipeline FIFO" if variant.startswith("candidate") else ("Rafter synchronous messages" if variant == "prior" else "OpenRaft"),
         "configuration": {"variant": variant, "mode": mode,
                           "hard_state": "wal" if engine == "rafter" else "adapter_journal",
@@ -107,7 +107,7 @@ def durable_data():
 def storage_record(arm, backend, batch, throughput, p99):
     return {
         "layer": "durable_replication",
-        "engine": {"name": "rafter", "version": "r" * 40},
+        "engine": {"name": "rafter", "version": "a" * 40},
         "display_name": backend,
         "configuration": {"hard_state": backend, "arm": arm},
         "workload": {"kind": "proposal_batches", "batch_size": batch, "payload_bytes": 256, "batches": 1000},
@@ -139,6 +139,7 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("4 of 4", section["result"])
         rendered = render_markdown(build_summary(micro=micro), {})
         self.assertIn("reference application operation", rendered)
+        self.assertIn("Selected identities: rafter selected; raft-rs selected; openraft selected.", rendered)
         self.assertIn("120/s", rendered)
 
     def test_in_memory_evidence_fails_closed_on_boundary_or_repetition_mismatch(self):
@@ -188,6 +189,7 @@ class SummaryTests(unittest.TestCase):
             self.assertIn("3.79", rendered)
             self.assertIn("p99.9", rendered)
             self.assertIn("567 unsent", rendered)
+            self.assertIn("Selected identities: Rafter aaaaaaaaaaaa; OpenRaft 0.9.24.", rendered)
         self.assertIn('"rafter_throughput_ops_s": 8025', json.dumps(summary, sort_keys=True))
 
     def test_multiple_candidates_require_explicit_selection(self):

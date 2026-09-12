@@ -23,6 +23,10 @@ SERVICE_OBJECTIVE = {
 }
 
 
+def _brief_version(value: str) -> str:
+    return value[:12] if re.fullmatch(r"[0-9a-f]{40}", value) else value
+
+
 def _source_refs(evidence: str, cases: Iterable[str]) -> list[dict]:
     return [{"evidence": evidence, "case": case} for case in cases]
 
@@ -133,6 +137,15 @@ def _consensus_section(micro: dict | None) -> dict:
     section["details"].append(
         f"All adapters execute the same leader-side reference application operation; {min(repetitions)} repetitions."
     )
+    identities = {
+        record["engine"]["name"]: _brief_version(record["engine"]["version"])
+        for record in micro["records"]
+    }
+    section["details"].append(
+        "Selected identities: "
+        + "; ".join(f"{name} {identities[name]}" for name in ("rafter", "raft-rs", "openraft"))
+        + "."
+    )
     return section
 
 
@@ -185,7 +198,8 @@ def _storage_section(storage: dict | None) -> dict:
         result=(f"The append-only journal improved throughput {min(throughput_changes):.1f}–"
                 f"{max(throughput_changes):.1f}% over Rafter's file-replacement backend."),
         conditions=("One identical Rafter binary, 256-byte proposals, three repetitions; "
-                    "batch size is explicit in every row."),
+                    "batch size is explicit in every row. Selected Rafter revision: "
+                    f"{_brief_version(storage['records'][0]['engine']['version'])}."),
         rows=rows,
         sync_probes=storage["sync_probes"],
         batch_p99_improvement_percent={"min": min(p99_advantages), "max": max(p99_advantages)},
@@ -432,12 +446,17 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                               "openraft_control": openraft["display_name"],
                               "openraft_variant": control,
                               "openraft_version": openraft["engine"]["version"]}
+    selected_identities = (
+        f"Selected identities: Rafter {_brief_version(example['engine']['version'])}; "
+        f"{openraft['display_name']} {_brief_version(openraft['engine']['version'])}."
+    )
     if not standard_complete:
         if capacity["variant_boundaries"]:
             section.update(status=capacity["status"], result=capacity["result"],
                            conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                                        f"{example['workload']['payload_bytes']}-byte writes; {example['repetitions']} repetitions per point. "
-                                       "Each capacity decision uses the worst repetition and complete loss accounting."),
+                                       "Each capacity decision uses the worst repetition and complete loss accounting. "
+                                       + selected_identities),
                            selected_configuration=selected_configuration,
                            source_cases=capacity["source_cases"])
         else:
@@ -566,7 +585,8 @@ def _service_section(durable: dict | None, headline_variant: str | None,
         conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                     f"{example['workload']['payload_bytes']}-byte writes; medians of {example['repetitions']} repetitions. "
                     "Success requires Raft commitment and durable application completion. Added delay affects client and peer egress. "
-                    "Storage, codec, and scheduling choices differ between integrations."),
+                    "Storage, codec, and scheduling choices differ between integrations. "
+                    + selected_identities),
         selected_configuration=selected_configuration,
         rows=result_rows,
         accounting={"rafter": candidate_accounting, "openraft": control_accounting},
