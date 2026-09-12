@@ -3,7 +3,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from benchctl.evidence import CONTRACT, seal, validate_result, verify, write_json
+from benchctl.evidence import (CONTRACT, runtime_configuration_errors, seal,
+                               validate_result, verify, write_json)
+from benchctl.replication_windows import configuration_receipt
+from tests.test_timelines import add_runtime_windows, snapshot, timeline
 
 
 def result():
@@ -13,6 +16,26 @@ def result():
             "completed_in_window":2,"network_attempts":2,"success_histogram":h,"all_histogram":copy.deepcopy(h)}
 
 class EvidenceTests(unittest.TestCase):
+    def test_new_rafter_diagnostics_require_matching_runtime_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            before = add_runtime_windows(snapshot(64, [timeline(1)]), 4)
+            after = add_runtime_windows(snapshot(128, [timeline(1), timeline(65)]), 4)
+            write_json(p / "before.json", before)
+            write_json(p / "diagnostics-after-load.json", after)
+            manifest = {"implementation": "rafter", "options": {
+                "diagnostics": True, "max_inflight_appends": 4}}
+            self.assertEqual(runtime_configuration_errors(p, manifest),
+                             ["replication window activation receipt is missing"])
+            write_json(p / "replication-window-config.json",
+                       configuration_receipt(before, after, 4))
+            self.assertEqual(runtime_configuration_errors(p, manifest), [])
+
+    def test_old_rafter_evidence_does_not_require_new_runtime_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = {"implementation": "rafter", "options": {"diagnostics": True}}
+            self.assertEqual(runtime_configuration_errors(Path(tmp), manifest), [])
+
     def test_accounting(self):self.assertEqual(validate_result(result()),[])
     def test_omitted_offered_work(self):
         r=result();r["offered"]+=1;self.assertTrue(validate_result(r))

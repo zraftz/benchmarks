@@ -2,6 +2,7 @@ import copy
 import unittest
 
 from benchctl.timelines import STAGES, extract, recorded_extract_matches
+from benchctl.replication_windows import configuration_receipt
 
 
 def timeline(ordinal=65, boundary="engine_apply_effect"):
@@ -70,7 +71,38 @@ def add_diagnostics(snapshot_value, *, samples, total, observed, full):
     return snapshot_value
 
 
+def add_runtime_windows(snapshot_value, maximum=8):
+    for node, status in snapshot_value.items():
+        status["info"]["implementation"] = "rafter"
+        status["info"]["node_id"] = int(node)
+        status["info"]["leader"] = node == "1"
+        status["info"].setdefault("engine", {})["replication_windows"] = {
+            "windows": ([
+                {"follower_id": 2, "max_in_flight_batches": maximum},
+                {"follower_id": 3, "max_in_flight_batches": maximum},
+            ] if node == "1" else [])
+        }
+    return snapshot_value
+
+
 class TimelineTests(unittest.TestCase):
+    def test_replication_window_configuration_receipt_proves_runtime_bound(self):
+        before = add_runtime_windows(snapshot(64, [timeline(1)]), 4)
+        after = add_runtime_windows(snapshot(128, [timeline(1), timeline(65)]), 4)
+        receipt = configuration_receipt(before, after, 4)
+        self.assertEqual(receipt["status"], "passed")
+        self.assertEqual(receipt["requested_max_in_flight_batches"], 4)
+        self.assertEqual(receipt["snapshots"]["before"]["leaders"][0]["node_id"], 1)
+
+    def test_replication_window_configuration_rejects_inactive_or_missing_bound(self):
+        before = add_runtime_windows(snapshot(64, [timeline(1)]), 8)
+        after = add_runtime_windows(snapshot(128, [timeline(1), timeline(65)]), 4)
+        with self.assertRaisesRegex(ValueError, "reports replication window 8, expected 4"):
+            configuration_receipt(before, after, 4)
+        before["1"]["info"]["engine"]["replication_windows"]["windows"] = []
+        with self.assertRaisesRegex(ValueError, "has no replication windows"):
+            configuration_receipt(before, after, 8)
+
     def test_extract_uses_pre_measurement_watermark(self):
         before = snapshot(64, [timeline(1)])
         after = snapshot(128, [timeline(1), timeline(65)])

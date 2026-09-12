@@ -116,6 +116,27 @@ def seal(directory: Path) -> None:
     write_json(directory / "SHA256SUMS.json", {"schema": 1, "files": files})
 
 
+def runtime_configuration_errors(directory: Path, manifest: dict) -> list[str]:
+    """Recompute runtime receipts while retaining compatibility with old evidence."""
+    options = manifest.get("options", {})
+    receipt_path = directory / "replication-window-config.json"
+    if manifest.get("implementation") != "rafter" or not options.get("diagnostics"):
+        return ["unexpected replication window activation receipt"] if receipt_path.exists() else []
+    declared = "max_inflight_appends" in options
+    if not declared:
+        return ["replication window receipt has no declared bound"] if receipt_path.exists() else []
+    if not receipt_path.exists():
+        return ["replication window activation receipt is missing"]
+    from .replication_windows import configuration_receipt
+    actual = configuration_receipt(
+        json.loads((directory / "before.json").read_text()),
+        json.loads((directory / "diagnostics-after-load.json").read_text()),
+        options["max_inflight_appends"],
+    )
+    recorded = json.loads(receipt_path.read_text())
+    return [] if actual == recorded else ["replication window activation receipt differs from runtime status"]
+
+
 def verify(directory: Path) -> dict[str, Any]:
     errors = []
     try:
@@ -134,6 +155,7 @@ def verify(directory: Path) -> dict[str, Any]:
             verify_report(directory)
             return {"status": "failed" if errors else "passed", "errors": errors}
         manifest = json.loads((directory / "manifest.json").read_text())
+        errors.extend(runtime_configuration_errors(directory, manifest))
         if manifest.get("options", {}).get("diagnostics"):
             from .timelines import extract, recorded_extract_matches
             actual_timelines = extract(

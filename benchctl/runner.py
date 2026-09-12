@@ -180,6 +180,10 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             from .timelines import extract
             write_json(directory / "diagnostics-after-load.json", after_load)
             write_json(directory / "operation-timelines.json", extract(before, after_load))
+            if implementation == "rafter":
+                from .replication_windows import configuration_receipt
+                write_json(directory / "replication-window-config.json", configuration_receipt(
+                    before, after_load, getattr(options, "max_inflight_appends", 8)))
         if getattr(options, "pipelined_durability", False) and options.scenario == "durable-kv":
             from .pipeline import activity
             write_json(directory / "persistence-after-load.json", after_load)
