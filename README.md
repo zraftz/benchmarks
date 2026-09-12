@@ -88,7 +88,9 @@ When a paired suite contains several candidate batch caps, pass
 never selects the most attractive candidate automatically. Paired runs may
 retain both `openraft` and `openraft-async`; pass `--headline-control-variant`
 to choose one explicitly. With more than one control, no headline is selected
-implicitly.
+implicitly. The baseline workflow exposes the same choices as
+`headline_rafter_variant` and `headline_openraft_control`, so a multi-variant
+run can publish a predeclared headline without choosing after seeing results.
 
 ## Compare changes
 

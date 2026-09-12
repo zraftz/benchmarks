@@ -85,6 +85,10 @@ on:
         description: OpenRaft controls, comma separated (synchronous,async)
         type: string
         default: synchronous,async
+      headline_rafter_variant:
+        description: Explicit Rafter variant used for the generated headline (blank when only one candidate exists)
+        type: string
+        default: ''
       headline_openraft_control:
         description: OpenRaft control used for the generated headline
         type: choice
@@ -244,6 +248,7 @@ jobs:
         if: always()
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEADLINE_RAFTER_VARIANT: ${{ inputs.headline_rafter_variant }}
           HEADLINE_OPENRAFT_CONTROL: ${{ inputs.headline_openraft_control }}
         run: |
           args=()
@@ -254,6 +259,7 @@ jobs:
             args+=(--durable-suite results/baseline --durable-url "$RUN_URL")
           fi
           if [[ -d results/paired ]]; then args+=(--headline-control-variant "$HEADLINE_OPENRAFT_CONTROL"); fi
+          if [[ -d results/paired && -n "$HEADLINE_RAFTER_VARIANT" ]]; then args+=(--headline-variant "$HEADLINE_RAFTER_VARIANT"); fi
           if (( ${#args[@]} > 0 )); then ./raft-bench summary "${args[@]}" --output results/summary; fi
       - name: Retain reports and evidence
         if: always()
