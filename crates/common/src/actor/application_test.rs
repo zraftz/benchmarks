@@ -152,6 +152,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         peer_batch_sizes: BTreeMap::new(),
         prioritized_peer_batches: 0,
         prioritized_peer_events: 0,
+        prioritized_client_inputs_bypassed: 0,
         pre_persistence_client_completions: 0,
     };
     let owner = std::thread::spawn(move || state.run(rx));

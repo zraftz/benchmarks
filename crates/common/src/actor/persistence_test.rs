@@ -127,6 +127,7 @@ fn state(engine: PendingEngine, outbound: OutboundPeers) -> State<PendingEngine>
         peer_batch_sizes: BTreeMap::new(),
         prioritized_peer_batches: 0,
         prioritized_peer_events: 0,
+        prioritized_client_inputs_bypassed: 0,
         pre_persistence_client_completions: 0,
     }
 }

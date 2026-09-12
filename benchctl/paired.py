@@ -100,11 +100,14 @@ def completion_priority_activation_failures(output: Path, variants: set[str]) ->
         manifest = json.loads(manifest_path.read_text())
         variant = manifest.get("options", {}).get("variant")
         receipt_path = case / "completion-priority-activity.json"
-        if variant in variants and receipt_path.exists() and json.loads(
-                receipt_path.read_text()).get("observed_during_load") is True:
-            observed.add(variant)
+        if variant in variants and receipt_path.exists():
+            receipt = json.loads(receipt_path.read_text())
+            if (receipt.get("observed_during_load") is True
+                    and (receipt.get("schema") != 2
+                         or receipt.get("observed_bounded_lookahead_during_load") is True)):
+                observed.add(variant)
     return [{"case": f"suite:{variant}",
-             "error": "selected durable completion priority executed no prioritized work in any completed case"}
+             "error": "selected durable completion priority executed no required prioritized work in any completed case"}
             for variant in sorted(variants - observed)]
 
 

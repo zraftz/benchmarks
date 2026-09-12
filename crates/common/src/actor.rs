@@ -67,7 +67,8 @@ pub trait Engine: Send + 'static {
     fn can_batch_proposals_with_peer(&self, _peers: &[Self::Peer]) -> bool {
         false
     }
-    /// Whether this peer batch can safely run before already-collected proposals.
+    /// Whether this peer batch can safely run before already-collected proposals and a bounded
+    /// prefix of ready, unsubmitted execute requests.
     fn can_prioritize_peer_before_proposals(&self, _peers: &[Self::Peer]) -> bool {
         false
     }
@@ -203,6 +204,7 @@ impl Actor {
                 peer_batch_sizes: BTreeMap::new(),
                 prioritized_peer_batches: 0,
                 prioritized_peer_events: 0,
+                prioritized_client_inputs_bypassed: 0,
                 pre_persistence_client_completions: 0,
             };
             state.engine.start(state.config.diagnostics);
@@ -245,6 +247,7 @@ struct State<E> {
     peer_batch_sizes: BTreeMap<usize, u64>,
     prioritized_peer_batches: u64,
     prioritized_peer_events: u64,
+    prioritized_client_inputs_bypassed: u64,
     pre_persistence_client_completions: u64,
 }
 impl<E: Engine> State<E> {
@@ -436,6 +439,8 @@ impl<E: Engine> State<E> {
         rx: &mpsc::Receiver<Input>,
         deferred: &mut VecDeque<Input>,
     ) -> Result<Option<ReadyPeers<E::Peer>>> {
+        // This is a no-wait lookahead. It restores the original client order at the first
+        // non-execute or unsafe consensus boundary and never retains more than one batch.
         self.take_ready_peers(rx, deferred, true)
     }
     fn take_ready_peers(
@@ -444,10 +449,33 @@ impl<E: Engine> State<E> {
         deferred: &mut VecDeque<Input>,
         prioritize: bool,
     ) -> Result<Option<ReadyPeers<E::Peer>>> {
-        let Some(Input::Peer(from, data, queued)) = deferred.front() else {
-            return Ok(None);
+        let mut bypassed = Vec::new();
+        let (from, data, queued) = loop {
+            let Some(input) =
+                deferred
+                    .pop_front()
+                    .or_else(|| if prioritize { rx.try_recv().ok() } else { None })
+            else {
+                Self::restore_deferred(deferred, bypassed);
+                return Ok(None);
+            };
+            match input {
+                Input::Peer(from, data, queued) => break (from, data, queued),
+                Input::Client(request, reply, queued)
+                    if prioritize
+                        && request.op == "execute"
+                        && bypassed.len() < self.config.batch_size =>
+                {
+                    bypassed.push(Input::Client(request, reply, queued));
+                }
+                boundary => {
+                    deferred.push_front(boundary);
+                    Self::restore_deferred(deferred, bypassed);
+                    return Ok(None);
+                }
+            }
         };
-        let first = self.engine.decode_peer(*from, data)?;
+        let first = self.engine.decode_peer(from, &data)?;
         let eligible = if prioritize {
             self.engine
                 .can_prioritize_peer_before_proposals(std::slice::from_ref(&first))
@@ -456,12 +484,10 @@ impl<E: Engine> State<E> {
                 .can_batch_proposals_with_peer(std::slice::from_ref(&first))
         };
         if !eligible {
+            deferred.push_front(Input::Peer(from, data, queued));
+            Self::restore_deferred(deferred, bypassed);
             return Ok(None);
         }
-        let queued = *queued;
-        let Some(Input::Peer(..)) = deferred.pop_front() else {
-            unreachable!("the ready peer was inspected at the queue front")
-        };
         self.diagnostics.elapsed("owner_peer_queue_ns", queued);
         let mut gate = self
             .engine
@@ -495,7 +521,16 @@ impl<E: Engine> State<E> {
                 break;
             }
         }
+        self.prioritized_client_inputs_bypassed = self
+            .prioritized_client_inputs_bypassed
+            .saturating_add(bypassed.len() as u64);
+        Self::restore_deferred(deferred, bypassed);
         Ok(Some((peers, arrivals)))
+    }
+    fn restore_deferred(deferred: &mut VecDeque<Input>, inputs: Vec<Input>) {
+        for input in inputs.into_iter().rev() {
+            deferred.push_front(input);
+        }
     }
     fn observe_peer_batch(&mut self, peers: &[E::Peer], arrivals: &[Option<Instant>]) {
         self.peer_batches = self.peer_batches.saturating_add(1);
@@ -528,6 +563,7 @@ impl<E: Engine> State<E> {
                     "durable_completion_priority":{"enabled":self.config.durable_completion_priority,
                         "prioritized_peer_batches":self.prioritized_peer_batches,
                         "prioritized_peer_events":self.prioritized_peer_events,
+                        "prioritized_client_inputs_bypassed":self.prioritized_client_inputs_bypassed,
                         "pre_persistence_client_completions":self.pre_persistence_client_completions},
                     "transport":self.outbound.iter().map(|(id,peer)|(id.to_string(),peer.stats())).collect::<BTreeMap<_,_>>(),
                     "peer_drops":self.dropped.load(Ordering::Relaxed)});

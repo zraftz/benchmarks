@@ -188,18 +188,23 @@ fn combining_state(
         peer_batch_sizes: BTreeMap::new(),
         prioritized_peer_batches: 0,
         prioritized_peer_events: 0,
+        prioritized_client_inputs_bypassed: 0,
         pre_persistence_client_completions: 0,
     }
 }
 
 fn write(key: &str) -> Input {
+    sequenced_write(key, 1)
+}
+
+fn sequenced_write(key: &str, sequence: u64) -> Input {
     let (reply, _response) = oneshot::channel();
     Input::Client(
         Request {
             op: "execute".into(),
             command: Some(Command {
                 client: "client".into(),
-                sequence: 1,
+                sequence,
                 kind: "put".into(),
                 key: key.into(),
                 value: "value".into(),
@@ -290,12 +295,13 @@ impl Engine for PriorityEngine {
     }
 }
 
-#[test]
-fn completion_priority_processes_safe_ack_before_ready_write() {
-    let path = std::env::temp_dir().join(format!("commit-priority-{}", std::process::id()));
-    let model = DurableModel::open(&path).unwrap();
-    let (observed, order) = mpsc::channel();
-    let mut state = State {
+fn priority_state(
+    path: &std::path::Path,
+    observed: mpsc::Sender<&'static str>,
+    batch_size: usize,
+) -> State<PriorityEngine> {
+    let model = DurableModel::open(path).unwrap();
+    State {
         diagnostics: Diagnostics::default(),
         config: Config {
             id: 1,
@@ -303,10 +309,10 @@ fn completion_priority_processes_safe_ack_before_ready_write() {
             client: String::new(),
             peer: String::new(),
             peers: BTreeMap::new(),
-            data_dir: path.clone(),
+            data_dir: path.to_owned(),
             tick_ms: 20,
             capacity: 16,
-            batch_size: 8,
+            batch_size,
             peer_batch_size: 8,
             diagnostics: false,
             ordered_apply: false,
@@ -333,8 +339,112 @@ fn completion_priority_processes_safe_ack_before_ready_write() {
         peer_batch_sizes: BTreeMap::new(),
         prioritized_peer_batches: 0,
         prioritized_peer_events: 0,
+        prioritized_client_inputs_bypassed: 0,
         pre_persistence_client_completions: 0,
-    };
+    }
+}
+
+#[test]
+fn completion_priority_looks_past_a_bounded_ready_write_prefix() {
+    let path =
+        std::env::temp_dir().join(format!("commit-priority-lookahead-{}", std::process::id()));
+    let (observed, order) = mpsc::channel();
+    let mut state = priority_state(&path, observed, 2);
+    let (tx, rx) = mpsc::sync_channel(8);
+    tx.send(sequenced_write("one", 1)).unwrap();
+    tx.send(sequenced_write("two", 2)).unwrap();
+    tx.send(sequenced_write("three", 3)).unwrap();
+    tx.send(peer(7)).unwrap();
+    drop(tx);
+
+    state.run(rx).unwrap();
+    assert_eq!(order.recv_timeout(Duration::from_secs(1)).unwrap(), "peer");
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(state.prioritized_client_inputs_bypassed, 1);
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn completion_priority_does_not_look_past_more_than_one_batch_of_writes() {
+    let path = std::env::temp_dir().join(format!("commit-priority-bound-{}", std::process::id()));
+    let (observed, order) = mpsc::channel();
+    let mut state = priority_state(&path, observed, 2);
+    let (tx, rx) = mpsc::sync_channel(8);
+    for sequence in 1..=5 {
+        tx.send(sequenced_write(&format!("key-{sequence}"), sequence))
+            .unwrap();
+    }
+    tx.send(peer(7)).unwrap();
+    drop(tx);
+
+    state.run(rx).unwrap();
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(order.recv_timeout(Duration::from_secs(1)).unwrap(), "peer");
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(state.prioritized_client_inputs_bypassed, 1);
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn completion_priority_does_not_cross_a_non_execute_client() {
+    let path = std::env::temp_dir().join(format!(
+        "commit-priority-client-boundary-{}",
+        std::process::id()
+    ));
+    let (observed, order) = mpsc::channel();
+    let mut state = priority_state(&path, observed, 2);
+    let (tx, rx) = mpsc::sync_channel(8);
+    tx.send(sequenced_write("one", 1)).unwrap();
+    tx.send(sequenced_write("two", 2)).unwrap();
+    let (reply, _response) = oneshot::channel();
+    tx.send(Input::Client(
+        Request {
+            op: "status".into(),
+            command: None,
+        },
+        reply,
+        None,
+    ))
+    .unwrap();
+    tx.send(peer(7)).unwrap();
+    drop(tx);
+
+    state.run(rx).unwrap();
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(order.recv_timeout(Duration::from_secs(1)).unwrap(), "peer");
+    assert_eq!(state.prioritized_peer_batches, 0);
+    assert_eq!(state.prioritized_client_inputs_bypassed, 0);
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn completion_priority_processes_safe_ack_before_ready_write() {
+    let path = std::env::temp_dir().join(format!("commit-priority-{}", std::process::id()));
+    let (observed, order) = mpsc::channel();
+    let mut state = priority_state(&path, observed, 8);
     let (tx, rx) = mpsc::sync_channel(8);
     tx.send(write("key")).unwrap();
     tx.send(peer(7)).unwrap();
@@ -356,48 +466,8 @@ fn completion_priority_processes_safe_ack_before_ready_write() {
 fn completion_priority_preserves_unsafe_peer_after_ready_write() {
     let path =
         std::env::temp_dir().join(format!("commit-priority-boundary-{}", std::process::id()));
-    let model = DurableModel::open(&path).unwrap();
     let (observed, order) = mpsc::channel();
-    let mut state = State {
-        diagnostics: Diagnostics::default(),
-        config: Config {
-            id: 1,
-            cluster: "test".into(),
-            client: String::new(),
-            peer: String::new(),
-            peers: BTreeMap::new(),
-            data_dir: path.clone(),
-            tick_ms: 20,
-            capacity: 16,
-            batch_size: 8,
-            peer_batch_size: 8,
-            diagnostics: false,
-            ordered_apply: false,
-            peer_message_stream: true,
-            pipelined_durability: true,
-            max_speculative_proposals: 1,
-            max_inflight_appends: 8,
-            combine_peer_proposals: false,
-            durable_completion_priority: true,
-            openraft_async_flush: false,
-        },
-        name: "test",
-        engine: PriorityEngine { observed },
-        application: application::Application::Inline(model),
-        dispatched: 0,
-        outbound: BTreeMap::new(),
-        transport_epoch: (0, None),
-        transport_generation: 0,
-        dropped: Arc::new(AtomicU64::new(0)),
-        pending: BTreeMap::new(),
-        pending_count: 0,
-        peer_batches: 0,
-        peer_events: 0,
-        peer_batch_sizes: BTreeMap::new(),
-        prioritized_peer_batches: 0,
-        prioritized_peer_events: 0,
-        pre_persistence_client_completions: 0,
-    };
+    let mut state = priority_state(&path, observed, 8);
     let (tx, rx) = mpsc::sync_channel(8);
     tx.send(write("key")).unwrap();
     tx.send(peer(0)).unwrap();

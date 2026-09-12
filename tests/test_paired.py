@@ -109,5 +109,29 @@ class PairedTests(unittest.TestCase):
             )
             self.assertEqual(completion_priority_activation_failures(root, variants), [{
                 "case": "suite:candidate-commit-first",
-                "error": "selected durable completion priority executed no prioritized work in any completed case",
+                "error": "selected durable completion priority executed no required prioritized work in any completed case",
             }])
+
+    def test_current_completion_priority_requires_bounded_lookahead_activity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            case = root / "001-candidate-commit-first-r1-q0-timing"
+            case.mkdir()
+            (case / "manifest.json").write_text(json.dumps({
+                "options": {"variant": "candidate-commit-first"},
+            }))
+            (case / "outcome.json").write_text(json.dumps({"status": "completed"}))
+            receipt = {
+                "schema": 2,
+                "observed_during_load": True,
+                "observed_bounded_lookahead_during_load": False,
+            }
+            (case / "completion-priority-activity.json").write_text(json.dumps(receipt))
+            variants = {"candidate-commit-first"}
+            self.assertEqual(completion_priority_activation_failures(root, variants), [{
+                "case": "suite:candidate-commit-first",
+                "error": "selected durable completion priority executed no required prioritized work in any completed case",
+            }])
+            receipt["observed_bounded_lookahead_during_load"] = True
+            (case / "completion-priority-activity.json").write_text(json.dumps(receipt))
+            self.assertEqual(completion_priority_activation_failures(root, variants), [])
