@@ -106,6 +106,7 @@ fn state(engine: PendingEngine, outbound: OutboundPeers) -> State<PendingEngine>
             peer_message_stream: true,
             pipelined_durability: false,
             max_speculative_proposals: 1,
+            max_inflight_appends: 8,
             combine_peer_proposals: false,
             openraft_async_flush: false,
         },

@@ -168,6 +168,7 @@ fn combining_state(
             peer_message_stream: true,
             pipelined_durability: true,
             max_speculative_proposals: 1,
+            max_inflight_appends: 8,
             combine_peer_proposals: true,
             openraft_async_flush: false,
         },

@@ -129,6 +129,7 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "peer_batch_size": options.get("peer_batch_size", 1),
             "client_batch_size": options.get("batch_size"),
             "max_speculative_proposals": options.get("max_speculative_proposals", 1),
+            "max_inflight_appends": options.get("max_inflight_appends", 8),
             "combine_peer_proposals": bool(options.get("combine_peer_proposals", False)),
             "openraft_async_flush": bool(options.get("openraft_async_flush", False)),
         },

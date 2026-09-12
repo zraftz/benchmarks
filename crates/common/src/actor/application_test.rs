@@ -129,6 +129,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         peer_message_stream: false,
         pipelined_durability: false,
         max_speculative_proposals: 1,
+        max_inflight_appends: 8,
         combine_peer_proposals: false,
         openraft_async_flush: false,
     };

@@ -29,12 +29,26 @@ def mode_flags(mode: str, engine: str = "rafter") -> dict[str, bool]:
             "pipelined_durability": mode == "pipeline" and engine == "rafter"}
 
 
-def openraft_arms(controls: list[str]) -> list[tuple[str, str, int, str, int, bool]]:
+def openraft_arms(controls: list[str]) -> list[tuple[str, str, int, str, int, bool, int]]:
     if not controls or len(set(controls)) != len(controls) or any(
             control not in OPENRAFT_CONTROLS for control in controls):
         raise ValueError("distinct OpenRaft controls drawn from synchronous,async are required")
     labels = {"synchronous": "openraft", "async": "openraft-async"}
-    return [(labels[control], "openraft", 1, "candidate", 1, False) for control in controls]
+    return [(labels[control], "openraft", 1, "candidate", 1, False, 8) for control in controls]
+
+
+def candidate_arms(caps: list[int], thresholds: list[int], windows: list[int],
+                   combine: bool) -> list[tuple[str, str, int, str, int, bool, int]]:
+    def label(cap: int, threshold: int, window: int) -> str:
+        result = f"candidate-b{cap}" if thresholds == [1] else f"candidate-b{cap}-s{threshold}"
+        if combine:
+            result += "-combined"
+        if windows != [8]:
+            result += f"-w{window}"
+        return result
+
+    return [(label(cap, threshold, window), "rafter", cap, "candidate", threshold, combine, window)
+            for cap in caps for threshold in thresholds for window in windows]
 
 
 def archive_build(destination: Path) -> dict:
@@ -67,6 +81,8 @@ def main() -> None:
     parser.add_argument("--prior-peer-batch-size", type=int, default=1)
     parser.add_argument("--prior-max-speculative-proposals", type=int, default=1)
     parser.add_argument("--candidate-max-speculative-proposals", default="1")
+    parser.add_argument("--prior-max-inflight-appends", type=int, default=8)
+    parser.add_argument("--candidate-max-inflight-appends", default="8")
     parser.add_argument("--prior-combine-peer-proposals", action="store_true")
     parser.add_argument("--candidate-combine-peer-proposals", action="store_true")
     parser.add_argument("--rates", default="0,100,1000")
@@ -87,6 +103,12 @@ def main() -> None:
         raise ValueError("distinct candidate speculative proposal limits in 1..64 are required")
     if not 1 <= args.prior_max_speculative_proposals <= 64:
         raise ValueError("prior speculative proposal limit must be 1..64")
+    windows = [int(value) for value in args.candidate_max_inflight_appends.split(",")]
+    if (not windows or len(set(windows)) != len(windows)
+            or any(value < 1 or value > 64 for value in windows)):
+        raise ValueError("distinct candidate inflight append limits in 1..64 are required")
+    if not 1 <= args.prior_max_inflight_appends <= 64:
+        raise ValueError("prior inflight append limit must be 1..64")
     if args.prior_combine_peer_proposals and args.prior_mode != "pipeline":
         raise ValueError("prior combined peer/proposal steps require pipeline mode")
     if args.candidate_combine_peer_proposals and args.candidate_mode != "pipeline":
@@ -122,7 +144,8 @@ def main() -> None:
             flags = ["--peer-message-stream"] if args.candidate_mode in ("messages", "pipeline") else []
             engines = "rafter,raft-rs"
             if args.candidate_mode == "pipeline":
-                flags.extend(["--pipelined-durability", "--max-speculative-proposals", str(thresholds[0])])
+                flags.extend(["--pipelined-durability", "--max-speculative-proposals", str(thresholds[0]),
+                              "--max-inflight-appends", str(windows[0])])
                 if args.candidate_combine_peer_proposals:
                     flags.append("--combine-peer-proposals")
                 engines = "rafter"
@@ -137,18 +160,14 @@ def main() -> None:
         if prior["implementations"][engine] != candidate["implementations"][engine]:
             raise RuntimeError("control implementation changed while selecting Rafter")
     arms = [("prior", "rafter", args.prior_peer_batch_size, "prior",
-             args.prior_max_speculative_proposals, args.prior_combine_peer_proposals),
+             args.prior_max_speculative_proposals, args.prior_combine_peer_proposals,
+             args.prior_max_inflight_appends),
             *control_arms]
-    label = lambda cap, threshold: ((f"candidate-b{cap}" if thresholds == [1]
-                                    else f"candidate-b{cap}-s{threshold}")
-                                    + ("-combined" if args.candidate_combine_peer_proposals else ""))
-    candidate_arms = [(label(cap, threshold), "rafter", cap, "candidate", threshold,
-                       args.candidate_combine_peer_proposals)
-                      for cap in caps for threshold in thresholds]
-    arms += candidate_arms
-    diagnostic_arms = (arms if len(thresholds) > 1 else
+    candidates = candidate_arms(caps, thresholds, windows, args.candidate_combine_peer_proposals)
+    arms += candidates
+    diagnostic_arms = (arms if len(thresholds) > 1 or len(windows) > 1 else
                        [arms[0], *control_arms,
-                        next((arm for arm in candidate_arms if arm[2] == 32), candidate_arms[-1])])
+                        next((arm for arm in candidates if arm[2] == 32), candidates[-1])])
     write_json(output / "suite.json", {"schema": 2, "arms": arms, "rates": rates, "runs": 3,
         "order": "rotate and reverse arms by repetition; all cases sequential on one host",
         "diagnostics": "separate cases after timing runs; never pooled",
@@ -158,6 +177,8 @@ def main() -> None:
         "openraft_controls": controls,
         "prior_max_speculative_proposals": args.prior_max_speculative_proposals,
         "candidate_max_speculative_proposals": thresholds,
+        "prior_max_inflight_appends": args.prior_max_inflight_appends,
+        "candidate_max_inflight_appends": windows,
         "prior_combine_peer_proposals": args.prior_combine_peer_proposals,
         "candidate_combine_peer_proposals": args.candidate_combine_peer_proposals,
         "data_root": str(data)})
@@ -169,7 +190,7 @@ def main() -> None:
             for diagnostic in (False, True):
                 for repeat in range(1 if diagnostic else 3):
                     for rate in diagnostic_rates if diagnostic else rates:
-                        for arm_label, engine, cap, binary_set, threshold, combine in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
+                        for arm_label, engine, cap, binary_set, threshold, combine, window in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
                             ordinal += 1
                             name = f"{ordinal:03d}-n{delay}-{arm_label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
                             options = SimpleNamespace(network_delay_ms=delay, scenario="durable-kv", smoke=False, batch_size=64,
@@ -177,6 +198,7 @@ def main() -> None:
                                 **mode_flags(args.prior_mode if binary_set == "prior" else args.candidate_mode, engine),
                                 openraft_async_flush=arm_label == "openraft-async",
                                 max_speculative_proposals=threshold,
+                                max_inflight_appends=window,
                                 combine_peer_proposals=combine,
                                 concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
                                 read_percent=0, cas_percent=0, timeout=2, variant=arm_label)

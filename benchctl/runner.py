@@ -87,6 +87,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         getattr(options, "pipelined_durability", False),
         getattr(options, "max_speculative_proposals", 1),
         getattr(options, "combine_peer_proposals", False),
+        getattr(options, "max_inflight_appends", 8),
         getattr(options, "openraft_async_flush", False))
     load = None
     try:

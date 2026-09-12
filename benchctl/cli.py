@@ -49,6 +49,8 @@ def run(options) -> None:
         raise ValueError("peer batch size must be 1..64")
     if not 1 <= options.max_speculative_proposals <= 64:
         raise ValueError("max speculative proposals must be 1..64")
+    if not 1 <= options.max_inflight_appends <= 64:
+        raise ValueError("max inflight appends must be 1..64")
     if not 1 <= options.batch_size <= 64 or not 0 < options.timeout <= 60 or options.read_percent < 0 or options.cas_percent < 0 or options.read_percent + options.cas_percent > 100:
         raise ValueError("invalid batch size, timeout or mix")
     if not options.data_root and not options.smoke:
@@ -153,6 +155,8 @@ def main() -> None:
     p.add_argument("--pipelined-durability", action="store_true", help="Rafter only; enables ordered apply and message transport")
     p.add_argument("--max-speculative-proposals", type=int, default=1,
                    help="Rafter pipeline only; largest ready proposal batch eligible for speculative replication")
+    p.add_argument("--max-inflight-appends", type=int, default=8,
+                   help="Rafter only; bounded unacknowledged append batches per follower")
     p.add_argument("--combine-peer-proposals", action="store_true",
                    help="Rafter pipeline only; combine safe peer acknowledgments with already-ready proposals")
     p.add_argument("--openraft-async-flush", action="store_true",

@@ -53,6 +53,14 @@ on:
         description: Candidate pipeline speculative proposal limits, comma separated
         type: string
         default: '1'
+      prior_max_inflight_appends:
+        description: Prior per-follower inflight append limit
+        type: number
+        default: 8
+      candidate_max_inflight_appends:
+        description: Candidate per-follower inflight append limits, comma separated
+        type: string
+        default: '8'
       prior_combine_peer_proposals:
         description: Combine safe peer acknowledgments with ready proposals in the prior arm
         type: boolean
@@ -138,6 +146,8 @@ jobs:
           CANDIDATE_BATCHES: ${{ inputs.peer_batch_sizes }}
           PRIOR_SPECULATIVE: ${{ inputs.prior_max_speculative_proposals }}
           CANDIDATE_SPECULATIVE: ${{ inputs.candidate_max_speculative_proposals }}
+          PRIOR_INFLIGHT: ${{ inputs.prior_max_inflight_appends }}
+          CANDIDATE_INFLIGHT: ${{ inputs.candidate_max_inflight_appends }}
           PRIOR_COMBINE: ${{ inputs.prior_combine_peer_proposals }}
           CANDIDATE_COMBINE: ${{ inputs.candidate_combine_peer_proposals }}
           PAIRED_RATES: ${{ inputs.paired_rates }}
@@ -150,7 +160,7 @@ jobs:
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PRIOR_COMBINE', 'CANDIDATE_COMBINE', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'NETWORK_DELAYS', 'OPENRAFT_CONTROLS', 'HEADLINE_OPENRAFT_CONTROL', 'GITHUB_SHA')}, indent=2))
+          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PRIOR_INFLIGHT', 'CANDIDATE_INFLIGHT', 'PRIOR_COMBINE', 'CANDIDATE_COMBINE', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'NETWORK_DELAYS', 'OPENRAFT_CONTROLS', 'HEADLINE_OPENRAFT_CONTROL', 'GITHUB_SHA')}, indent=2))
           PY
           if [[ -n "$RAFTER_REF" ]]; then
             ./raft-bench select-rafter "$RAFTER_REF" 2>&1 | tee results/selection.log
@@ -204,6 +214,8 @@ jobs:
           CANDIDATE_BATCHES: ${{ inputs.peer_batch_sizes }}
           PRIOR_SPECULATIVE: ${{ inputs.prior_max_speculative_proposals }}
           CANDIDATE_SPECULATIVE: ${{ inputs.candidate_max_speculative_proposals }}
+          PRIOR_INFLIGHT: ${{ inputs.prior_max_inflight_appends }}
+          CANDIDATE_INFLIGHT: ${{ inputs.candidate_max_inflight_appends }}
           PRIOR_COMBINE: ${{ inputs.prior_combine_peer_proposals }}
           CANDIDATE_COMBINE: ${{ inputs.candidate_combine_peer_proposals }}
           PAIRED_RATES: ${{ inputs.paired_rates }}
@@ -223,6 +235,7 @@ jobs:
             --prior-mode "$PRIOR_MODE" --candidate-mode "$CANDIDATE_MODE" \
             --prior-peer-batch-size "$PRIOR_BATCH" --peer-batch-sizes "$CANDIDATE_BATCHES" \
             --prior-max-speculative-proposals "$PRIOR_SPECULATIVE" --candidate-max-speculative-proposals "$CANDIDATE_SPECULATIVE" \
+            --prior-max-inflight-appends "$PRIOR_INFLIGHT" --candidate-max-inflight-appends "$CANDIDATE_INFLIGHT" \
             --rates "$PAIRED_RATES" --diagnostic-rates "$PAIRED_DIAGNOSTIC_RATES" \
             --openraft-controls "$OPENRAFT_CONTROLS" \
             --output results/paired --data-root "$RUNNER_TEMP/raft-bench-paired" \

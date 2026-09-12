@@ -312,7 +312,8 @@ async fn main() -> Result<()> {
         .filter(|&id| id != config.id)
         .map(NodeId)
         .collect();
-    let node_config = NodeConfig::new(NodeId(config.id), peers, 50 + 7 * (config.id - 1))?;
+    let node_config = NodeConfig::new(NodeId(config.id), peers, 50 + 7 * (config.id - 1))?
+        .with_max_inflight_appends(config.max_inflight_appends);
     let recovered = Node::recover_with_storage_and_snapshot_store_applied_through(
         node_config,
         hard,

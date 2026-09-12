@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from unittest.mock import patch
-from benchctl.paired import archive_build, openraft_arms, ordered_arms, mode_flags
+from benchctl.paired import archive_build, candidate_arms, openraft_arms, ordered_arms, mode_flags
 from benchctl.evidence import digest
 from benchctl.results import _expected_durable_cases
 
@@ -49,8 +49,15 @@ class PairedTests(unittest.TestCase):
 
     def test_openraft_controls_are_separate_named_arms(self):
         self.assertEqual(openraft_arms(["synchronous", "async"]), [
-            ("openraft", "openraft", 1, "candidate", 1, False),
-            ("openraft-async", "openraft", 1, "candidate", 1, False),
+            ("openraft", "openraft", 1, "candidate", 1, False, 8),
+            ("openraft-async", "openraft", 1, "candidate", 1, False, 8),
         ])
         with self.assertRaisesRegex(ValueError, "distinct OpenRaft controls"):
             openraft_arms(["async", "async"])
+
+    def test_replication_window_sweep_has_distinct_named_arms(self):
+        self.assertEqual(candidate_arms([32], [4], [8, 16, 32], True), [
+            ("candidate-b32-s4-combined-w8", "rafter", 32, "candidate", 4, True, 8),
+            ("candidate-b32-s4-combined-w16", "rafter", 32, "candidate", 4, True, 16),
+            ("candidate-b32-s4-combined-w32", "rafter", 32, "candidate", 4, True, 32),
+        ])

@@ -60,6 +60,8 @@ Linux is recommended. Data storage must support file and directory syncs.
 manifests and lockfiles; omitted refs use the current selection. Use
 `./raft-bench select-rafter <SHA>` to select once before running both suites.
 Rafter source is fetched as a dependency; its checkout is never edited.
+Pipeline experiments may vary the bounded per-follower replication window with
+`--max-inflight-appends`; the default remains Rafter's eight append batches.
 
 Results live under `results/`. Verify a case or an in-memory suite with:
 
