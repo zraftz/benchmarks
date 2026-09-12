@@ -22,6 +22,21 @@ def activity(before: dict, after: dict, *, require_combined: bool = False) -> di
                 if value is not None and (type(value) is not int or value < 0):
                     raise ValueError(f"pipeline activity has an invalid {name} counter")
                 optional[name] = value
+            combined_names = (
+                "combined_peer_proposal_batches",
+                "combined_peer_first_batches",
+                "combined_proposal_first_batches",
+                "combined_peer_events",
+                "combined_peer_proposals",
+            )
+            if all(optional[name] is not None for name in combined_names):
+                batches = optional["combined_peer_proposal_batches"]
+                if batches != (optional["combined_peer_first_batches"]
+                               + optional["combined_proposal_first_batches"]):
+                    raise ValueError("pipeline combined batch direction counters disagree")
+                if (optional["combined_peer_events"] < batches
+                        or optional["combined_peer_proposals"] < batches):
+                    raise ValueError("pipeline combined batch contents are incomplete")
             threshold = pipeline.get("max_speculative_proposals")
             if threshold is not None and (type(threshold) is not int or not 1 <= threshold <= 64):
                 raise ValueError("pipeline activity has an invalid speculative proposal limit")

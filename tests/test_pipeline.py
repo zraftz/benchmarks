@@ -74,6 +74,19 @@ class PipelineActivityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "executed no combined steps"):
             activity(before, after, require_combined=True)
 
+    def test_malformed_combined_direction_or_content_counters_fail_closed(self):
+        before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3}, {}, {}])
+        for field, value, message in (
+            ("combined_proposal_first_batches", 1, "direction counters disagree"),
+            ("combined_peer_events", 0, "contents are incomplete"),
+            ("combined_peer_proposals", 0, "contents are incomplete"),
+        ):
+            changed = copy.deepcopy(before)
+            changed["1"]["info"]["engine"]["persistence_pipeline"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
+                activity(changed, instrumented(
+                    [9, 0, 0], [7, 0, 0], [2, 0, 0], [{"1": 7}, {}, {}]))
+
     def test_sealed_activity_compatibility_is_explicit_and_fail_closed(self):
         current = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))
         transitional = {key: value for key, value in current.items() if key != "schema"}
