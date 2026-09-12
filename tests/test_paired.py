@@ -4,7 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from benchctl.paired import (archive_build, candidate_arms, combined_activation_failures,
-                             openraft_arms, ordered_arms, mode_flags)
+                             completion_priority_activation_failures, openraft_arms,
+                             ordered_arms, mode_flags)
 from benchctl.evidence import digest
 from benchctl.results import _expected_durable_cases
 
@@ -62,6 +63,9 @@ class PairedTests(unittest.TestCase):
             ("candidate-b32-s4-combined-w16", "rafter", 32, "candidate", 4, True, 16),
             ("candidate-b32-s4-combined-w32", "rafter", 32, "candidate", 4, True, 32),
         ])
+        self.assertEqual(candidate_arms([32], [1], [8], False, True), [
+            ("candidate-b32-commit-first", "rafter", 32, "candidate", 1, False, 8),
+        ])
 
     def test_combined_activity_is_required_across_suite_not_every_case(self):
         arms = [("candidate-combined", "rafter", 32, "candidate", 4, True, 8)]
@@ -83,4 +87,27 @@ class PairedTests(unittest.TestCase):
             self.assertEqual(combined_activation_failures(root, arms), [{
                 "case": "suite:candidate-combined",
                 "error": "selected combined peer/proposal mode executed no combined steps in any completed case",
+            }])
+
+    def test_completion_priority_is_required_across_suite_not_every_case(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for ordinal, observed in ((1, False), (2, True)):
+                case = root / f"00{ordinal}-candidate-commit-first-r1-q0-timing"
+                case.mkdir()
+                (case / "manifest.json").write_text(json.dumps({
+                    "options": {"variant": "candidate-commit-first"},
+                }))
+                (case / "outcome.json").write_text(json.dumps({"status": "completed"}))
+                (case / "completion-priority-activity.json").write_text(json.dumps({
+                    "observed_during_load": observed,
+                }))
+            variants = {"candidate-commit-first"}
+            self.assertEqual(completion_priority_activation_failures(root, variants), [])
+            (root / "002-candidate-commit-first-r1-q0-timing/failure.json").write_text(
+                json.dumps({"status": "failed"})
+            )
+            self.assertEqual(completion_priority_activation_failures(root, variants), [{
+                "case": "suite:candidate-commit-first",
+                "error": "selected durable completion priority executed no prioritized work in any completed case",
             }])

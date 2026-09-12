@@ -69,6 +69,15 @@ a durability fence. Both controls keep identical application durability and
 client-completion contracts; reports never combine their aggregates or choose
 between them implicitly.
 
+Rafter's optional durable-completion-priority experiment does not relax its
+one-operation persistence ownership. It may reorder only same-term leader
+`AppendEntriesResponse` inputs ahead of newly collected proposals, then uses the
+ordinary synchronous ACK fence and proposal pipeline. It may also release an
+older application completion that is already durable before waiting for a
+newer Raft persistence operation. A client response still requires that
+client's own durable application completion. Per-case receipts record both
+paths, and a paired suite fails if the selected experiment never executes.
+
 | Metric | Meaning |
 |---|---|
 | Successes/s | Successful logical operations completed inside the measurement window |

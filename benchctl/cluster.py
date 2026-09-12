@@ -18,7 +18,8 @@ class Cluster:
                  diagnostics: bool = False, ordered_apply: bool = False,
                  peer_message_stream: bool = False, pipelined_durability: bool = False,
                  max_speculative_proposals: int = 1, combine_peer_proposals: bool = False,
-                 max_inflight_appends: int = 8, openraft_async_flush: bool = False):
+                 max_inflight_appends: int = 8, durable_completion_priority: bool = False,
+                 openraft_async_flush: bool = False):
         self.implementation, self.command = implementation, command
         self.directory, self.data = directory, data
         self.processes: dict[int, subprocess.Popen] = {}
@@ -48,6 +49,7 @@ class Cluster:
                     "max_speculative_proposals": max_speculative_proposals,
                     "combine_peer_proposals": combine_peer_proposals,
                     "max_inflight_appends": max_inflight_appends,
+                    "durable_completion_priority": durable_completion_priority,
                     "openraft_async_flush": openraft_async_flush})
         finally:
             for sock in reserved:

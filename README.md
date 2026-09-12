@@ -107,6 +107,7 @@ runner. Timing and diagnostic cases stay separate in `results/paired/`.
 | Build `--rafter-hard-state journal` or `wal` | Select supported native storage; `replace` is the default |
 | Build/run `--pipelined-durability` | Rafter only: overlap eligible replication and local persistence |
 | Run `--max-speculative-proposals N` | Bound ready proposal batches eligible for that overlap; default 1 |
+| Run `--durable-completion-priority` | Experimental Rafter pipeline scheduling: handle safe ready replication ACKs before newly collected proposals and release ready durable application completions before the next Raft persistence wait |
 | Run `--openraft-async-flush --implementations openraft` | Exercise OpenRaft's callback-driven ordered log flusher |
 
 Options require a Rafter revision supporting the corresponding API. Pipeline
@@ -127,6 +128,12 @@ replication-ack queue delay, proposal-batch distribution, and owner-observed ful
 time. Paired CI can sweep speculative limits and restrict timing and diagnostic rates independently.
 It can also retain synchronous and asynchronous OpenRaft storage controls as
 separately named arms.
+
+`--durable-completion-priority` is an opt-in measurement candidate, not the
+default. Its receipt records prioritized peer batches and client completions
+released before a later Raft persistence wait. The paired runner requires the
+selected path to execute somewhere in the suite, while retaining low-load
+cases where no prioritizable work happened.
 
 For an offered-load envelope, set `paired_rates` to a fixed curve such as
 `1000,2000,3000,4000,6000,8000,10000,12000`, keep one Rafter batch cap and

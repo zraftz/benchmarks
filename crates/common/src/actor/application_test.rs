@@ -131,6 +131,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         max_speculative_proposals: 1,
         max_inflight_appends: 8,
         combine_peer_proposals: false,
+        durable_completion_priority: false,
         openraft_async_flush: false,
     };
     let mut state = State {
@@ -149,6 +150,9 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         peer_batches: 0,
         peer_events: 0,
         peer_batch_sizes: BTreeMap::new(),
+        prioritized_peer_batches: 0,
+        prioritized_peer_events: 0,
+        pre_persistence_client_completions: 0,
     };
     let owner = std::thread::spawn(move || state.run(rx));
     tx.send(Input::Peer(2, vec![], None)).unwrap();

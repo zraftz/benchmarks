@@ -209,6 +209,10 @@ impl Engine for Rafter {
         can_batch_same_term_append_responses(self.node.role(), self.node.current_term(), peers)
     }
 
+    fn can_prioritize_peer_before_proposals(&self, peers: &[Self::Peer]) -> bool {
+        can_batch_same_term_append_responses(self.node.role(), self.node.current_term(), peers)
+    }
+
     fn peer_batch_and_propose(
         &mut self,
         peers: Vec<Self::Peer>,

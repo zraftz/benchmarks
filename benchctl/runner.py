@@ -88,6 +88,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         getattr(options, "max_speculative_proposals", 1),
         getattr(options, "combine_peer_proposals", False),
         getattr(options, "max_inflight_appends", 8),
+        getattr(options, "durable_completion_priority", False),
         getattr(options, "openraft_async_flush", False))
     load = None
     try:
@@ -190,6 +191,10 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             write_json(directory / "pipeline-activity.json", activity(
                 before, after_load,
                 require_combined=getattr(options, "combine_peer_proposals", False)))
+            if getattr(options, "durable_completion_priority", False):
+                from .completion_priority import activity as completion_priority_activity
+                write_json(directory / "completion-priority-activity.json",
+                           completion_priority_activity(before, after_load))
         post = canaries(cluster.nodes, case_id + "post")
         write_json(directory / "after.json", protocol.statuses(cluster.nodes))
         cluster.stop_all()

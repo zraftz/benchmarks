@@ -69,6 +69,14 @@ on:
         description: Combine safe peer acknowledgments with ready proposals in candidate arms
         type: boolean
         default: false
+      prior_durable_completion_priority:
+        description: Prioritize safe replication acknowledgments and ready durable application completions in the prior arm
+        type: boolean
+        default: false
+      candidate_durable_completion_priority:
+        description: Prioritize safe replication acknowledgments and ready durable application completions in candidate arms
+        type: boolean
+        default: false
       paired_rates:
         description: Paired offered rates, comma separated
         type: string
@@ -154,6 +162,8 @@ jobs:
           CANDIDATE_INFLIGHT: ${{ inputs.candidate_max_inflight_appends }}
           PRIOR_COMBINE: ${{ inputs.prior_combine_peer_proposals }}
           CANDIDATE_COMBINE: ${{ inputs.candidate_combine_peer_proposals }}
+          PRIOR_COMPLETION_PRIORITY: ${{ inputs.prior_durable_completion_priority }}
+          CANDIDATE_COMPLETION_PRIORITY: ${{ inputs.candidate_durable_completion_priority }}
           PAIRED_RATES: ${{ inputs.paired_rates }}
           PAIRED_DIAGNOSTIC_RATES: ${{ inputs.paired_diagnostic_rates }}
           NETWORK_DELAYS: ${{ inputs.network_delays_ms }}
@@ -164,7 +174,7 @@ jobs:
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PRIOR_INFLIGHT', 'CANDIDATE_INFLIGHT', 'PRIOR_COMBINE', 'CANDIDATE_COMBINE', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'NETWORK_DELAYS', 'OPENRAFT_CONTROLS', 'HEADLINE_OPENRAFT_CONTROL', 'GITHUB_SHA')}, indent=2))
+          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PRIOR_INFLIGHT', 'CANDIDATE_INFLIGHT', 'PRIOR_COMBINE', 'CANDIDATE_COMBINE', 'PRIOR_COMPLETION_PRIORITY', 'CANDIDATE_COMPLETION_PRIORITY', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'NETWORK_DELAYS', 'OPENRAFT_CONTROLS', 'HEADLINE_OPENRAFT_CONTROL', 'GITHUB_SHA')}, indent=2))
           PY
           if [[ -n "$RAFTER_REF" ]]; then
             ./raft-bench select-rafter "$RAFTER_REF" 2>&1 | tee results/selection.log
@@ -222,6 +232,8 @@ jobs:
           CANDIDATE_INFLIGHT: ${{ inputs.candidate_max_inflight_appends }}
           PRIOR_COMBINE: ${{ inputs.prior_combine_peer_proposals }}
           CANDIDATE_COMBINE: ${{ inputs.candidate_combine_peer_proposals }}
+          PRIOR_COMPLETION_PRIORITY: ${{ inputs.prior_durable_completion_priority }}
+          CANDIDATE_COMPLETION_PRIORITY: ${{ inputs.candidate_durable_completion_priority }}
           PAIRED_RATES: ${{ inputs.paired_rates }}
           PAIRED_DIAGNOSTIC_RATES: ${{ inputs.paired_diagnostic_rates }}
           NETWORK_DELAYS: ${{ inputs.network_delays_ms }}
@@ -230,6 +242,8 @@ jobs:
           flags=()
           if [[ "$PRIOR_COMBINE" == true ]]; then flags+=(--prior-combine-peer-proposals); fi
           if [[ "$CANDIDATE_COMBINE" == true ]]; then flags+=(--candidate-combine-peer-proposals); fi
+          if [[ "$PRIOR_COMPLETION_PRIORITY" == true ]]; then flags+=(--prior-durable-completion-priority); fi
+          if [[ "$CANDIDATE_COMPLETION_PRIORITY" == true ]]; then flags+=(--candidate-durable-completion-priority); fi
           if [[ -n "$NETWORK_DELAYS" ]]; then
             flags+=(--network-delays-ms "$NETWORK_DELAYS")
           elif [[ "$PRIOR_MODE" == messages || "$PRIOR_MODE" == pipeline || "$CANDIDATE_MODE" == messages || "$CANDIDATE_MODE" == pipeline ]]; then

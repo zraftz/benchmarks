@@ -131,6 +131,7 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "max_speculative_proposals": options.get("max_speculative_proposals", 1),
             "max_inflight_appends": options.get("max_inflight_appends", 8),
             "combine_peer_proposals": bool(options.get("combine_peer_proposals", False)),
+            "durable_completion_priority": bool(options.get("durable_completion_priority", False)),
             "openraft_async_flush": bool(options.get("openraft_async_flush", False)),
         },
         "workload": _workload(manifest, measurement),

@@ -27,6 +27,10 @@ def run(options) -> None:
         options.ordered_apply = options.peer_message_stream = True
     if options.combine_peer_proposals and not options.pipelined_durability:
         raise ValueError("combined peer/proposal steps require --pipelined-durability")
+    if options.durable_completion_priority and not options.pipelined_durability:
+        raise ValueError("durable completion priority requires --pipelined-durability")
+    if options.durable_completion_priority and options.combine_peer_proposals:
+        raise ValueError("select only one mixed-input pipeline policy")
     if options.peer_message_stream and "openraft" in implementations:
         raise ValueError("OpenRaft uses actual request/reply RPCs; select message engines explicitly")
     if options.openraft_async_flush and implementations != ["openraft"]:
@@ -159,6 +163,8 @@ def main() -> None:
                    help="Rafter only; bounded unacknowledged append batches per follower")
     p.add_argument("--combine-peer-proposals", action="store_true",
                    help="Rafter pipeline only; combine safe peer acknowledgments with already-ready proposals")
+    p.add_argument("--durable-completion-priority", action="store_true",
+                   help="Rafter pipeline only; prioritize safe acknowledgments and ready durable application completions")
     p.add_argument("--openraft-async-flush", action="store_true",
                    help="OpenRaft only; return append after staging and complete durability through its callback")
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")

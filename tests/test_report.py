@@ -27,6 +27,7 @@ def write_case(root: Path, name: str, threshold: int, window: int) -> None:
             "peer_message_stream": True,
             "pipelined_durability": True,
             "combine_peer_proposals": True,
+            "durable_completion_priority": False,
             "diagnostics": False,
         },
     }
@@ -61,6 +62,20 @@ class ReportTests(unittest.TestCase):
             self.assertIn("candidate-s8-w16", report)
             self.assertIn("speculative ≤8", report)
             self.assertIn("append window ≤16", report)
+
+    def test_completion_priority_is_visible_in_variant_detail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_case(root, "candidate-commit-first", 1, 8)
+            manifest_path = root / "candidate-commit-first/manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["options"]["combine_peer_proposals"] = False
+            manifest["options"]["durable_completion_priority"] = True
+            manifest_path.write_text(json.dumps(manifest))
+            destination = root / "report.html"
+            with patch("benchctl.report.verify", return_value={"status": "passed"}):
+                render(root, destination)
+            self.assertIn("commit-first", destination.read_text())
 
 
 if __name__ == "__main__":

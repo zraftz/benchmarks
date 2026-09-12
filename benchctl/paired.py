@@ -38,11 +38,14 @@ def openraft_arms(controls: list[str]) -> list[tuple[str, str, int, str, int, bo
 
 
 def candidate_arms(caps: list[int], thresholds: list[int], windows: list[int],
-                   combine: bool) -> list[tuple[str, str, int, str, int, bool, int]]:
+                   combine: bool, durable_completion_priority: bool = False,
+                   ) -> list[tuple[str, str, int, str, int, bool, int]]:
     def label(cap: int, threshold: int, window: int) -> str:
         result = f"candidate-b{cap}" if thresholds == [1] else f"candidate-b{cap}-s{threshold}"
         if combine:
             result += "-combined"
+        if durable_completion_priority:
+            result += "-commit-first"
         if windows != [8]:
             result += f"-w{window}"
         return result
@@ -88,6 +91,23 @@ def combined_activation_failures(output: Path, arms: list[tuple]) -> list[dict]:
             for variant in sorted(required - observed)]
 
 
+def completion_priority_activation_failures(output: Path, variants: set[str]) -> list[dict]:
+    observed = set()
+    for manifest_path in output.glob("*/manifest.json"):
+        case = manifest_path.parent
+        if (case / "failure.json").exists() or not (case / "outcome.json").exists():
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        variant = manifest.get("options", {}).get("variant")
+        receipt_path = case / "completion-priority-activity.json"
+        if variant in variants and receipt_path.exists() and json.loads(
+                receipt_path.read_text()).get("observed_during_load") is True:
+            observed.add(variant)
+    return [{"case": f"suite:{variant}",
+             "error": "selected durable completion priority executed no prioritized work in any completed case"}
+            for variant in sorted(variants - observed)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prior", required=True)
@@ -105,6 +125,8 @@ def main() -> None:
     parser.add_argument("--candidate-max-inflight-appends", default="8")
     parser.add_argument("--prior-combine-peer-proposals", action="store_true")
     parser.add_argument("--candidate-combine-peer-proposals", action="store_true")
+    parser.add_argument("--prior-durable-completion-priority", action="store_true")
+    parser.add_argument("--candidate-durable-completion-priority", action="store_true")
     parser.add_argument("--rates", default="0,100,1000")
     parser.add_argument("--diagnostic-rates", help="defaults to all timing rates")
     parser.add_argument("--openraft-controls", default="synchronous",
@@ -133,6 +155,14 @@ def main() -> None:
         raise ValueError("prior combined peer/proposal steps require pipeline mode")
     if args.candidate_combine_peer_proposals and args.candidate_mode != "pipeline":
         raise ValueError("candidate combined peer/proposal steps require pipeline mode")
+    if args.prior_durable_completion_priority and args.prior_mode != "pipeline":
+        raise ValueError("prior durable completion priority requires pipeline mode")
+    if args.candidate_durable_completion_priority and args.candidate_mode != "pipeline":
+        raise ValueError("candidate durable completion priority requires pipeline mode")
+    if args.prior_durable_completion_priority and args.prior_combine_peer_proposals:
+        raise ValueError("prior arm must select only one mixed-input pipeline policy")
+    if args.candidate_durable_completion_priority and args.candidate_combine_peer_proposals:
+        raise ValueError("candidate arms must select only one mixed-input pipeline policy")
     rates = [int(value) for value in args.rates.split(",")]
     if not rates or len(set(rates)) != len(rates) or any(value < 0 or value > 10_000_000 for value in rates):
         raise ValueError("distinct offered rates in 0..10000000 are required")
@@ -168,6 +198,8 @@ def main() -> None:
                               "--max-inflight-appends", str(windows[0])])
                 if args.candidate_combine_peer_proposals:
                     flags.append("--combine-peer-proposals")
+                if args.candidate_durable_completion_priority:
+                    flags.append("--durable-completion-priority")
                 engines = "rafter"
             subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
                 "--implementations", engines, "--ordered-apply", "--peer-batch-size", "32",
@@ -183,7 +215,8 @@ def main() -> None:
              args.prior_max_speculative_proposals, args.prior_combine_peer_proposals,
              args.prior_max_inflight_appends),
             *control_arms]
-    candidates = candidate_arms(caps, thresholds, windows, args.candidate_combine_peer_proposals)
+    candidates = candidate_arms(caps, thresholds, windows, args.candidate_combine_peer_proposals,
+                                args.candidate_durable_completion_priority)
     arms += candidates
     diagnostic_arms = (arms if len(thresholds) > 1 or len(windows) > 1 else
                        [arms[0], *control_arms,
@@ -201,6 +234,8 @@ def main() -> None:
         "candidate_max_inflight_appends": windows,
         "prior_combine_peer_proposals": args.prior_combine_peer_proposals,
         "candidate_combine_peer_proposals": args.candidate_combine_peer_proposals,
+        "prior_durable_completion_priority": args.prior_durable_completion_priority,
+        "candidate_durable_completion_priority": args.candidate_durable_completion_priority,
         "data_root": str(data)})
     failures = []
     ordinal = 0
@@ -220,6 +255,9 @@ def main() -> None:
                                 max_speculative_proposals=threshold,
                                 max_inflight_appends=window,
                                 combine_peer_proposals=combine,
+                                durable_completion_priority=(engine == "rafter" and (
+                                    args.prior_durable_completion_priority if binary_set == "prior"
+                                    else args.candidate_durable_completion_priority)),
                                 concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
                                 read_percent=0, cas_percent=0, timeout=2, variant=arm_label)
                             print(f"Running {name}", flush=True)
@@ -237,6 +275,12 @@ def main() -> None:
                                 failures.append({"case": name, "error": str(error)})
                                 print(f"FAILED {name}: {error}", flush=True)
     failures.extend(combined_activation_failures(output, arms))
+    priority_variants = set()
+    if args.prior_durable_completion_priority:
+        priority_variants.add("prior")
+    if args.candidate_durable_completion_priority:
+        priority_variants.update(arm[0] for arm in candidates)
+    failures.extend(completion_priority_activation_failures(output, priority_variants))
     write_json(output / "completion.json", {"failures": failures})
     render(output, output / "report.html")
     if failures:

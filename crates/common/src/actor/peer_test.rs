@@ -170,6 +170,7 @@ fn combining_state(
             max_speculative_proposals: 1,
             max_inflight_appends: 8,
             combine_peer_proposals: true,
+            durable_completion_priority: false,
             openraft_async_flush: false,
         },
         name: "test",
@@ -185,6 +186,9 @@ fn combining_state(
         peer_batches: 0,
         peer_events: 0,
         peer_batch_sizes: BTreeMap::new(),
+        prioritized_peer_batches: 0,
+        prioritized_peer_events: 0,
+        pre_persistence_client_completions: 0,
     }
 }
 
@@ -244,6 +248,168 @@ fn same_turn_ready_write_and_following_ack_preserve_order_in_one_engine_step() {
     assert_eq!(peers, vec![7, 8]);
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].key, "key");
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}
+
+struct PriorityEngine {
+    observed: mpsc::Sender<&'static str>,
+}
+impl Engine for PriorityEngine {
+    type Peer = u8;
+    type Gate = ();
+    fn decode_peer(&self, _: u64, data: &[u8]) -> Result<u8> {
+        Ok(data[0])
+    }
+    fn peer_gate(&self, _: usize, _: usize) {}
+    fn admit_peer(_: &mut (), _: &u8) -> bool {
+        true
+    }
+    fn peer_batch(&mut self, _: Vec<u8>) -> Result<Vec<Effect>> {
+        self.observed.send("peer").unwrap();
+        Ok(Vec::new())
+    }
+    fn can_prioritize_peer_before_proposals(&self, peers: &[u8]) -> bool {
+        peers.iter().all(|peer| *peer != 0)
+    }
+    fn leader(&self) -> Option<u64> {
+        Some(1)
+    }
+    fn is_leader(&self) -> bool {
+        true
+    }
+    fn tick(&mut self) -> Result<Vec<Effect>> {
+        Ok(Vec::new())
+    }
+    fn propose(&mut self, _: Vec<Command>) -> Result<Vec<Effect>> {
+        self.observed.send("proposal").unwrap();
+        Ok(Vec::new())
+    }
+    fn stats(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+}
+
+#[test]
+fn completion_priority_processes_safe_ack_before_ready_write() {
+    let path = std::env::temp_dir().join(format!("commit-priority-{}", std::process::id()));
+    let model = DurableModel::open(&path).unwrap();
+    let (observed, order) = mpsc::channel();
+    let mut state = State {
+        diagnostics: Diagnostics::default(),
+        config: Config {
+            id: 1,
+            cluster: "test".into(),
+            client: String::new(),
+            peer: String::new(),
+            peers: BTreeMap::new(),
+            data_dir: path.clone(),
+            tick_ms: 20,
+            capacity: 16,
+            batch_size: 8,
+            peer_batch_size: 8,
+            diagnostics: false,
+            ordered_apply: false,
+            peer_message_stream: true,
+            pipelined_durability: true,
+            max_speculative_proposals: 1,
+            max_inflight_appends: 8,
+            combine_peer_proposals: false,
+            durable_completion_priority: true,
+            openraft_async_flush: false,
+        },
+        name: "test",
+        engine: PriorityEngine { observed },
+        application: application::Application::Inline(model),
+        dispatched: 0,
+        outbound: BTreeMap::new(),
+        transport_epoch: (0, None),
+        transport_generation: 0,
+        dropped: Arc::new(AtomicU64::new(0)),
+        pending: BTreeMap::new(),
+        pending_count: 0,
+        peer_batches: 0,
+        peer_events: 0,
+        peer_batch_sizes: BTreeMap::new(),
+        prioritized_peer_batches: 0,
+        prioritized_peer_events: 0,
+        pre_persistence_client_completions: 0,
+    };
+    let (tx, rx) = mpsc::sync_channel(8);
+    tx.send(write("key")).unwrap();
+    tx.send(peer(7)).unwrap();
+    drop(tx);
+
+    state.run(rx).unwrap();
+    assert_eq!(order.recv_timeout(Duration::from_secs(1)).unwrap(), "peer");
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(state.prioritized_peer_batches, 1);
+    assert_eq!(state.prioritized_peer_events, 1);
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn completion_priority_preserves_unsafe_peer_after_ready_write() {
+    let path =
+        std::env::temp_dir().join(format!("commit-priority-boundary-{}", std::process::id()));
+    let model = DurableModel::open(&path).unwrap();
+    let (observed, order) = mpsc::channel();
+    let mut state = State {
+        diagnostics: Diagnostics::default(),
+        config: Config {
+            id: 1,
+            cluster: "test".into(),
+            client: String::new(),
+            peer: String::new(),
+            peers: BTreeMap::new(),
+            data_dir: path.clone(),
+            tick_ms: 20,
+            capacity: 16,
+            batch_size: 8,
+            peer_batch_size: 8,
+            diagnostics: false,
+            ordered_apply: false,
+            peer_message_stream: true,
+            pipelined_durability: true,
+            max_speculative_proposals: 1,
+            max_inflight_appends: 8,
+            combine_peer_proposals: false,
+            durable_completion_priority: true,
+            openraft_async_flush: false,
+        },
+        name: "test",
+        engine: PriorityEngine { observed },
+        application: application::Application::Inline(model),
+        dispatched: 0,
+        outbound: BTreeMap::new(),
+        transport_epoch: (0, None),
+        transport_generation: 0,
+        dropped: Arc::new(AtomicU64::new(0)),
+        pending: BTreeMap::new(),
+        pending_count: 0,
+        peer_batches: 0,
+        peer_events: 0,
+        peer_batch_sizes: BTreeMap::new(),
+        prioritized_peer_batches: 0,
+        prioritized_peer_events: 0,
+        pre_persistence_client_completions: 0,
+    };
+    let (tx, rx) = mpsc::sync_channel(8);
+    tx.send(write("key")).unwrap();
+    tx.send(peer(0)).unwrap();
+    drop(tx);
+
+    state.run(rx).unwrap();
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(order.recv_timeout(Duration::from_secs(1)).unwrap(), "peer");
+    assert_eq!(state.prioritized_peer_batches, 0);
     drop(state);
     std::fs::remove_file(path).unwrap();
 }

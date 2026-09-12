@@ -67,6 +67,10 @@ pub trait Engine: Send + 'static {
     fn can_batch_proposals_with_peer(&self, _peers: &[Self::Peer]) -> bool {
         false
     }
+    /// Whether this peer batch can safely run before already-collected proposals.
+    fn can_prioritize_peer_before_proposals(&self, _peers: &[Self::Peer]) -> bool {
+        false
+    }
     /// Processes a peer batch followed by client proposals in their observed order.
     fn peer_batch_and_propose(
         &mut self,
@@ -197,6 +201,9 @@ impl Actor {
                 peer_batches: 0,
                 peer_events: 0,
                 peer_batch_sizes: BTreeMap::new(),
+                prioritized_peer_batches: 0,
+                prioritized_peer_events: 0,
+                pre_persistence_client_completions: 0,
             };
             state.engine.start(state.config.diagnostics);
             if let Err(e) = state.effects(recovered).and_then(|_| state.run(rx)) {
@@ -236,6 +243,9 @@ struct State<E> {
     peer_batches: u64,
     peer_events: u64,
     peer_batch_sizes: BTreeMap<usize, u64>,
+    prioritized_peer_batches: u64,
+    prioritized_peer_events: u64,
+    pre_persistence_client_completions: u64,
 }
 impl<E: Engine> State<E> {
     fn run(&mut self, rx: mpsc::Receiver<Input>) -> Result<()> {
@@ -243,6 +253,13 @@ impl<E: Engine> State<E> {
         let mut next = Instant::now() + tick;
         let mut deferred = VecDeque::new();
         loop {
+            if self.config.durable_completion_priority && self.engine.persistence_pending() {
+                let pending_before = self.pending_count;
+                self.complete_applies()?;
+                self.pre_persistence_client_completions = self
+                    .pre_persistence_client_completions
+                    .saturating_add(pending_before.saturating_sub(self.pending_count) as u64);
+            }
             self.complete_persistence()?;
             self.complete_applies()?;
             self.dispatch_applies()?;
@@ -324,13 +341,13 @@ impl<E: Engine> State<E> {
                     self.client(request, reply, queued, &mut commands)?;
                     self.collect_ready_clients(&rx, &mut deferred, &mut commands, false)?;
                     if !commands.is_empty() {
-                        self.diagnostics.proposals_submitted(&commands);
                         let combined = if self.config.combine_peer_proposals {
                             self.take_ready_combinable_peers(&rx, &mut deferred)?
                         } else {
                             None
                         };
                         let e = if let Some((peers, arrivals)) = combined {
+                            self.diagnostics.proposals_submitted(&commands);
                             self.peer_batches = self.peer_batches.saturating_add(1);
                             self.peer_events = self.peer_events.saturating_add(peers.len() as u64);
                             *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
@@ -348,6 +365,25 @@ impl<E: Engine> State<E> {
                             }
                             outputs
                         } else {
+                            if self.config.durable_completion_priority {
+                                if let Some((peers, arrivals)) =
+                                    self.take_ready_prioritizable_peers(&rx, &mut deferred)?
+                                {
+                                    self.observe_peer_batch(&peers, &arrivals);
+                                    self.prioritized_peer_batches =
+                                        self.prioritized_peer_batches.saturating_add(1);
+                                    self.prioritized_peer_events = self
+                                        .prioritized_peer_events
+                                        .saturating_add(peers.len() as u64);
+                                    let outputs = self.engine.peer_batch(peers)?;
+                                    for queued in arrivals {
+                                        self.diagnostics
+                                            .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                                    }
+                                    self.effects(outputs)?;
+                                }
+                            }
+                            self.diagnostics.proposals_submitted(&commands);
                             self.engine.propose(commands)?
                         };
                         self.effects(e)?;
@@ -393,14 +429,33 @@ impl<E: Engine> State<E> {
         rx: &mpsc::Receiver<Input>,
         deferred: &mut VecDeque<Input>,
     ) -> Result<Option<ReadyPeers<E::Peer>>> {
+        self.take_ready_peers(rx, deferred, false)
+    }
+    fn take_ready_prioritizable_peers(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+    ) -> Result<Option<ReadyPeers<E::Peer>>> {
+        self.take_ready_peers(rx, deferred, true)
+    }
+    fn take_ready_peers(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+        prioritize: bool,
+    ) -> Result<Option<ReadyPeers<E::Peer>>> {
         let Some(Input::Peer(from, data, queued)) = deferred.front() else {
             return Ok(None);
         };
         let first = self.engine.decode_peer(*from, data)?;
-        if !self
-            .engine
-            .can_batch_proposals_with_peer(std::slice::from_ref(&first))
-        {
+        let eligible = if prioritize {
+            self.engine
+                .can_prioritize_peer_before_proposals(std::slice::from_ref(&first))
+        } else {
+            self.engine
+                .can_batch_proposals_with_peer(std::slice::from_ref(&first))
+        };
+        if !eligible {
             return Ok(None);
         }
         let queued = *queued;
@@ -423,7 +478,12 @@ impl<E: Engine> State<E> {
                     let peer = self.engine.decode_peer(*from, data)?;
                     if E::admit_peer(&mut gate, &peer) {
                         peers.push(peer);
-                        if self.engine.can_batch_proposals_with_peer(&peers) {
+                        let eligible = if prioritize {
+                            self.engine.can_prioritize_peer_before_proposals(&peers)
+                        } else {
+                            self.engine.can_batch_proposals_with_peer(&peers)
+                        };
+                        if eligible {
                             self.diagnostics.elapsed("owner_peer_queue_ns", *queued);
                             arrivals.push(*queued);
                             continue;
@@ -436,6 +496,18 @@ impl<E: Engine> State<E> {
             }
         }
         Ok(Some((peers, arrivals)))
+    }
+    fn observe_peer_batch(&mut self, peers: &[E::Peer], arrivals: &[Option<Instant>]) {
+        self.peer_batches = self.peer_batches.saturating_add(1);
+        self.peer_events = self.peer_events.saturating_add(peers.len() as u64);
+        *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
+        if self.diagnostics.enabled() {
+            for (peer, queued) in peers.iter().zip(arrivals) {
+                if let Some(metric) = E::peer_queue_metric(peer) {
+                    self.diagnostics.elapsed(metric, *queued);
+                }
+            }
+        }
     }
     fn client(
         &mut self,
@@ -453,6 +525,10 @@ impl<E: Engine> State<E> {
                     "peer_batch_sizes":self.peer_batch_sizes,
                     "peer_message_stream":self.config.peer_message_stream,
                     "combine_peer_proposals":self.config.combine_peer_proposals,
+                    "durable_completion_priority":{"enabled":self.config.durable_completion_priority,
+                        "prioritized_peer_batches":self.prioritized_peer_batches,
+                        "prioritized_peer_events":self.prioritized_peer_events,
+                        "pre_persistence_client_completions":self.pre_persistence_client_completions},
                     "transport":self.outbound.iter().map(|(id,peer)|(id.to_string(),peer.stats())).collect::<BTreeMap<_,_>>(),
                     "peer_drops":self.dropped.load(Ordering::Relaxed)});
                 self.application.query(crate::apply_worker::Query {
