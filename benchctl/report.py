@@ -39,9 +39,12 @@ def render(suite: Path, destination: Path) -> None:
             latency(r, "success_latency"), latency(r, "success_execution_latency"),
             latency(r, "worker_start_lateness"), r["errors"], r["unknown"], r["not_issued"], label)) + "</tr>")
         if checked["status"] == "passed" and not manifest["smoke"]:
-            variant = json.dumps({"backend": (manifest.get("build_receipt") or {}).get("rafter_hard_state_backend", "replace"),
+            variant = json.dumps({"variant": manifest["options"].get("variant", manifest["implementation"]),
+                "backend": (manifest.get("build_receipt") or {}).get("rafter_hard_state_backend", "replace"),
                 "peer_batch_size": manifest["options"].get("peer_batch_size", 1),
                 "batch_size": manifest["options"].get("batch_size", 64),
+                "max_speculative_proposals": manifest["options"].get("max_speculative_proposals", 1),
+                "max_inflight_appends": manifest["options"].get("max_inflight_appends", 8),
                 "network_delay_ms": manifest["options"].get("network_delay_ms", 0),
                 "ordered_apply": manifest["options"].get("ordered_apply", False),
                 "peer_message_stream": manifest["options"].get("peer_message_stream", False),
@@ -69,7 +72,10 @@ def render(suite: Path, destination: Path) -> None:
             persistence = "pipelined" if settings["pipelined_durability"] else "synchronous"
         combine = (("combined ack+proposal" if settings["combine_peer_proposals"] else "separate ack/proposal")
                    + " · " if engine == "rafter" else "")
-        detail = f"{persistence} · {settings['backend']} · peers ≤{settings['peer_batch_size']} · {combine}{apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
+        tuning = (f"speculative ≤{settings['max_speculative_proposals']} · "
+                  f"append window ≤{settings['max_inflight_appends']} · "
+                  if engine == "rafter" else "")
+        detail = f"{settings['variant']} · {persistence} · {settings['backend']} · peers ≤{settings['peer_batch_size']} · {tuning}{combine}{apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
         config = f"{scenario} · {detail} · {payload} bytes · {concurrency} clients · {reads}% reads · {cas}% CAS"
         fields = (engine, revision[:12], config, rate, len(values), f"{median(rates):.1f}",
                   f"{min(rates):.1f}–{max(rates):.1f}", median_latency(values, "success_latency"),
