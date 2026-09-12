@@ -16,6 +16,39 @@ def result():
             "completed_in_window":2,"network_attempts":2,"success_histogram":h,"all_histogram":copy.deepcopy(h)}
 
 class EvidenceTests(unittest.TestCase):
+    def test_fault_smoke_does_not_require_durable_kv_priority_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            write_json(p / "manifest.json", {
+                "implementation": "rafter",
+                "scenario": "leader-loss",
+                "options": {
+                    "durable_completion_priority": True,
+                    "pipelined_durability": True,
+                },
+            })
+            write_json(p / "measurement.json", result())
+            write_json(p / "qualification.json", {"status": "passed"})
+            write_json(p / "recovery.json", {"status": "passed"})
+            event = {
+                "command": {
+                    "client": "client-1",
+                    "sequence": 1,
+                    "kind": "put",
+                    "key": "key-1",
+                    "value": "value-1",
+                },
+                "reply": {
+                    "status": "ok",
+                    "result": {"value": "value-1", "swapped": None, "error": None},
+                },
+                "start_ns": 1,
+                "end_ns": 2,
+            }
+            (p / "qualification-history.jsonl").write_text(json.dumps(event) + "\n")
+            seal(p)
+            self.assertEqual(verify(p)["status"], "passed")
+
     def test_new_rafter_diagnostics_require_matching_runtime_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp)
