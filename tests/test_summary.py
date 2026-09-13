@@ -7,6 +7,7 @@ import unittest
 from benchctl.evidence import digest, seal
 from benchctl.results import (
     _display_name,
+    _environment,
     _is_feature_coverage_failure,
     aggregate_durable,
     load_microbench,
@@ -222,6 +223,73 @@ def write_wal_reclamation(root):
 
 
 class SummaryTests(unittest.TestCase):
+    def test_volatile_filesystem_space_does_not_split_repetitions(self):
+        manifest = {
+            "topology": "three processes on one host",
+            "source_digest": "a" * 64,
+            "loadgen_sha256": "b" * 64,
+            "host": {
+                "platform": "linux",
+                "machine": "x86_64",
+                "logical_cpus": 4,
+                "cpu": {"stdout": "Model name: Example CPU\n"},
+                "filesystem": {
+                    "stdout": json.dumps({
+                        "filesystems": [{
+                            "source": "/dev/sda1",
+                            "fstype": "ext4",
+                            "options": "rw,relatime",
+                        }],
+                    }),
+                },
+                "filesystem_space": {
+                    "total_bytes": 100_000,
+                    "free_bytes": 60_000,
+                    "available_bytes": 50_000,
+                },
+            },
+        }
+        later = copy.deepcopy(manifest)
+        later["host"]["filesystem_space"].update({
+            "free_bytes": 40_000,
+            "available_bytes": 30_000,
+        })
+        first = service_case("candidate-b32", "rafter", 0, 1000, 1000, 5)
+        second = copy.deepcopy(first)
+        first["environment"] = _environment(manifest)
+        second["environment"] = _environment(later)
+        second["source_case"] = "second"
+        second["repetition"] = 2
+        data = {
+            "suite": {"runs": 2},
+            "qualification": "passed",
+            "qualification_errors": [],
+            "cases": [first, second],
+        }
+
+        rows = aggregate_durable(data)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["repetitions"], 2)
+        self.assertEqual(rows[0]["qualification"], "passed")
+        self.assertNotIn("filesystem_space", rows[0]["environment"])
+
+        later["host"]["filesystem"]["stdout"] = json.dumps({
+            "filesystems": [{
+                "source": "/dev/sda1",
+                "fstype": "xfs",
+                "options": "rw,relatime",
+            }],
+        })
+        second["environment"] = _environment(later)
+        rows = aggregate_durable(data)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row["qualification"] == "failed" for row in rows))
+        self.assertTrue(all(
+            "expected 2 repetitions, found 1" in row["qualification_errors"]
+            for row in rows
+        ))
+
     def test_legacy_service_evidence_retains_unmeasured_scheduler_latency(self):
         data = durable_data()
         for case in data["cases"]:
