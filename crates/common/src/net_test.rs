@@ -71,3 +71,11 @@ async fn partial_frame_is_discarded_and_reconnect_starts_at_a_new_frame() {
     assert_eq!(rx.recv().await.unwrap(), b"fresh");
     second.abort();
 }
+
+#[tokio::test]
+async fn peer_frame_rejects_a_complete_body_without_an_identity() {
+    let (mut client, mut server) = pair().await;
+    write_frame(&mut client, b"short").await.unwrap();
+    let error = read_peer_frame(&mut server).await.unwrap_err();
+    assert!(error.to_string().contains("peer identity missing"));
+}
