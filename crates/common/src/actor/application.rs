@@ -196,9 +196,19 @@ impl<E: Engine> State<E> {
         &mut self,
         entries: Vec<Applied>,
         outcomes: Vec<Option<Outcome>>,
-        queued: Vec<Option<Instant>>,
+        mut queued: Option<Vec<Option<Instant>>>,
     ) {
-        for ((entry, outcome), queued) in entries.into_iter().zip(outcomes).zip(queued) {
+        debug_assert!(
+            queued
+                .as_ref()
+                .is_none_or(|queued| queued.len() == entries.len()),
+            "application queue timestamp count mismatch"
+        );
+        for (position, (entry, outcome)) in entries.into_iter().zip(outcomes).enumerate() {
+            let queued = queued
+                .as_mut()
+                .and_then(|queued| queued.get_mut(position))
+                .and_then(Option::take);
             if let (Some(c), Some(result)) = (entry.command, outcome) {
                 if let Some((submitted, replies)) = self.pending.remove(&c.identity()) {
                     self.pending_count -= replies.len();

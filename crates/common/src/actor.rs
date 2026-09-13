@@ -749,7 +749,7 @@ impl<E: Engine> State<E> {
                     self.dispatched = last.index;
                     self.engine.applied(last.index);
                 }
-                let queued = vec![started; applies.len()];
+                let queued = started.map(|started| vec![Some(started); applies.len()]);
                 self.resolve_applies(applies, outcomes, queued);
             }
             application::Application::Worker(_) => self.dispatch_applies()?,

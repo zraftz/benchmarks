@@ -87,7 +87,9 @@ fn timing_mode_retains_no_per_entry_diagnostic_queue_state() {
     );
     assert!(worker.queued.is_none());
     assert!(worker.try_submit(vec![entry(1)]).unwrap());
-    assert_eq!(completion(&worker).unwrap().entries[0].index, 1);
+    let completed = completion(&worker).unwrap();
+    assert_eq!(completed.entries[0].index, 1);
+    assert!(completed.queued.is_none());
     assert!(worker.queued.is_none());
     drop(worker);
     std::fs::remove_file(path).unwrap();
@@ -182,6 +184,7 @@ fn delayed_sync_keeps_completions_and_durable_position_behind() {
     release.send(()).unwrap();
     let first = completion(&worker).unwrap();
     assert_eq!(first.entries[0].index, 1);
+    assert_eq!(first.queued.as_ref().unwrap().len(), 1);
     let next = completion(&worker).unwrap();
     assert_eq!(
         next.entries

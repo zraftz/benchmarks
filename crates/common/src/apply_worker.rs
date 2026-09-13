@@ -163,7 +163,7 @@ impl DurableApplication<Applied> for WorkerStore {
 pub struct Completion {
     pub entries: Vec<Applied>,
     pub outcomes: Vec<Option<Outcome>>,
-    pub queued: Vec<Option<Instant>>,
+    pub queued: Option<Vec<Option<Instant>>>,
 }
 
 pub struct Query {
@@ -365,12 +365,14 @@ impl ApplyWorker {
                 let (entries, outcomes) = completion.into_parts();
                 let starts = if let Some(queued) = &self.queued {
                     let mut queued = queued.lock().unwrap_or_else(PoisonError::into_inner);
-                    entries
-                        .iter()
-                        .map(|entry| queued.remove(&entry.index))
-                        .collect()
+                    Some(
+                        entries
+                            .iter()
+                            .map(|entry| queued.remove(&entry.index))
+                            .collect(),
+                    )
                 } else {
-                    vec![None; entries.len()]
+                    None
                 };
                 self.complete_queries()?;
                 Ok(Completion {
