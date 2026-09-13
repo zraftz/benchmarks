@@ -73,6 +73,42 @@ class PairedTests(unittest.TestCase):
         self.assertEqual(build.call_count, 2)
         restore.assert_called_once_with(captured)
 
+    def test_same_exact_source_and_features_archive_one_verified_build_twice(self):
+        sha = "a" * 40
+        args = SimpleNamespace(
+            prior=sha,
+            candidate=sha,
+            prior_hard_state="wal",
+            candidate_hard_state="wal",
+            prior_peer_batch_size=32,
+            prior_mode="inline",
+            candidate_mode="inline",
+            candidate_combine_peer_proposals=False,
+            candidate_durable_completion_priority=False,
+        )
+        receipt = {"source_digest": "shared"}
+        with tempfile.TemporaryDirectory() as temp, \
+                patch("benchctl.paired.capture_rafter_selection", return_value={}), \
+                patch("benchctl.paired.restore_rafter_selection"), \
+                patch("benchctl.paired.select_rafter") as select, \
+                patch("benchctl.paired.build") as build, \
+                patch("benchctl.paired.archive_build", return_value=receipt) as archive:
+            root = Path(temp)
+            output = root / "output"
+            output.mkdir()
+            self.assertEqual(
+                prepare_builds_and_smokes(
+                    args, output, root / "work", root / "data", [1], [8]
+                ),
+                (receipt, receipt),
+            )
+        select.assert_called_once_with(sha)
+        build.assert_called_once()
+        self.assertEqual(
+            [call.args[0].name for call in archive.call_args_list],
+            ["prior", "candidate"],
+        )
+
     def test_only_the_wal_pipeline_adds_snapshot_catchup_smoke(self):
         base = ["durable-kv", "leader-loss", "follower-catchup"]
         self.assertEqual(worker_smoke_scenarios("messages", "wal"), base)

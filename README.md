@@ -112,6 +112,9 @@ Rafter source is fetched as a dependency; its checkout is never edited.
 Paired suites archive both builds, run their functional smokes, then restore the
 tracked dependency selection and invalidate the working build receipt. This
 leaves the exact benchmark checkout clean for the next fixed-machine suite.
+When both arms select the same exact revision and compile-time features, the
+runner tests and builds it once, then archives that identical verified binary
+and receipt for both runtime configurations.
 Pipeline experiments may vary the bounded per-follower replication window with
 `--max-inflight-appends`; the default remains Rafter's eight append batches.
 The WAL pipeline can also run the finite live-reclamation smoke directly:

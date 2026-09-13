@@ -136,13 +136,23 @@ def prepare_builds_and_smokes(
         )
         prior = archive_build(work / "prior")
         write_json(output / "prior-build.json", prior)
-        select_rafter(args.candidate)
-        build(
-            args.candidate_hard_state,
-            peer_group_commit=True,
-            ordered_apply=args.candidate_mode != "inline",
-            pipelined_durability=args.candidate_mode == "pipeline",
+        identical_build = (
+            args.prior.lower() == args.candidate.lower()
+            and len(args.prior) == 40
+            and all(character in "0123456789abcdef" for character in args.prior.lower())
+            and args.prior_hard_state == args.candidate_hard_state
+            and args.prior_peer_batch_size > 1
+            and (args.prior_mode != "inline") == (args.candidate_mode != "inline")
+            and (args.prior_mode == "pipeline") == (args.candidate_mode == "pipeline")
         )
+        if not identical_build:
+            select_rafter(args.candidate)
+            build(
+                args.candidate_hard_state,
+                peer_group_commit=True,
+                ordered_apply=args.candidate_mode != "inline",
+                pipelined_durability=args.candidate_mode == "pipeline",
+            )
         candidate = archive_build(work / "candidate")
         write_json(output / "candidate-build.json", candidate)
         if args.candidate_mode != "inline":

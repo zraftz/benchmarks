@@ -173,7 +173,10 @@ remain separate because dependency selection is part of the run setup. Both
 selected builds are archived with their own source digests before the tracked
 dependency selection is restored. The working build receipt is then invalidated;
 cases use the archived receipt and binary set, and the next suite starts from the
-same clean benchmark commit.
+same clean benchmark commit. Same-exact-SHA arms with identical compile-time
+features are built and tested once; both independently archived arm directories
+then contain the identical binary hashes and receipt. Runtime-only scheduling
+options remain bound by the execution plan and individual case manifests.
 
 Durable cases also sample Linux PSI, CPU and cgroup throttling counters, load,
 per-process I/O, filesystem capacity, and raw `/proc/diskstats` block-device
