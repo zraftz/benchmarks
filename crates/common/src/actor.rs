@@ -407,7 +407,12 @@ impl<E: Engine> State<E> {
                             }
                             outputs
                         } else {
-                            if self.config.durable_completion_priority {
+                            // Keep latency-oriented proposal batches on the speculative path.
+                            // Larger batches persist synchronously, so clearing safe replication
+                            // acknowledgments first cannot delay a speculative send.
+                            if self.config.durable_completion_priority
+                                && commands.len() > self.config.max_speculative_proposals
+                            {
                                 if let Some((peers, arrivals)) =
                                     self.take_ready_prioritizable_peers(&rx, &mut deferred)?
                                 {

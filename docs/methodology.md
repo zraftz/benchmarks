@@ -79,14 +79,16 @@ between them implicitly.
 
 Rafter's optional durable-completion-priority experiment does not relax its
 one-operation persistence ownership. It may reorder only same-term leader
-`AppendEntriesResponse` inputs ahead of newly collected proposals and at most
-one client batch of ready, unsubmitted execute requests, then uses the ordinary
-synchronous ACK fence and proposal pipeline. The no-wait scan stops at reads,
-status requests, wake boundaries, or unsafe Raft input and restores skipped
-execute requests in their original order. It may also release an older
-application completion that is already durable before waiting for a newer Raft
-persistence operation. A client response still requires that client's own
-durable application completion. Deterministic actor tests deliberately exercise
+`AppendEntriesResponse` inputs ahead of newly collected proposal batches that
+exceed the configured speculative limit and at most one client batch of ready,
+unsubmitted execute requests, then uses the ordinary synchronous ACK fence and
+proposal pipeline. Speculative-sized batches retain their original order. The
+no-wait scan stops at reads, status requests, wake boundaries, or unsafe Raft
+input and restores skipped execute requests in their original order. It may
+also release an older application completion that is already durable before
+waiting for a newer Raft persistence operation. A client response still
+requires that client's own durable application completion. Deterministic actor
+tests deliberately exercise
 the bounded lookahead, its scan limit, and unsafe boundaries during the locked
 Rust build. Per-case receipts separately record which paths happened under the
 measured workload. Missing workload observation is reported as incomplete

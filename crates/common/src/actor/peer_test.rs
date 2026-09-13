@@ -540,12 +540,13 @@ fn completion_priority_does_not_cross_a_non_execute_client() {
 }
 
 #[test]
-fn completion_priority_processes_safe_ack_before_ready_write() {
+fn completion_priority_processes_safe_ack_before_synchronous_write_batch() {
     let path = std::env::temp_dir().join(format!("commit-priority-{}", std::process::id()));
     let (observed, order) = mpsc::channel();
     let mut state = priority_state(&path, observed, 8);
     let (tx, rx) = mpsc::sync_channel(8);
-    tx.send(write("key")).unwrap();
+    tx.send(sequenced_write("one", 1)).unwrap();
+    tx.send(sequenced_write("two", 2)).unwrap();
     tx.send(peer(7)).unwrap();
     drop(tx);
 
@@ -557,6 +558,33 @@ fn completion_priority_processes_safe_ack_before_ready_write() {
     );
     assert_eq!(state.prioritized_peer_batches, 1);
     assert_eq!(state.prioritized_peer_events, 1);
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn completion_priority_keeps_speculative_sized_batch_before_safe_ack() {
+    let path = std::env::temp_dir().join(format!(
+        "commit-priority-speculative-{}",
+        std::process::id()
+    ));
+    let (observed, order) = mpsc::channel();
+    let mut state = priority_state(&path, observed, 8);
+    state.config.max_speculative_proposals = 2;
+    let (tx, rx) = mpsc::sync_channel(8);
+    tx.send(sequenced_write("one", 1)).unwrap();
+    tx.send(sequenced_write("two", 2)).unwrap();
+    tx.send(peer(7)).unwrap();
+    drop(tx);
+
+    state.run(rx).unwrap();
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "proposal"
+    );
+    assert_eq!(order.recv_timeout(Duration::from_secs(1)).unwrap(), "peer");
+    assert_eq!(state.prioritized_peer_batches, 0);
+    assert_eq!(state.prioritized_peer_events, 0);
     drop(state);
     std::fs::remove_file(path).unwrap();
 }
