@@ -32,7 +32,10 @@ def footprint(raft_bytes: int, application_bytes: int, *, candidate: bool) -> di
     return {
         "snapshots": {
             "after_measurement": {"totals": categories},
-            "after_final_restart": {"totals": categories, "nodes": nodes},
+            "after_final_restart": {
+                "totals": copy.deepcopy(categories),
+                "nodes": nodes,
+            },
         }
     }
 
@@ -166,6 +169,23 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertEqual(value["verdicts"]["physical_reclamation"]["status"], "failed")
         self.assertTrue(any(
             "1 temporary snapshot files on node 2" in error
+            for error in value["verdicts"]["physical_reclamation"]["errors"]
+        ))
+
+    def test_post_restart_managed_growth_cannot_hide_behind_post_load_reclamation(self):
+        data = suite()
+        candidate = next(
+            item
+            for item in data["cases"]
+            if item["configuration"]["variant"] == "snap10k"
+        )
+        candidate["storage_footprint"]["snapshots"]["after_final_restart"]["totals"][
+            "raft_wal_data"
+        ]["allocated_bytes"] = 2_000
+        value = assess(data)
+        self.assertEqual(value["verdicts"]["physical_reclamation"]["status"], "failed")
+        self.assertTrue(any(
+            "managed Raft bytes after final restart" in error
             for error in value["verdicts"]["physical_reclamation"]["errors"]
         ))
 

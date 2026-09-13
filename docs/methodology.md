@@ -233,7 +233,8 @@ throughput, remain within the larger of a 10% or 1 ms p99 regression and the
 larger of a 10% or 2 ms p99.9 regression at equal offered load, and end with
 fewer allocated managed Raft bytes than the no-snapshot control. Managed Raft
 bytes cover WAL and snapshot data and metadata. After final restart, a candidate
-must retain exactly one selected snapshot envelope and manifest on each node.
+must still use fewer allocated managed Raft bytes than its same-seed no-snapshot
+control and retain exactly one selected snapshot envelope and manifest on each node.
 A candidate must also retain no temporary snapshot artifacts after that final
 owner-thread barrier. A failed row stays in the report and fails the suite;
 queue growth is not hidden by weakening the objective.

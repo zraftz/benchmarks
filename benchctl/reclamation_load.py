@@ -18,7 +18,8 @@ OBJECTIVE = {
     "loss_counts": {"errors": 0, "unknown": 0, "not_issued": 0},
     "reclamation_activity": "at least one measured-load compaction per snapshot arm and repetition",
     "managed_raft_allocation": (
-        "post-load WAL plus snapshot allocated bytes below the same-seed no-snapshot control"
+        "post-load and post-restart WAL plus snapshot allocated bytes below the same-seed "
+        "no-snapshot control"
     ),
     "snapshot_artifact_bound": (
         "after final restart, exactly one selected snapshot envelope and manifest per node, "
@@ -48,12 +49,14 @@ def _category_value(case: dict, checkpoint: str, category: str, field: str) -> i
     return value
 
 
-def _allocated(case: dict, category: str) -> int:
-    return _category_value(case, "after_measurement", category, "allocated_bytes")
+def _allocated(case: dict, category: str, checkpoint: str = "after_measurement") -> int:
+    return _category_value(case, checkpoint, category, "allocated_bytes")
 
 
-def _managed_raft_allocated(case: dict) -> int:
-    return sum(_allocated(case, category) for category in MANAGED_RAFT_CATEGORIES)
+def _managed_raft_allocated(case: dict, checkpoint: str = "after_measurement") -> int:
+    return sum(
+        _allocated(case, category, checkpoint) for category in MANAGED_RAFT_CATEGORIES
+    )
 
 
 def _final_snapshot_artifacts(case: dict) -> dict[str, dict[str, int]]:
@@ -244,6 +247,12 @@ def assess(data: dict) -> dict[str, Any]:
                     candidate_snapshot = _allocated(candidate, "raft_snapshot_data")
                     control_managed = _managed_raft_allocated(control)
                     candidate_managed = _managed_raft_allocated(candidate)
+                    control_final_managed = _managed_raft_allocated(
+                        control, "after_final_restart"
+                    )
+                    candidate_final_managed = _managed_raft_allocated(
+                        candidate, "after_final_restart"
+                    )
                     application_bytes = _allocated(candidate, "application_journal")
                     snapshot_artifacts_by_node = _final_snapshot_artifacts(candidate)
                     snapshot_data_files = sum(
@@ -263,6 +272,12 @@ def assess(data: dict) -> dict[str, Any]:
                             f"{variant} at {rate}/s repetition {repetition} retained "
                             f"{candidate_managed} managed Raft bytes versus {control_managed} "
                             "without reclamation"
+                        )
+                    if candidate_final_managed >= control_final_managed:
+                        failures["physical_reclamation"].append(
+                            f"{variant} at {rate}/s repetition {repetition} retained "
+                            f"{candidate_final_managed} managed Raft bytes after final restart "
+                            f"versus {control_final_managed} without reclamation"
                         )
                     for node, artifacts in snapshot_artifacts_by_node.items():
                         if artifacts["data_files"] != 1:
@@ -287,6 +302,7 @@ def assess(data: dict) -> dict[str, Any]:
                     control_wal = candidate_wal = 0
                     control_snapshot = candidate_snapshot = 0
                     control_managed = candidate_managed = 0
+                    control_final_managed = candidate_final_managed = 0
                     application_bytes = 0
                     snapshot_data_files = snapshot_metadata_files = 0
                     snapshot_temporary_files = 0
@@ -364,6 +380,8 @@ def assess(data: dict) -> dict[str, Any]:
                     "control_raft_snapshot_allocated_bytes": control_snapshot,
                     "candidate_managed_raft_allocated_bytes": candidate_managed,
                     "control_managed_raft_allocated_bytes": control_managed,
+                    "candidate_final_managed_raft_allocated_bytes": candidate_final_managed,
+                    "control_final_managed_raft_allocated_bytes": control_final_managed,
                     "candidate_final_snapshot_data_files": snapshot_data_files,
                     "candidate_final_snapshot_metadata_files": snapshot_metadata_files,
                     "candidate_final_snapshot_temporary_files": snapshot_temporary_files,
@@ -400,6 +418,14 @@ def assess(data: dict) -> dict[str, Any]:
                     ),
                     "median_control_managed_raft_allocated_bytes": median(
                         item["control_managed_raft_allocated_bytes"] for item in paired
+                    ),
+                    "median_candidate_final_managed_raft_allocated_bytes": median(
+                        item["candidate_final_managed_raft_allocated_bytes"]
+                        for item in paired
+                    ),
+                    "median_control_final_managed_raft_allocated_bytes": median(
+                        item["control_final_managed_raft_allocated_bytes"]
+                        for item in paired
                     ),
                     "max_candidate_final_snapshot_data_files": max(
                         item["candidate_final_snapshot_data_files"] for item in paired
@@ -448,8 +474,9 @@ def markdown(value: dict) -> str:
         "",
         "| Snapshot interval | Offered/s | Throughput retained | Worst p99 delta | "
         "Worst p99.9 delta | Compactions | Compaction max upper bound | "
-        "Managed Raft after load | No-reclamation Raft | Snapshot files | Max restart |",
-        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "Managed Raft after load | No-reclamation after load | Managed Raft after restart | "
+        "No-reclamation after restart | Snapshot files | Max restart |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in value["comparisons"]:
         rate = "saturation" if row["offered_per_second"] == 0 else f"{row['offered_per_second']:,}"
@@ -462,6 +489,8 @@ def markdown(value: dict) -> str:
             f"{row['max_compaction_upper_bound_ns'] / 1e6:.3f} ms | "
             f"{row['median_candidate_managed_raft_allocated_bytes'] / 2**20:.2f} MiB | "
             f"{row['median_control_managed_raft_allocated_bytes'] / 2**20:.2f} MiB | "
+            f"{row['median_candidate_final_managed_raft_allocated_bytes'] / 2**20:.2f} MiB | "
+            f"{row['median_control_final_managed_raft_allocated_bytes'] / 2**20:.2f} MiB | "
             f"{row['max_candidate_final_snapshot_data_files']} data / "
             f"{row['max_candidate_final_snapshot_metadata_files']} metadata / "
             f"{row['max_candidate_final_snapshot_temporary_files']} temporary | "
