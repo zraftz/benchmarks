@@ -23,6 +23,13 @@ from .storage_footprint import OBSERVATION as STORAGE_FOOTPRINT_OBSERVATION
 from .storage_footprint import receipt as storage_footprint_receipt
 
 
+def qualification_timeout_seconds(options) -> int:
+    """Keep tiny-interval snapshot smokes functional without changing timed loads."""
+    if options.smoke and getattr(options, "snapshot_interval_entries", 0):
+        return 15
+    return 5
+
+
 def load_command(nodes: dict[int, str], directory: Path, name: str, *, duration: float,
                  concurrency: int, payload: int, rate: float, keyspace: int, seed: int,
                  reads: int = 0, cas: int = 0, operations: int = 0, history: bool = False,
@@ -119,7 +126,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         cluster.start()
         qualify = load_command(cluster.nodes, directory, "qualification-history", duration=20, concurrency=4,
             payload=32, rate=0, keyspace=4, seed=1, reads=40, cas=20, operations=64, history=True,
-            namespace=f"qualification/{case_id}", timeout=5)
+            namespace=f"qualification/{case_id}", timeout=qualification_timeout_seconds(options))
         checked_load(qualify, directory / "qualification.log")
         verdict = check_history(read_history(directory / "qualification-history.jsonl"))
         write_json(directory / "qualification.json", verdict)
