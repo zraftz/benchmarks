@@ -98,6 +98,10 @@ class PairedTests(unittest.TestCase):
                 "recorded execution plan differs from suite declaration",
                 _execution_plan_errors(root, suite),
             )
+            self.assertEqual(
+                _execution_plan_errors(root, {"schema": 4}),
+                ["unsupported durable suite schema"],
+            )
 
     def test_archive_preserves_independent_receipt_and_rejects_changed_binary(self):
         with tempfile.TemporaryDirectory() as temp:

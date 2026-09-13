@@ -936,8 +936,8 @@ def _fmt_ops(value: float) -> str:
     return f"{value:,.0f}"
 
 
-def _fmt_ms(value: float) -> str:
-    return f"{value:.3f} ms"
+def _fmt_ms(value: float | None) -> str:
+    return "not measured" if value is None else f"{value:.3f} ms"
 
 
 def _fmt_us(value: float) -> str:
@@ -1138,7 +1138,7 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                 )
             lines.append("")
         if section_id == "complete-durable-service" and section["capacity"]["rows"]:
-            lines += ["| Added egress | Offered | Engine | Min achieved | Arrival p99/p99.9 | Execution p99/p99.9 | Dispatch p99 | Start-wait p99 | Post-window | Loss | Meets objective |",
+            lines += ["| Added egress | Offered | Engine | Min achieved | Arrival p99/p99.9 | Execution p99/p99.9 | Dispatch p99/p99.9 | Start-wait p99 | Post-window | Loss | Meets objective |",
                       "| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: |"]
             for row in section["capacity"]["rows"]:
                 for engine, label in (("rafter", "Rafter"), ("openraft", "OpenRaft")):
@@ -1148,7 +1148,8 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                                  f"{_fmt_ops(point['minimum_achieved_ops_s'])}/s ({point['minimum_achieved_percent']:.1f}%) | "
                                  f"{_fmt_ms(point['worst_repetition_p99_ms'])} / {_fmt_ms(point['worst_repetition_p999_ms'])} | "
                                  f"{_fmt_ms(point['worst_repetition_execution_p99_ms'])} / {_fmt_ms(point['worst_repetition_execution_p999_ms'])} | "
-                                 f"{_fmt_ms(point['worst_repetition_scheduler_dispatch_p99_ms'])} | "
+                                 f"{_fmt_ms(point['worst_repetition_scheduler_dispatch_p99_ms'])} / "
+                                 f"{_fmt_ms(point['worst_repetition_scheduler_dispatch_p999_ms'])} | "
                                  f"{_fmt_ms(point['worst_repetition_client_start_p99_ms'])} | "
                                  f"{point['completed_after_window']} | {loss} | "
                                  f"{'yes' if point['qualifies'] else 'no'} |")
@@ -1335,13 +1336,14 @@ def render_html(summary: dict, evidence: dict) -> str:
                                       f"{_fmt_ms(point['worst_repetition_p999_ms'])}</td>"
                                       f"<td>{_fmt_ms(point['worst_repetition_execution_p99_ms'])} / "
                                       f"{_fmt_ms(point['worst_repetition_execution_p999_ms'])}</td>"
-                                      f"<td>{_fmt_ms(point['worst_repetition_scheduler_dispatch_p99_ms'])}</td>"
+                                      f"<td>{_fmt_ms(point['worst_repetition_scheduler_dispatch_p99_ms'])} / "
+                                      f"{_fmt_ms(point['worst_repetition_scheduler_dispatch_p999_ms'])}</td>"
                                       f"<td>{_fmt_ms(point['worst_repetition_client_start_p99_ms'])}</td>"
                                       f"<td>{point['completed_after_window']}</td><td>{loss}</td>"
                                       f"<td>{'yes' if point['qualifies'] else 'no'}</td></tr>")
             content.append("<div class='table'><table><thead><tr><th>Added egress</th><th>Offered</th><th>Engine</th>"
                            "<th>Min achieved</th><th>Arrival p99/p99.9</th><th>Execution p99/p99.9</th>"
-                           "<th>Dispatch p99</th><th>Start-wait p99</th><th>Post-window</th>"
+                           "<th>Dispatch p99/p99.9</th><th>Start-wait p99</th><th>Post-window</th>"
                            f"<th>Loss</th><th>Meets objective</th></tr></thead><tbody>{capacity_body}</tbody></table></div>")
         if section.get("conditions"):
             content.append(f"<p class='conditions'>{html.escape(section['conditions'])}</p>")

@@ -201,7 +201,10 @@ def _expected_durable_cases(suite: dict) -> int:
 
 def _execution_plan_errors(directory: Path, suite: dict) -> list[str]:
     recorded = suite.get("execution_plan")
-    if suite.get("schema", 1) < 3:
+    schema = suite.get("schema", 1)
+    if type(schema) is not int or schema not in (1, 2, 3):
+        return ["unsupported durable suite schema"]
+    if schema < 3:
         return ["unexpected execution plan on legacy suite"] if recorded is not None else []
     errors = []
     try:
@@ -360,6 +363,15 @@ def _median_metric(samples: list[dict], name: str) -> dict:
     return {"median": median(values), "min": min(values), "max": max(values)}
 
 
+def _optional_median_metric(samples: list[dict], name: str) -> tuple[dict, str | None]:
+    values = [sample["metrics"].get(name) for sample in samples]
+    if all(value is None for value in values):
+        return {"median": None, "min": None, "max": None}, None
+    if any(value is None for value in values):
+        return {}, f"optional metric changed availability between repetitions: {name}"
+    return _median_metric(samples, name), None
+
+
 def aggregate_durable(data: dict) -> list[dict]:
     groups: dict[str, list[dict]] = defaultdict(list)
     for case in data["cases"]:
@@ -391,13 +403,23 @@ def aggregate_durable(data: dict) -> list[dict]:
             "accounting": {},
         }
         if not reasons:
-            row["metrics"] = {name: _median_metric(samples, name) for name in
-                              ("throughput_ops_s", "client_p99_ms", "client_p999_ms",
-                               "execution_p99_ms", "execution_p999_ms", "client_start_p99_ms",
-                               "scheduler_dispatch_p99_ms", "scheduler_dispatch_p999_ms")}
-            row["accounting"] = {key: sum(sample["accounting"][key] for sample in samples)
-                                 for key in ("offered", "attempted", "ok", "completed_in_window",
-                                             "errors", "unknown", "not_issued")}
+            metrics = {name: _median_metric(samples, name) for name in
+                       ("throughput_ops_s", "client_p99_ms", "client_p999_ms",
+                        "execution_p99_ms", "execution_p999_ms", "client_start_p99_ms")}
+            for name in ("scheduler_dispatch_p99_ms", "scheduler_dispatch_p999_ms"):
+                summary, error = _optional_median_metric(samples, name)
+                if error:
+                    reasons.append(error)
+                else:
+                    metrics[name] = summary
+            if not reasons:
+                row["metrics"] = metrics
+                row["accounting"] = {key: sum(sample["accounting"][key] for sample in samples)
+                                     for key in ("offered", "attempted", "ok", "completed_in_window",
+                                                 "errors", "unknown", "not_issued")}
+            else:
+                row["qualification"] = "failed"
+                row["qualification_errors"] = reasons
         rows.append(row)
     return rows
 

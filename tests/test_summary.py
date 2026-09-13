@@ -5,9 +5,14 @@ import tempfile
 import unittest
 
 from benchctl.evidence import digest, seal
-from benchctl.results import (_display_name, _is_feature_coverage_failure,
-                              load_microbench, load_storage_comparison,
-                              load_wal_reclamation)
+from benchctl.results import (
+    _display_name,
+    _is_feature_coverage_failure,
+    aggregate_durable,
+    load_microbench,
+    load_storage_comparison,
+    load_wal_reclamation,
+)
 from benchctl.summary import build_summary, render_html, render_markdown
 
 
@@ -217,6 +222,42 @@ def write_wal_reclamation(root):
 
 
 class SummaryTests(unittest.TestCase):
+    def test_legacy_service_evidence_retains_unmeasured_scheduler_latency(self):
+        data = durable_data()
+        for case in data["cases"]:
+            case["metrics"].pop("scheduler_dispatch_p99_ms")
+            case["metrics"].pop("scheduler_dispatch_p999_ms")
+        rows = aggregate_durable(data)
+        self.assertTrue(rows)
+        self.assertTrue(all(row["qualification"] == "passed" for row in rows))
+        self.assertTrue(all(
+            row["metrics"]["scheduler_dispatch_p99_ms"]["max"] is None
+            for row in rows
+        ))
+        rendered = render_markdown(build_summary(durable=data), {})
+        self.assertIn("not measured / not measured", rendered)
+
+    def test_scheduler_latency_cannot_change_availability_within_an_aggregate(self):
+        first = service_case("candidate-b32", "rafter", 0, 1000, 1000, 5)
+        second = copy.deepcopy(first)
+        second["source_case"] = "second"
+        second["repetition"] = 2
+        first["metrics"].pop("scheduler_dispatch_p99_ms")
+        data = {
+            "suite": {"runs": 2},
+            "qualification": "passed",
+            "qualification_errors": [],
+            "cases": [first, second],
+        }
+        rows = aggregate_durable(data)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["qualification"], "failed")
+        self.assertIn(
+            "optional metric changed availability between repetitions: "
+            "scheduler_dispatch_p99_ms",
+            rows[0]["qualification_errors"],
+        )
+
     def test_measured_load_context_is_visible_but_not_a_qualification_filter(self):
         data = durable_data()
         for index, case in enumerate(data["cases"]):
