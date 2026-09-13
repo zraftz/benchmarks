@@ -14,12 +14,18 @@ from .build import IMPLEMENTATIONS, build
 
 
 CAPACITY_RATES = "1000,2000,3000,4000,6000,8000,10000,12000"
+PIPELINE_THRESHOLD_RATES = "0,1000"
 
 
-def capacity_command(options) -> list[str]:
+def exact_rafter_sha(options) -> str:
     sha = options.rafter_sha.lower()
     if len(sha) != 40 or any(character not in "0123456789abcdef" for character in sha):
         raise ValueError("--rafter-sha must be an exact 40-character hexadecimal commit")
+    return sha
+
+
+def capacity_command(options) -> list[str]:
+    sha = exact_rafter_sha(options)
     return [
         sys.executable,
         "-m",
@@ -41,6 +47,36 @@ def capacity_command(options) -> list[str]:
         "--diagnostic-rates", options.diagnostic_rates,
         "--network-delays-ms", "0",
         "--openraft-controls", "synchronous,async",
+        "--qualify-machine",
+        "--data-root", str(options.data_root),
+        "--output", str(options.output),
+    ]
+
+
+def pipeline_threshold_command(options) -> list[str]:
+    sha = exact_rafter_sha(options)
+    return [
+        sys.executable,
+        "-m",
+        "benchctl.paired",
+        "--prior", sha,
+        "--candidate", sha,
+        "--prior-hard-state", "wal",
+        "--candidate-hard-state", "wal",
+        "--prior-mode", "pipeline",
+        "--candidate-mode", "pipeline",
+        "--prior-peer-batch-size", "32",
+        "--peer-batch-sizes", "32",
+        "--prior-max-speculative-proposals", "1",
+        "--candidate-max-speculative-proposals", "1,2,4,8",
+        "--prior-max-inflight-appends", "8",
+        "--candidate-max-inflight-appends", "8",
+        "--prior-durable-completion-priority",
+        "--candidate-durable-completion-priority",
+        "--rates", options.rates,
+        "--diagnostic-rates", options.diagnostic_rates,
+        "--network-delays-ms", "0",
+        "--openraft-controls", "synchronous",
         "--qualify-machine",
         "--data-root", str(options.data_root),
         "--output", str(options.output),
@@ -176,6 +212,15 @@ def main() -> None:
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--rates", default=CAPACITY_RATES)
     p.add_argument("--diagnostic-rates", default="1000")
+    p = sub.add_parser(
+        "pipeline-thresholds",
+        help="sweep predeclared speculative limits on one exact Rafter SHA",
+    )
+    p.add_argument("--rafter-sha", required=True)
+    p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--rates", default=PIPELINE_THRESHOLD_RATES)
+    p.add_argument("--diagnostic-rates", default=PIPELINE_THRESHOLD_RATES)
     p = sub.add_parser("build", help="test and build all durable adapters with locked dependencies")
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
     p.add_argument("--rafter-hard-state", choices=("replace", "journal", "wal"), default="replace", help="journal and wal require a Rafter revision supporting that backend")
@@ -263,6 +308,8 @@ def main() -> None:
                 )
         elif args.command == "capacity":
             subprocess.run(capacity_command(args), cwd=ROOT, check=True)
+        elif args.command == "pipeline-thresholds":
+            subprocess.run(pipeline_threshold_command(args), cwd=ROOT, check=True)
         elif args.command == "select-rafter":
             from .selection import select_rafter
             select_rafter(args.ref)

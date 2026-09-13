@@ -191,6 +191,22 @@ least 99% of offered load, p99 is at most 20 ms, p99.9 is at most 50 ms, and
 errors, unknown outcomes, and unsent requests are all zero. The detailed table
 retains every tested point and client-start waiting time.
 
+On a fixed machine, run the speculative-limit experiment without editing the
+suite or choosing thresholds after measurement:
+
+```sh
+./raft-bench pipeline-thresholds \
+  --rafter-sha <exact-40-character-sha> \
+  --data-root /path/to/benchmark-disk \
+  --output results/pipeline-thresholds-<sha>
+```
+
+This holds the exact Rafter source, WAL, peer batch cap, append window,
+completion-priority policy, topology, and network delay constant while testing
+limits `1/2/4/8` at saturation and 1,000 writes/s. The prior arm is the same
+exact SHA at limit 1, and diagnostics retain proposal geometry and pipeline
+activity for every threshold. Machine qualification runs before timing.
+
 ## Development
 
 ```sh

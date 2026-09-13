@@ -3,7 +3,12 @@ from types import SimpleNamespace
 import sys
 import unittest
 
-from benchctl.cli import CAPACITY_RATES, capacity_command
+from benchctl.cli import (
+    CAPACITY_RATES,
+    PIPELINE_THRESHOLD_RATES,
+    capacity_command,
+    pipeline_threshold_command,
+)
 
 
 class CapacityCommandTests(unittest.TestCase):
@@ -34,6 +39,33 @@ class CapacityCommandTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "exact 40-character"):
                     capacity_command(self.options(value))
+
+    def test_threshold_sweep_changes_only_the_speculative_limit(self):
+        options = self.options()
+        options.rates = PIPELINE_THRESHOLD_RATES
+        options.diagnostic_rates = PIPELINE_THRESHOLD_RATES
+        command = pipeline_threshold_command(options)
+        self.assertEqual(command[command.index("--prior") + 1], "a" * 40)
+        self.assertEqual(command[command.index("--candidate") + 1], "a" * 40)
+        self.assertEqual(
+            command[command.index("--candidate-max-speculative-proposals") + 1],
+            "1,2,4,8",
+        )
+        self.assertEqual(
+            command[command.index("--prior-max-speculative-proposals") + 1], "1"
+        )
+        self.assertIn("--prior-durable-completion-priority", command)
+        self.assertIn("--candidate-durable-completion-priority", command)
+        self.assertEqual(command[command.index("--rates") + 1], "0,1000")
+        self.assertEqual(command[command.index("--diagnostic-rates") + 1], "0,1000")
+        self.assertEqual(command[command.index("--network-delays-ms") + 1], "0")
+        self.assertIn("--qualify-machine", command)
+
+    def test_threshold_sweep_refuses_a_moving_or_abbreviated_ref(self):
+        for value in ("main", "abc123", "g" * 40):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "exact 40-character"):
+                    pipeline_threshold_command(self.options(value))
 
 
 if __name__ == "__main__":
