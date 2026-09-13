@@ -10,7 +10,7 @@ pub(super) fn collect<E: Engine>(
     rx: &mpsc::Receiver<Input>,
     deferred: &mut VecDeque<Input>,
     diagnostics: &Diagnostics,
-    arrivals: &mut Vec<Option<Instant>>,
+    mut arrivals: Option<&mut Vec<Option<Instant>>>,
 ) -> Result<Vec<E::Peer>> {
     let mut gate = engine.peer_gate(cap, 256 * 1024);
     let first = engine.decode_peer(from, &data)?;
@@ -25,7 +25,9 @@ pub(super) fn collect<E: Engine>(
                 let peer = engine.decode_peer(*from, data)?;
                 if E::admit_peer(&mut gate, &peer) {
                     diagnostics.elapsed("owner_peer_queue_ns", *queued);
-                    arrivals.push(*queued);
+                    if let Some(arrivals) = &mut arrivals {
+                        arrivals.push(*queued);
+                    }
                     peers.push(peer);
                     continue;
                 }

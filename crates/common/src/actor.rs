@@ -254,7 +254,8 @@ mod persistence;
 type OutboundPeers = BTreeMap<u64, Outbound>;
 
 type PendingCommands = BTreeMap<(String, u64), (Command, Vec<oneshot::Sender<Reply>>)>;
-type ReadyPeers<P> = (Vec<P>, Vec<Option<Instant>>);
+type ArrivalTimes = Option<Vec<Option<Instant>>>;
+type ReadyPeers<P> = (Vec<P>, ArrivalTimes);
 
 struct State<E> {
     diagnostics: Diagnostics,
@@ -333,7 +334,7 @@ impl<E: Engine> State<E> {
                 Input::Wake => continue,
                 Input::Peer(from, data, queued) => {
                     self.diagnostics.elapsed("owner_peer_queue_ns", queued);
-                    let mut arrivals = vec![queued];
+                    let mut arrivals = self.diagnostics.enabled().then(|| vec![queued]);
                     let peers = peer::collect(
                         &self.engine,
                         from,
@@ -342,13 +343,13 @@ impl<E: Engine> State<E> {
                         &rx,
                         &mut deferred,
                         &self.diagnostics,
-                        &mut arrivals,
+                        arrivals.as_mut(),
                     )?;
                     self.peer_batches += 1;
                     self.peer_events += peers.len() as u64;
                     *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
-                    if self.diagnostics.enabled() {
-                        for (peer, queued) in peers.iter().zip(&arrivals) {
+                    if let Some(arrivals) = &arrivals {
+                        for (peer, queued) in peers.iter().zip(arrivals) {
                             if let Some(metric) = E::peer_queue_metric(peer) {
                                 self.diagnostics.elapsed(metric, *queued);
                             }
@@ -366,9 +367,11 @@ impl<E: Engine> State<E> {
                         self.diagnostics.proposals_submitted(&commands);
                         self.engine.peer_batch_and_propose(peers, commands)?
                     };
-                    for queued in arrivals {
-                        self.diagnostics
-                            .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                    if let Some(arrivals) = arrivals {
+                        for queued in arrivals {
+                            self.diagnostics
+                                .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                        }
                     }
                     self.effects(e)?;
                 }
@@ -388,17 +391,19 @@ impl<E: Engine> State<E> {
                             self.peer_batches = self.peer_batches.saturating_add(1);
                             self.peer_events = self.peer_events.saturating_add(peers.len() as u64);
                             *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
-                            if self.diagnostics.enabled() {
-                                for (peer, queued) in peers.iter().zip(&arrivals) {
+                            if let Some(arrivals) = &arrivals {
+                                for (peer, queued) in peers.iter().zip(arrivals) {
                                     if let Some(metric) = E::peer_queue_metric(peer) {
                                         self.diagnostics.elapsed(metric, *queued);
                                     }
                                 }
                             }
                             let outputs = self.engine.propose_and_peer_batch(commands, peers)?;
-                            for queued in arrivals {
-                                self.diagnostics
-                                    .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                            if let Some(arrivals) = arrivals {
+                                for queued in arrivals {
+                                    self.diagnostics
+                                        .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                                }
                             }
                             outputs
                         } else {
@@ -406,16 +411,20 @@ impl<E: Engine> State<E> {
                                 if let Some((peers, arrivals)) =
                                     self.take_ready_prioritizable_peers(&rx, &mut deferred)?
                                 {
-                                    self.observe_peer_batch(&peers, &arrivals);
+                                    self.observe_peer_batch(&peers, arrivals.as_deref());
                                     self.prioritized_peer_batches =
                                         self.prioritized_peer_batches.saturating_add(1);
                                     self.prioritized_peer_events = self
                                         .prioritized_peer_events
                                         .saturating_add(peers.len() as u64);
                                     let outputs = self.engine.peer_batch(peers)?;
-                                    for queued in arrivals {
-                                        self.diagnostics
-                                            .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                                    if let Some(arrivals) = arrivals {
+                                        for queued in arrivals {
+                                            self.diagnostics.elapsed(
+                                                "peer_receive_to_durable_outputs_ns",
+                                                queued,
+                                            );
+                                        }
                                     }
                                     self.effects(outputs)?;
                                 }
@@ -528,7 +537,7 @@ impl<E: Engine> State<E> {
             .peer_gate(self.config.peer_batch_size, 256 * 1024);
         let admitted = E::admit_peer(&mut gate, &first);
         let mut peers = vec![first];
-        let mut arrivals = vec![queued];
+        let mut arrivals = self.diagnostics.enabled().then(|| vec![queued]);
         if admitted {
             while peers.len() < self.config.peer_batch_size {
                 let Some(input) = deferred.pop_front().or_else(|| rx.try_recv().ok()) else {
@@ -545,7 +554,9 @@ impl<E: Engine> State<E> {
                         };
                         if eligible {
                             self.diagnostics.elapsed("owner_peer_queue_ns", *queued);
-                            arrivals.push(*queued);
+                            if let Some(arrivals) = &mut arrivals {
+                                arrivals.push(*queued);
+                            }
                             continue;
                         }
                         peers.pop();
@@ -566,11 +577,11 @@ impl<E: Engine> State<E> {
             deferred.push_front(input);
         }
     }
-    fn observe_peer_batch(&mut self, peers: &[E::Peer], arrivals: &[Option<Instant>]) {
+    fn observe_peer_batch(&mut self, peers: &[E::Peer], arrivals: Option<&[Option<Instant>]>) {
         self.peer_batches = self.peer_batches.saturating_add(1);
         self.peer_events = self.peer_events.saturating_add(peers.len() as u64);
         *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
-        if self.diagnostics.enabled() {
+        if let Some(arrivals) = arrivals {
             for (peer, queued) in peers.iter().zip(arrivals) {
                 if let Some(metric) = E::peer_queue_metric(peer) {
                     self.diagnostics.elapsed(metric, *queued);

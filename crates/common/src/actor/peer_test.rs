@@ -47,7 +47,7 @@ fn take(
         rx,
         deferred,
         &Diagnostics::default(),
-        &mut vec![],
+        None,
     )
     .unwrap()
 }
@@ -91,6 +91,33 @@ fn cap_leaves_work_queued_and_empty_queue_does_not_wait() {
     assert_eq!(take(2, 1, &rx, &mut deferred), vec![1, 2]);
     assert!(matches!(rx.try_recv(), Ok(Input::Peer(_, data, _)) if data == vec![3]));
     assert_eq!(take(32, 4, &rx, &mut deferred), vec![4]);
+}
+
+#[test]
+fn diagnostic_arrivals_follow_the_admitted_prefix() {
+    let (tx, rx) = mpsc::sync_channel(8);
+    let first = Instant::now();
+    let second = first + Duration::from_nanos(1);
+    tx.send(Input::Peer(1, vec![2], Some(second))).unwrap();
+    tx.send(peer(0)).unwrap();
+    let mut deferred = VecDeque::new();
+    let mut arrivals = vec![Some(first)];
+
+    let peers = collect(
+        &TestEngine,
+        1,
+        vec![1],
+        32,
+        &rx,
+        &mut deferred,
+        &Diagnostics::new(true),
+        Some(&mut arrivals),
+    )
+    .unwrap();
+
+    assert_eq!(peers, vec![1, 2]);
+    assert_eq!(arrivals, vec![Some(first), Some(second)]);
+    assert!(matches!(deferred.pop_front(), Some(Input::Peer(_, data, _)) if data == vec![0]));
 }
 
 struct CombiningEngine {
