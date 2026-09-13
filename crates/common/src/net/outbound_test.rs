@@ -1,5 +1,5 @@
 use super::*;
-use crate::net::read_frame;
+use crate::net::{read_frame, RETAINED_PEER_FRAME_BYTES};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 
 fn peer(address: String) -> Outbound {
@@ -75,10 +75,10 @@ async fn failed_partial_write_reconnects_with_a_complete_fresh_frame() {
     });
     assert!(connection.send(&vec![0; FRAME_LIMIT - 8]).await.is_err());
     assert!(connection.stream.is_none());
-    assert!(connection.frame.capacity() <= RETAINED_FRAME_BYTES);
+    assert!(connection.frame.capacity() <= RETAINED_PEER_FRAME_BYTES);
     connection.send(b"fresh").await.unwrap();
     assert_eq!(&receiver.await.unwrap()[8..], b"fresh");
-    assert!(connection.frame.capacity() <= RETAINED_FRAME_BYTES);
+    assert!(connection.frame.capacity() <= RETAINED_PEER_FRAME_BYTES);
 }
 
 #[tokio::test]
@@ -101,7 +101,7 @@ async fn message_connection_reuses_one_bounded_wire_frame() {
     let capacity = connection.frame.capacity();
     connection.send(b"next").await.unwrap();
     assert_eq!(connection.frame.capacity(), capacity);
-    assert!(capacity <= RETAINED_FRAME_BYTES);
+    assert!(capacity <= RETAINED_PEER_FRAME_BYTES);
 
     let (first, second) = receiver.await.unwrap();
     assert_eq!(&first[..8], &7u64.to_be_bytes());

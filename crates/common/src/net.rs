@@ -13,6 +13,28 @@ use tokio::{
     time::timeout,
 };
 
+// One buffer per remote peer; ordinary frames reuse it and large frames release it.
+const RETAINED_PEER_FRAME_BYTES: usize = 256 * 1024;
+
+fn prepare_peer_frame(frame: &mut Vec<u8>, from: u64, bytes: &[u8]) -> Result<()> {
+    let body_len = 8usize
+        .checked_add(bytes.len())
+        .filter(|body_len| *body_len <= FRAME_LIMIT)
+        .ok_or_else(|| anyhow::anyhow!("peer frame exceeds transport budget"))?;
+    frame.clear();
+    frame.reserve_exact(4 + body_len);
+    frame.extend_from_slice(&(body_len as u32).to_be_bytes());
+    frame.extend_from_slice(&from.to_be_bytes());
+    frame.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn release_oversized_peer_frame(frame: &mut Vec<u8>) {
+    if frame.capacity() > RETAINED_PEER_FRAME_BYTES {
+        *frame = Vec::new();
+    }
+}
+
 #[async_trait]
 pub trait Handler: Clone + Send + Sync + 'static {
     fn message_oriented(&self) -> bool {
@@ -58,40 +80,47 @@ pub async fn write_frame(s: &mut TcpStream, data: &[u8]) -> Result<()> {
 pub struct Rpc {
     address: String,
     from: u64,
-    connection: Arc<Mutex<Option<TcpStream>>>,
+    connection: Arc<Mutex<RpcConnection>>,
+}
+struct RpcConnection {
+    stream: Option<TcpStream>,
+    frame: Vec<u8>,
 }
 impl Rpc {
     pub fn new(address: String, from: u64) -> Self {
         Self {
             address,
             from,
-            connection: Arc::new(Mutex::new(None)),
+            connection: Arc::new(Mutex::new(RpcConnection {
+                stream: None,
+                frame: Vec::new(),
+            })),
         }
     }
     pub async fn call(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         let mut slot = self.connection.lock().await;
+        prepare_peer_frame(&mut slot.frame, self.from, bytes)?;
         let result = timeout(Duration::from_secs(2), async {
-            if slot.is_none() {
+            if slot.stream.is_none() {
                 let stream = TcpStream::connect(&self.address).await?;
                 stream.set_nodelay(true)?;
-                *slot = Some(stream);
+                slot.stream = Some(stream);
             }
-            let mut packet = Vec::with_capacity(8 + bytes.len());
-            packet.extend_from_slice(&self.from.to_be_bytes());
-            packet.extend_from_slice(bytes);
-            let stream = slot.as_mut().unwrap();
-            write_frame(stream, &packet).await?;
+            let RpcConnection { stream, frame } = &mut *slot;
+            let stream = stream.as_mut().unwrap();
+            stream.write_all(frame).await?;
             read_frame(stream).await
         })
         .await;
+        release_oversized_peer_frame(&mut slot.frame);
         match result {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(e)) => {
-                *slot = None;
+                slot.stream = None;
                 Err(e)
             }
             Err(e) => {
-                *slot = None;
+                slot.stream = None;
                 Err(e.into())
             }
         }

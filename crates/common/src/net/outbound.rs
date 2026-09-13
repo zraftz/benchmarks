@@ -1,5 +1,5 @@
 //! Independent bounded peer writers. Socket delivery is never Raft durability.
-use super::Rpc;
+use super::{prepare_peer_frame, release_oversized_peer_frame, Rpc};
 use crate::{diagnostics::Diagnostics, FRAME_LIMIT};
 use anyhow::{bail, Result};
 use std::{
@@ -19,8 +19,6 @@ use tokio::{
 const QUEUE_EVENTS: usize = 256;
 const QUEUE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_AGE: Duration = Duration::from_secs(2);
-// One buffer per remote peer; ordinary frames reuse it and large frames release it.
-const RETAINED_FRAME_BYTES: usize = 256 * 1024;
 
 struct Packet {
     data: Vec<u8>,
@@ -164,16 +162,7 @@ struct MessageConnection {
 }
 impl MessageConnection {
     async fn send(&mut self, bytes: &[u8]) -> Result<()> {
-        let body_len = 8usize
-            .checked_add(bytes.len())
-            .filter(|body_len| *body_len <= FRAME_LIMIT)
-            .ok_or_else(|| anyhow::anyhow!("peer frame exceeds transport budget"))?;
-        self.frame.clear();
-        self.frame.reserve_exact(4 + body_len);
-        self.frame
-            .extend_from_slice(&(body_len as u32).to_be_bytes());
-        self.frame.extend_from_slice(&self.from.to_be_bytes());
-        self.frame.extend_from_slice(bytes);
+        prepare_peer_frame(&mut self.frame, self.from, bytes)?;
         let result = timeout(MAX_AGE, async {
             if self.stream.is_none() {
                 let stream = TcpStream::connect(&self.address).await?;
@@ -183,9 +172,7 @@ impl MessageConnection {
             self.stream.as_mut().unwrap().write_all(&self.frame).await
         })
         .await;
-        if self.frame.capacity() > RETAINED_FRAME_BYTES {
-            self.frame = Vec::new();
-        }
+        release_oversized_peer_frame(&mut self.frame);
         match result {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => {
