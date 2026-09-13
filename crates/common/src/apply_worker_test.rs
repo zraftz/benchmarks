@@ -94,6 +94,48 @@ fn timing_mode_retains_no_per_entry_diagnostic_queue_state() {
 }
 
 #[test]
+fn submissions_preserve_entry_and_byte_batch_limits() {
+    let path = std::env::temp_dir().join(format!(
+        "apply-worker-batches-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let worker = ApplyWorker::start(
+        DurableModel::open(&path).unwrap(),
+        Diagnostics::default(),
+        || {},
+    );
+
+    assert!(worker.try_submit(vec![entry(1), entry(2)]).unwrap());
+    assert_eq!(
+        completion(&worker)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    let mut third = entry(3);
+    third.command.as_mut().unwrap().kind = "cas".into();
+    third.command.as_mut().unwrap().value = "x".repeat(64 * 1024);
+    third.command.as_mut().unwrap().expected = Some("x".repeat(64 * 1024));
+    let mut fourth = entry(4);
+    fourth.command.as_mut().unwrap().kind = "cas".into();
+    fourth.command.as_mut().unwrap().value = "y".repeat(64 * 1024);
+    fourth.command.as_mut().unwrap().expected = Some("y".repeat(64 * 1024));
+    assert!(payload_bytes(&third) < BATCH_BYTES);
+    assert!(payload_bytes(&third) + payload_bytes(&fourth) > BATCH_BYTES);
+    assert!(worker.try_submit(vec![third, fourth]).unwrap());
+    assert_eq!(completion(&worker).unwrap().entries[0].index, 3);
+    assert_eq!(completion(&worker).unwrap().entries[0].index, 4);
+
+    drop(worker);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn idle_worker_installs_snapshot_and_accepts_the_contiguous_suffix() {
     let source_path = std::env::temp_dir().join(format!(
         "apply-worker-snapshot-source-{}-{}",

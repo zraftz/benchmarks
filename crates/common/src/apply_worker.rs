@@ -268,11 +268,16 @@ impl ApplyWorker {
                 )
             }
         }
-        let retained = entries.iter().try_fold(0usize, |total, entry| {
-            total.checked_add(retained_bytes(entry))
-        });
+        let totals = entries
+            .iter()
+            .try_fold((0usize, 0usize), |(retained, batch), entry| {
+                Some((
+                    retained.checked_add(retained_bytes(entry))?,
+                    batch.checked_add(payload_bytes(entry))?,
+                ))
+            });
         let (available_entries, available_bytes) = self.worker().available();
-        let Some(retained) = retained else {
+        let Some((retained, batch_bytes)) = totals else {
             return Ok(false);
         };
         if entries.len() > available_entries || retained > available_bytes {
@@ -302,21 +307,26 @@ impl ApplyWorker {
         }
         self.diagnostics.application_dispatched(&entries);
 
-        let mut chunk = Vec::new();
-        let mut chunk_bytes = 0usize;
-        for entry in entries {
-            let bytes = payload_bytes(&entry);
-            if !chunk.is_empty()
-                && (chunk.len() == BATCH_ENTRIES || chunk_bytes.saturating_add(bytes) > BATCH_BYTES)
-            {
-                self.submit_chunk(std::mem::take(&mut chunk))?;
-                chunk_bytes = 0;
+        if entries.len() <= BATCH_ENTRIES && batch_bytes <= BATCH_BYTES {
+            self.submit_chunk(entries)?;
+        } else {
+            let mut chunk = Vec::new();
+            let mut chunk_bytes = 0usize;
+            for entry in entries {
+                let bytes = payload_bytes(&entry);
+                if !chunk.is_empty()
+                    && (chunk.len() == BATCH_ENTRIES
+                        || chunk_bytes.saturating_add(bytes) > BATCH_BYTES)
+                {
+                    self.submit_chunk(std::mem::take(&mut chunk))?;
+                    chunk_bytes = 0;
+                }
+                chunk_bytes += bytes;
+                chunk.push(entry);
             }
-            chunk_bytes += bytes;
-            chunk.push(entry);
-        }
-        if !chunk.is_empty() {
-            self.submit_chunk(chunk)?;
+            if !chunk.is_empty() {
+                self.submit_chunk(chunk)?;
+            }
         }
         self.accepted_through.store(final_index, Ordering::Release);
         drop(queued);
