@@ -5,6 +5,8 @@ use crate::Types;
 use bench_common::journal::Journal;
 use openraft::storage::LogFlushed;
 use serde_json::json;
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use std::{
     fmt,
     sync::{
@@ -45,6 +47,30 @@ struct AsyncStats {
     pending: AtomicUsize,
     max_pending: AtomicUsize,
     failure: Mutex<Option<String>>,
+    #[cfg(test)]
+    fail_next: AtomicBool,
+    #[cfg(test)]
+    before_failure: Mutex<Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>>,
+    #[cfg(test)]
+    failure_lock_attempt: Mutex<Option<mpsc::SyncSender<()>>>,
+    #[cfg(test)]
+    failure_recorded: Mutex<Option<mpsc::SyncSender<()>>>,
+    #[cfg(test)]
+    before_admission: Mutex<Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>>,
+}
+
+#[cfg(test)]
+pub(super) struct FailureControl {
+    pub(super) failure_ready: mpsc::Receiver<()>,
+    pub(super) release_failure: mpsc::SyncSender<()>,
+    pub(super) failure_lock_attempt: mpsc::Receiver<()>,
+    pub(super) failure_recorded: mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+pub(super) struct AdmissionControl {
+    pub(super) admission_ready: mpsc::Receiver<()>,
+    pub(super) release_admission: mpsc::SyncSender<()>,
 }
 
 pub(super) struct AsyncFlusher {
@@ -134,6 +160,22 @@ impl LogIo {
             }),
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn fail_next_before_recording(&self) -> FailureControl {
+        let Self::Asynchronous(flusher) = self else {
+            panic!("failure control requires an asynchronous flusher");
+        };
+        flusher.fail_next_before_recording()
+    }
+
+    #[cfg(test)]
+    pub(super) fn pause_next_admission_after_failure_check(&self) -> AdmissionControl {
+        let Self::Asynchronous(flusher) = self else {
+            panic!("admission control requires an asynchronous flusher");
+        };
+        flusher.pause_next_admission_after_failure_check()
+    }
 }
 
 impl Fence {
@@ -156,6 +198,17 @@ impl AsyncFlusher {
             .name("openraft-log-flush".to_owned())
             .spawn(move || {
                 while let Ok(work) = receive.recv() {
+                    #[cfg(test)]
+                    let injected = worker_stats.fail_next.swap(false, Ordering::AcqRel);
+                    #[cfg(test)]
+                    let result = if injected {
+                        Err("injected async OpenRaft log flush failure".to_owned())
+                    } else {
+                        journal
+                            .append(&work.record)
+                            .map_err(|error| error.to_string())
+                    };
+                    #[cfg(not(test))]
                     let result = journal
                         .append(&work.record)
                         .map_err(|error| error.to_string());
@@ -164,7 +217,25 @@ impl AsyncFlusher {
                         worker_stats.bytes.store(journal.bytes, Ordering::Release);
                     }
                     if let Err(error) = &result {
+                        #[cfg(test)]
+                        if let Some((ready, release)) =
+                            worker_stats.before_failure.lock().unwrap().take()
+                        {
+                            let _ = ready.send(());
+                            let _ = release.recv();
+                        }
+                        #[cfg(test)]
+                        if let Some(attempt) =
+                            worker_stats.failure_lock_attempt.lock().unwrap().take()
+                        {
+                            let _ = attempt.send(());
+                        }
                         *worker_stats.failure.lock().unwrap() = Some(error.clone());
+                        #[cfg(test)]
+                        if let Some(recorded) = worker_stats.failure_recorded.lock().unwrap().take()
+                        {
+                            let _ = recorded.send(());
+                        }
                     }
                     worker_stats.pending.fetch_sub(1, Ordering::AcqRel);
                     work.completion.complete(result.clone());
@@ -190,14 +261,28 @@ impl AsyncFlusher {
             work.completion.complete(Err(error.clone()));
             return Err(error);
         };
-        if let Some(error) = self.stats.failure.lock().unwrap().clone() {
+        // Failure publication and queue admission share one lock. Otherwise a
+        // submitter could observe no failure, lose a race with the worker's
+        // final queue drain, then enqueue work whose durability callback is
+        // dropped with the receiver.
+        let failure = self.stats.failure.lock().unwrap();
+        if let Some(error) = failure.clone() {
+            drop(failure);
             work.completion.complete(Err(error.clone()));
             return Err(error);
+        }
+        #[cfg(test)]
+        if let Some((ready, release)) = self.stats.before_admission.lock().unwrap().take() {
+            let _ = ready.send(());
+            let _ = release.recv();
         }
         let pending = self.stats.pending.fetch_add(1, Ordering::AcqRel) + 1;
         self.stats.max_pending.fetch_max(pending, Ordering::Relaxed);
         match sender.try_send(work) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                drop(failure);
+                Ok(())
+            }
             Err(error) => {
                 self.stats.pending.fetch_sub(1, Ordering::AcqRel);
                 let (message, work) = match error {
@@ -209,9 +294,39 @@ impl AsyncFlusher {
                     }
                 };
                 let message = message.to_owned();
+                drop(failure);
                 work.completion.complete(Err(message.clone()));
                 Err(message)
             }
+        }
+    }
+
+    #[cfg(test)]
+    fn fail_next_before_recording(&self) -> FailureControl {
+        let (failure_ready, ready) = mpsc::sync_channel(1);
+        let (release, release_failure) = mpsc::sync_channel(1);
+        let (attempt, failure_lock_attempt) = mpsc::sync_channel(1);
+        let (recorded, failure_recorded) = mpsc::sync_channel(1);
+        *self.stats.before_failure.lock().unwrap() = Some((failure_ready, release_failure));
+        *self.stats.failure_lock_attempt.lock().unwrap() = Some(attempt);
+        *self.stats.failure_recorded.lock().unwrap() = Some(recorded);
+        self.stats.fail_next.store(true, Ordering::Release);
+        FailureControl {
+            failure_ready: ready,
+            release_failure: release,
+            failure_lock_attempt,
+            failure_recorded,
+        }
+    }
+
+    #[cfg(test)]
+    fn pause_next_admission_after_failure_check(&self) -> AdmissionControl {
+        let (admission_ready, ready) = mpsc::sync_channel(1);
+        let (release, release_admission) = mpsc::sync_channel(1);
+        *self.stats.before_admission.lock().unwrap() = Some((admission_ready, release_admission));
+        AdmissionControl {
+            admission_ready: ready,
+            release_admission: release,
         }
     }
 }

@@ -87,6 +87,18 @@ impl LogStore {
         let i = self.inner.lock().unwrap();
         i.io.stats(i.logs.len())
     }
+    #[cfg(test)]
+    fn fail_next_before_recording(&self) -> log_io::FailureControl {
+        self.inner.lock().unwrap().io.fail_next_before_recording()
+    }
+    #[cfg(test)]
+    fn pause_next_admission_after_failure_check(&self) -> log_io::AdmissionControl {
+        self.inner
+            .lock()
+            .unwrap()
+            .io
+            .pause_next_admission_after_failure_check()
+    }
     async fn write_fenced(&self, record: Record) -> std::result::Result<(), StorageError<u64>> {
         let fence = {
             let mut inner = self.inner.lock().unwrap();
