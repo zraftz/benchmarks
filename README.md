@@ -143,7 +143,7 @@ runner. Timing and diagnostic cases stay separate in `results/paired/`.
 | Option | Purpose |
 |---|---|
 | Build `--peer-group-commit`, run `--peer-batch-size 32` | Drain ready peer events into one durable batch |
-| Build/run `--ordered-apply` | Persist application work on one ordered worker |
+| Build/run `--ordered-apply` | Persist application work through Rafter's public bounded ordered worker |
 | Run `--peer-message-stream --implementations rafter,raft-rs` | Send peer messages without empty transport replies |
 | Build `--rafter-hard-state journal` or `wal` | Select supported native storage; `replace` is the default |
 | Build/run `--pipelined-durability` | Rafter only: overlap eligible replication and local persistence |

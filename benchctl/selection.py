@@ -10,7 +10,7 @@ import tomllib
 from .evidence import ROOT
 
 REPOSITORY = "https://github.com/zsumz/rafter"
-MANIFESTS = ("adapters/rafter/Cargo.toml", "microbench/Cargo.toml")
+MANIFESTS = ("adapters/rafter/Cargo.toml", "crates/common/Cargo.toml", "microbench/Cargo.toml")
 LOCKS = ("Cargo.lock", "microbench/Cargo.lock")
 
 

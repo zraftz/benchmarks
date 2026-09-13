@@ -1,7 +1,11 @@
 //! Delayed and failed application persistence never becomes a completion early.
 use super::*;
 use crate::model::Command;
-use std::{path::PathBuf, sync::atomic::AtomicUsize, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{atomic::AtomicUsize, mpsc},
+    time::Duration,
+};
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Store {
     model: DurableModel,
@@ -182,6 +186,7 @@ fn status_queries_read_the_worker_after_its_durable_fence() {
         Err(oneshot::error::TryRecvError::Empty)
     ));
     release.send(()).unwrap();
+    let _ = completion(&worker).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let status = loop {
         if let Ok(result) = response.try_recv() {

@@ -18,7 +18,9 @@ def fixture(root):
     (root / "implementations.lock.json").write_text(json.dumps({"rafter": {"git": REPOSITORY, "rev": OLD}}))
     packages = ("rafter", "rafter-runtime", "rafter-storage", "rafter-codec")
     for name in MANIFESTS:
-        (root / name).write_text("[dependencies]\n" + "".join(
+        manifest = root / name
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text("[dependencies]\n" + "".join(
             f'{p} = {{ git = "{REPOSITORY}", rev = "{OLD}" }}\n' for p in packages))
     lock = "".join(f'[[package]]\nname="{p}"\nversion="0.1.0"\nsource="git+{REPOSITORY}?rev={OLD}#{OLD}"\n' for p in packages)
     lock += '[[package]]\nname="raft"\nversion="0.7.0"\n[[package]]\nname="openraft"\nversion="0.9.24"\n'

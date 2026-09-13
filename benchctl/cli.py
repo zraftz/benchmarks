@@ -10,7 +10,7 @@ import subprocess
 import sys
 import uuid
 from .evidence import ROOT, digest, source_digest, verify, write_json
-from .build import IMPLEMENTATIONS, build
+from .build import IMPLEMENTATIONS, PUBLIC_APPLICATION_WORKER, build
 
 
 CAPACITY_RATES = "1000,2000,3000,4000,6000,8000,10000,12000"
@@ -137,6 +137,9 @@ def run(options) -> None:
         raise RuntimeError("peer batching requires a build with --peer-group-commit")
     if "rafter" in implementations and options.ordered_apply and not receipt.get("ordered_apply"):
         raise RuntimeError("ordered application requires a build with --ordered-apply")
+    if ("rafter" in implementations and options.ordered_apply
+            and receipt.get("rafter_application_worker") != PUBLIC_APPLICATION_WORKER):
+        raise RuntimeError("ordered application build does not identify Rafter's public application worker")
     if options.pipelined_durability and not receipt.get("pipelined_durability"):
         raise RuntimeError("pipelined durability requires a build with --pipelined-durability")
     if receipt.get("source_digest") != source_digest():

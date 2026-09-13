@@ -1,26 +1,34 @@
-//! One ordered application owner with bounded work and nonblocking completions.
+//! Benchmark integration for Rafter's public bounded application worker.
 //! Credits cover queued, in-progress, and completed-but-unconsumed entries.
-//! The Raft owner never blocks sending work or receiving a completion.
+//! The Raft owner never blocks submitting work or receiving a completion.
 use crate::{
     diagnostics::Diagnostics,
     model::{Applied, DurableModel, Outcome},
     Reply,
 };
 use anyhow::{bail, Result};
-use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
-    mpsc, Arc, Mutex,
+use rafter::LogIndex;
+use rafter_runtime::application::{
+    ApplicationEntry, ApplicationEvent, ApplicationFailureKind,
+    ApplicationWorker as RafterApplicationWorker, ApplicationWorkerOptions, DurableApplication,
 };
-use std::thread::JoinHandle;
-use std::time::Instant;
+use std::{
+    collections::{BTreeMap, VecDeque},
+    error::Error,
+    fmt,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, PoisonError, TryLockError,
+    },
+    time::Instant,
+};
 use tokio::sync::oneshot;
-
-mod run;
 
 pub const BATCH_ENTRIES: usize = 64;
 pub const BATCH_BYTES: usize = 256 * 1024;
 pub const QUEUE_ENTRIES: usize = 4096;
 pub const QUEUE_BYTES: usize = 16 * 1024 * 1024;
+const QUERY_LIMIT: usize = 16;
 
 pub trait ApplicationStore: Send + 'static {
     fn apply(&mut self, entries: &[Applied]) -> Result<Vec<Option<Outcome>>>;
@@ -58,89 +66,165 @@ fn retained_bytes(entry: &Applied) -> usize {
         .saturating_mul(2)
         .saturating_add(64 * 1024)
 }
-#[derive(Default)]
-struct Credits {
-    entries: usize,
-    bytes: usize,
+
+impl ApplicationEntry for Applied {
+    fn log_index(&self) -> LogIndex {
+        LogIndex(self.index)
+    }
+
+    fn retained_bytes(&self) -> usize {
+        retained_bytes(self)
+    }
+
+    fn batch_bytes(&self) -> usize {
+        payload_bytes(self)
+    }
 }
-struct Item {
-    entry: Applied,
-    queued: Option<Instant>,
+
+#[derive(Debug)]
+struct StoreError(anyhow::Error);
+
+impl fmt::Display for StoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:#}", self.0)
+    }
 }
+
+impl Error for StoreError {}
+
+type SharedStore = Arc<Mutex<Box<dyn ApplicationStore>>>;
+type Queued = Arc<Mutex<BTreeMap<u64, Option<Instant>>>>;
+
+struct WorkerStore {
+    store: SharedStore,
+    queued: Queued,
+    diagnostics: Diagnostics,
+}
+
+impl DurableApplication<Applied> for WorkerStore {
+    type Outcome = Option<Outcome>;
+    type Error = StoreError;
+
+    fn applied_through(&self) -> LogIndex {
+        let store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
+        LogIndex(store.index())
+    }
+
+    fn apply(
+        &mut self,
+        entries: &[Applied],
+    ) -> std::result::Result<Vec<Self::Outcome>, Self::Error> {
+        {
+            let queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+            for entry in entries {
+                self.diagnostics.elapsed(
+                    "application_queue_ns",
+                    queued.get(&entry.index).copied().flatten(),
+                );
+            }
+        }
+        self.diagnostics
+            .observe("application_batch_entries", entries.len() as u64);
+        self.diagnostics.application_started(entries);
+        let expected_index = entries.last().map_or(0, |entry| entry.index);
+        let outcomes = {
+            let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
+            let outcomes = store.apply(entries).map_err(StoreError)?;
+            if outcomes.len() != entries.len() {
+                return Err(StoreError(anyhow::anyhow!(
+                    "application outcome count mismatch: expected {}, got {}",
+                    entries.len(),
+                    outcomes.len()
+                )));
+            }
+            if store.index() != expected_index {
+                return Err(StoreError(anyhow::anyhow!(
+                    "application durable floor mismatch: expected {expected_index}, got {}",
+                    store.index()
+                )));
+            }
+            outcomes
+        };
+        self.diagnostics.application_durable(entries);
+        Ok(outcomes)
+    }
+}
+
 pub struct Completion {
     pub entries: Vec<Applied>,
     pub outcomes: Vec<Option<Outcome>>,
     pub queued: Vec<Option<Instant>>,
-    bytes: usize,
 }
+
 pub struct Query {
     pub reply: oneshot::Sender<Reply>,
     pub response: Reply,
     pub dump: bool,
 }
-enum Work {
-    Apply(Vec<Item>),
-    Query(Query),
+
+struct PendingQuery {
+    durable_fence: u64,
+    query: Query,
 }
 
 pub struct ApplyWorker {
-    tx: Option<mpsc::Sender<Work>>,
-    complete: mpsc::Receiver<Result<Completion>>,
-    credits: Arc<Mutex<Credits>>,
-    queries: Arc<AtomicUsize>,
-    durable: Arc<AtomicU64>,
-    applying: Arc<AtomicU64>,
+    worker: RafterApplicationWorker<Applied, WorkerStore>,
+    store: SharedStore,
+    queued: Queued,
+    queries: Mutex<VecDeque<PendingQuery>>,
+    accepted_through: AtomicU64,
     diagnostics: Diagnostics,
-    thread: Option<JoinHandle<()>>,
 }
+
 impl ApplyWorker {
     pub fn start(
         store: impl ApplicationStore,
         diagnostics: Diagnostics,
         wake: impl Fn() + Send + 'static,
     ) -> Self {
-        let (tx, rx) = mpsc::channel();
-        let (done, complete) = mpsc::channel();
-        let credits = Arc::new(Mutex::new(Credits::default()));
-        let queries = Arc::new(AtomicUsize::new(0));
-        let durable = Arc::new(AtomicU64::new(store.index()));
-        let applying = Arc::new(AtomicU64::new(0));
-        let state = run::State {
-            store,
-            rx,
-            done,
-            queries: queries.clone(),
-            durable: durable.clone(),
-            applying: applying.clone(),
+        let applied = store.index();
+        let store: SharedStore = Arc::new(Mutex::new(Box::new(store)));
+        let queued = Arc::new(Mutex::new(BTreeMap::new()));
+        let worker_store = WorkerStore {
+            store: Arc::clone(&store),
+            queued: Arc::clone(&queued),
             diagnostics: diagnostics.clone(),
-            wake,
         };
-        let thread = std::thread::spawn(move || state.run());
+        let options = ApplicationWorkerOptions::new().with_limits(
+            QUEUE_ENTRIES,
+            QUEUE_BYTES,
+            BATCH_ENTRIES,
+            BATCH_BYTES,
+        );
+        let worker = RafterApplicationWorker::start(worker_store, options, wake)
+            .expect("failed to start Rafter application worker");
         Self {
-            tx: Some(tx),
-            complete,
-            credits,
-            queries,
-            durable,
-            applying,
+            worker,
+            store,
+            queued,
+            queries: Mutex::new(VecDeque::new()),
+            accepted_through: AtomicU64::new(applied),
             diagnostics,
-            thread: Some(thread),
         }
     }
+
     pub fn applied_index(&self) -> u64 {
-        self.durable.load(Ordering::Acquire)
+        self.worker.durable_through().0
     }
+
     pub fn applying_index(&self) -> u64 {
-        self.applying.load(Ordering::Acquire)
+        self.worker.applying_through().0
     }
+
     pub fn available(&self) -> (usize, usize) {
-        let c = self.credits.lock().unwrap();
-        (QUEUE_ENTRIES - c.entries, QUEUE_BYTES - c.bytes)
+        self.worker.available()
     }
+
     pub fn has_capacity(&self) -> bool {
         let (entries, bytes) = self.available();
         entries > BATCH_ENTRIES && bytes > BATCH_BYTES
     }
+
     pub fn try_submit(&self, entries: Vec<Applied>) -> Result<bool> {
         if entries.is_empty() {
             return Ok(true);
@@ -151,63 +235,176 @@ impl ApplyWorker {
         {
             bail!("application entry exceeds decoded byte cap")
         }
-        let bytes = entries.iter().map(retained_bytes).sum::<usize>();
-        let mut c = self.credits.lock().unwrap();
-        if entries.len() > QUEUE_ENTRIES - c.entries || bytes > QUEUE_BYTES - c.bytes {
+        for pair in entries.windows(2) {
+            if pair[0].index.checked_add(1) != Some(pair[1].index) {
+                bail!(
+                    "application submission is not contiguous: {} then {}",
+                    pair[0].index,
+                    pair[1].index
+                )
+            }
+        }
+        let retained = entries.iter().try_fold(0usize, |total, entry| {
+            total.checked_add(retained_bytes(entry))
+        });
+        let (available_entries, available_bytes) = self.worker.available();
+        let Some(retained) = retained else {
+            return Ok(false);
+        };
+        if entries.len() > available_entries || retained > available_bytes {
             return Ok(false);
         }
-        c.entries += entries.len();
-        c.bytes += bytes;
-        self.diagnostics.application_dispatched(&entries);
-        let items = entries
-            .into_iter()
-            .map(|entry| Item {
-                entry,
-                queued: self.diagnostics.start(),
-            })
-            .collect();
-        if self.tx.as_ref().unwrap().send(Work::Apply(items)).is_err() {
-            bail!("application worker stopped")
+
+        let final_index = entries.last().expect("nonempty submission").index;
+        let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+        if entries
+            .iter()
+            .any(|entry| queued.contains_key(&entry.index))
+        {
+            bail!("application submission reused an in-flight log index")
         }
+        for entry in &entries {
+            queued.insert(entry.index, self.diagnostics.start());
+        }
+        self.diagnostics.application_dispatched(&entries);
+
+        let mut chunk = Vec::new();
+        let mut chunk_bytes = 0usize;
+        for entry in entries {
+            let bytes = payload_bytes(&entry);
+            if !chunk.is_empty()
+                && (chunk.len() == BATCH_ENTRIES || chunk_bytes.saturating_add(bytes) > BATCH_BYTES)
+            {
+                self.submit_chunk(std::mem::take(&mut chunk))?;
+                chunk_bytes = 0;
+            }
+            chunk_bytes += bytes;
+            chunk.push(entry);
+        }
+        if !chunk.is_empty() {
+            self.submit_chunk(chunk)?;
+        }
+        self.accepted_through.store(final_index, Ordering::Release);
+        drop(queued);
         Ok(true)
     }
+
+    fn submit_chunk(&self, entries: Vec<Applied>) -> Result<()> {
+        self.worker.try_submit(entries).map_err(|error| {
+            let rejection = error.rejection();
+            anyhow::anyhow!("Rafter application worker refused prepared work: {rejection:?}")
+        })
+    }
+
     pub fn poll(&self) -> Result<Option<Completion>> {
-        match self.complete.try_recv() {
-            Ok(Ok(completion)) => {
-                let mut c = self.credits.lock().unwrap();
-                c.entries -= completion.entries.len();
-                c.bytes -= completion.bytes;
-                Ok(Some(completion))
+        let event = self.worker.try_complete().map_err(|error| {
+            self.fail_queries(error.to_string());
+            anyhow::anyhow!(error)
+        })?;
+        match event {
+            Some(ApplicationEvent::Applied(completion)) => {
+                let (entries, outcomes) = completion.into_parts();
+                let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+                let starts = entries
+                    .iter()
+                    .map(|entry| queued.remove(&entry.index).flatten())
+                    .collect();
+                drop(queued);
+                self.complete_queries()?;
+                Ok(Some(Completion {
+                    entries,
+                    outcomes,
+                    queued: starts,
+                }))
             }
-            Ok(Err(error)) => Err(error),
-            Err(mpsc::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::TryRecvError::Disconnected) => anyhow::bail!("application worker stopped"),
+            Some(ApplicationEvent::Failed(failure)) => {
+                let detail = match failure.kind() {
+                    ApplicationFailureKind::Store(error) => error.to_string(),
+                    other => format!("{other:?}"),
+                };
+                self.fail_queries(&detail);
+                bail!("application worker failed: {detail}")
+            }
+            Some(_) => {
+                self.fail_queries("unsupported application worker event");
+                bail!("unsupported application worker event")
+            }
+            None => {
+                self.complete_queries()?;
+                Ok(None)
+            }
         }
     }
+
     pub fn query(&self, query: Query) -> Result<()> {
-        if self
-            .queries
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < 16).then_some(n + 1)
-            })
-            .is_err()
+        let durable_fence = self.accepted_through.load(Ordering::Acquire);
         {
-            let _ = query.reply.send(Reply::status("overloaded"));
-            return Ok(());
+            let mut queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
+            if queries.len() >= QUERY_LIMIT {
+                let _ = query.reply.send(Reply::status("overloaded"));
+                return Ok(());
+            }
+            queries.push_back(PendingQuery {
+                durable_fence,
+                query,
+            });
         }
-        self.tx
-            .as_ref()
-            .unwrap()
-            .send(Work::Query(query))
-            .map_err(|_| anyhow::anyhow!("application worker stopped"))
+        self.complete_queries()
+    }
+
+    fn complete_queries(&self) -> Result<()> {
+        let durable = self.applied_index();
+        {
+            let queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
+            if queries
+                .front()
+                .is_none_or(|query| query.durable_fence > durable)
+            {
+                return Ok(());
+            }
+        }
+        let store = match self.store.try_lock() {
+            Ok(store) => store,
+            Err(TryLockError::WouldBlock) => return Ok(()),
+            Err(TryLockError::Poisoned(_)) => bail!("application store lock poisoned"),
+        };
+        let applying = self.applying_index();
+        let mut ready = Vec::new();
+        {
+            let mut queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
+            while queries
+                .front()
+                .is_some_and(|query| query.durable_fence <= durable)
+            {
+                ready.push(queries.pop_front().expect("front was present").query);
+            }
+        }
+        for mut query in ready {
+            if query.dump {
+                query.response.info = Some(store.dump());
+            } else if let Some(info) = &mut query.response.info {
+                info["application"] = store.stats();
+                info["application_in_progress_index"] = applying.into();
+            }
+            let _ = query.reply.send(query.response);
+        }
+        Ok(())
+    }
+
+    fn fail_queries(&self, detail: impl fmt::Display) {
+        let pending = {
+            let mut queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
+            queries.drain(..).collect::<Vec<_>>()
+        };
+        for query in pending {
+            let _ = query.query.reply.send(Reply::error(&detail));
+        }
     }
 }
+
 impl Drop for ApplyWorker {
     fn drop(&mut self) {
-        self.tx.take();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.fail_queries("application worker stopped");
     }
 }
 

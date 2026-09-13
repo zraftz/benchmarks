@@ -10,6 +10,7 @@ from .evidence import ROOT, capture, digest, source_digest, write_json
 from .selection import check_resolution
 
 IMPLEMENTATIONS = ("rafter", "raft-rs", "openraft")
+PUBLIC_APPLICATION_WORKER = "rafter-runtime/ApplicationWorker"
 
 
 def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False, ordered_apply: bool = False, pipelined_durability: bool = False) -> None:
@@ -53,7 +54,9 @@ def build(rafter_hard_state: str = "replace", peer_group_commit: bool = False, o
     subprocess.run(["go", "build", "-trimpath", "-o", str(dist / "raft-bench-load"), "."],
                    cwd=ROOT / "loadgen", check=True)
     record = {
-        "schema": 1, "pipelined_durability": pipelined_durability, "peer_group_commit": peer_group_commit, "ordered_apply": ordered_apply, "rafter_hard_state_backend": rafter_hard_state, "source_digest": source_digest(), "implementations": pins,
+        "schema": 1, "pipelined_durability": pipelined_durability, "peer_group_commit": peer_group_commit, "ordered_apply": ordered_apply,
+        "rafter_application_worker": PUBLIC_APPLICATION_WORKER if ordered_apply else None,
+        "rafter_hard_state_backend": rafter_hard_state, "source_digest": source_digest(), "implementations": pins,
         "cargo_lock_sha256": digest(ROOT / "Cargo.lock"), "rust_tests_passed": True,
         "rustc": capture(["rustc", "-Vv"]), "cargo": capture(["cargo", "-V"]),
         "go": capture(["go", "version"]), "protoc": capture(["protoc", "--version"]),

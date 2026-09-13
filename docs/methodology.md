@@ -60,6 +60,14 @@ shared application journal records apply index and retry identity, synchronizes
 new files/directories, truncates incomplete trailing records on replay, and
 rejects complete records with invalid checksums.
 
+Rafter's ordered mode executes that journal through the exact pinned
+`rafter_runtime::application::ApplicationWorker`; the harness supplies only
+its store adapter, diagnostics, query fencing, and client-result mapping. The
+build receipt names this public worker, and ordered evidence is refused when
+the receipt does not. Retained credits and ready-only batch limits therefore
+exercise the same public mechanism as Rafter's independent package consumer,
+not a benchmark-only durability thread.
+
 The OpenRaft baseline synchronizes each log append before invoking OpenRaft's
 flush callback. The separately named async control stages appended entries so
 they are immediately readable, publishes them through one bounded ordered
