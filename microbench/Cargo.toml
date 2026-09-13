@@ -10,14 +10,14 @@ publish = false
 [workspace]
 
 [dependencies]
-rafter = { git = "https://github.com/zsumz/rafter", rev = "015293f4d06c6cc75cd0c059bff4fa05fa76fdc6" }
-rafter-app = { git = "https://github.com/zsumz/rafter", rev = "015293f4d06c6cc75cd0c059bff4fa05fa76fdc6" }
-rafter-codec = { git = "https://github.com/zsumz/rafter", rev = "015293f4d06c6cc75cd0c059bff4fa05fa76fdc6" }
-rafter-multiraft = { git = "https://github.com/zsumz/rafter", rev = "015293f4d06c6cc75cd0c059bff4fa05fa76fdc6" }
-rafter-runtime = { git = "https://github.com/zsumz/rafter", rev = "015293f4d06c6cc75cd0c059bff4fa05fa76fdc6" }
-rafter-service = { git = "https://github.com/zsumz/rafter", rev = "015293f4d06c6cc75cd0c059bff4fa05fa76fdc6" }
-rafter-storage = { git = "https://github.com/zsumz/rafter", rev = "015293f4d06c6cc75cd0c059bff4fa05fa76fdc6" }
-rafter-transport-tls = { git = "https://github.com/zsumz/rafter", rev = "015293f4d06c6cc75cd0c059bff4fa05fa76fdc6" }
+rafter = { git = "https://github.com/zsumz/rafter", rev = "f16c506ae08dc4186079a4f833dea24b125c3d1c" }
+rafter-app = { git = "https://github.com/zsumz/rafter", rev = "f16c506ae08dc4186079a4f833dea24b125c3d1c" }
+rafter-codec = { git = "https://github.com/zsumz/rafter", rev = "f16c506ae08dc4186079a4f833dea24b125c3d1c" }
+rafter-multiraft = { git = "https://github.com/zsumz/rafter", rev = "f16c506ae08dc4186079a4f833dea24b125c3d1c" }
+rafter-runtime = { git = "https://github.com/zsumz/rafter", rev = "f16c506ae08dc4186079a4f833dea24b125c3d1c" }
+rafter-service = { git = "https://github.com/zsumz/rafter", rev = "f16c506ae08dc4186079a4f833dea24b125c3d1c" }
+rafter-storage = { git = "https://github.com/zsumz/rafter", rev = "f16c506ae08dc4186079a4f833dea24b125c3d1c" }
+rafter-transport-tls = { git = "https://github.com/zsumz/rafter", rev = "f16c506ae08dc4186079a4f833dea24b125c3d1c" }
 
 # tikv/raft-rs. prost-codec instead of the default protobuf-codec: the
 # protobuf codec's build script rejects modern protoc (>= 21.x) and its
