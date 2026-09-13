@@ -4,9 +4,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from benchctl.evidence import seal
+from benchctl.evidence import digest, seal
 from benchctl.results import (_display_name, _is_feature_coverage_failure,
-                              load_microbench, load_storage_comparison)
+                              load_microbench, load_storage_comparison,
+                              load_wal_reclamation)
 from benchctl.summary import build_summary, render_html, render_markdown
 
 
@@ -126,7 +127,151 @@ def storage_record(arm, backend, batch, throughput, p99):
     }
 
 
+def wal_reclamation_receipt(retained_entries, source="b" * 40):
+    managed_bytes = retained_entries * 98 + 188
+
+    def inventory(generation):
+        return {
+            "file_count": 3,
+            "bytes": managed_bytes,
+            "names": [
+                f"raft-wal-checkpoint-{generation:020d}.rfwc",
+                "raft-wal-current",
+                f"raft-wal-segment-{generation:020d}.rfwb",
+            ],
+        }
+
+    rounds = [{
+        "round": number,
+        "appended_entries": 512,
+        "compacted_through": number * 512,
+        "snapshot_ns": 100,
+        "reclamation_pause_ns": 1_000 + number,
+        "write_latency": {"count": 64, "p50_ns": 10, "p99_ns": 20, "max_ns": 30},
+        "managed_wal": inventory(number),
+    } for number in range(1, 4)]
+    phase_metrics = [{
+        "name": name,
+        "calls": 3,
+        "total_ns": 300 if name == "wal_reclamation" else 100,
+        "max_ns": 100,
+        "buckets": [3],
+    } for name in (
+        "wal_reclamation", "wal_checkpoint_prepare", "wal_manifest_publish", "wal_cleanup"
+    )]
+    return {
+        "schema": 1,
+        "layer": "durable_replication",
+        "comparison_kind": "rafter_component_qualification",
+        "source_sha": source,
+        "completion_boundary": (
+            "durable WAL batch receipt; reclamation pause ends after manifest publication "
+            "and cleanup fence"
+        ),
+        "config": {"retained_entries": retained_entries, "rounds": 3,
+                   "batches_per_round": 64, "batch_size": 8, "payload_bytes": 64},
+        "rounds": rounds,
+        "aggregate": {
+            "write_latency": {"count": 192, "p50_ns": 10, "p99_ns": 20, "max_ns": 30},
+            "reclamation_pause": {"count": 3, "p50_ns": 1_001,
+                                    "p99_ns": 1_003, "max_ns": 1_003},
+            "reopen_ns": 2_000,
+            "managed_wal_bytes": managed_bytes,
+            "managed_wal_files": 3,
+        },
+        "phase_metrics": phase_metrics,
+        "final": {
+            "hard_commit": retained_entries + 1_536,
+            "compacted_through": 1_536,
+            "retained_entries": retained_entries,
+            "next_index": retained_entries + 1_537,
+            "recovery_verified": True,
+            "physical_bound_verified": True,
+            "managed_wal": inventory(3),
+        },
+    }
+
+
+def write_wal_reclamation(root):
+    for retained in (10_000, 100_000):
+        receipt_path = root / f"retained-{retained}.json"
+        receipt = wal_reclamation_receipt(retained)
+        receipt_path.write_text(json.dumps(receipt, sort_keys=True))
+        aggregate = receipt["aggregate"]
+        summary = {
+            "schema": 1,
+            "source_sha": receipt["source_sha"],
+            "retained_entries": retained,
+            "rounds": 3,
+            "managed_wal_bytes": aggregate["managed_wal_bytes"],
+            "reclamation_pause_p99_ns": aggregate["reclamation_pause"]["p99_ns"],
+            "reopen_ns": aggregate["reopen_ns"],
+            "qualified": True,
+            "receipt_sha256": digest(receipt_path),
+        }
+        (root / f"retained-{retained}-summary.json").write_text(json.dumps(summary))
+
+
 class SummaryTests(unittest.TestCase):
+    def test_wal_reclamation_loader_and_report_replay_component_bounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_wal_reclamation(root)
+            loaded = load_wal_reclamation(root)
+            self.assertEqual(loaded["qualification"], "passed")
+            self.assertEqual(len(loaded["records"]), 2)
+            self.assertTrue(all(record["measurement_mode"] == "diagnostic"
+                                for record in loaded["records"]))
+            summary = build_summary(reclamation=loaded)
+            storage = summary["sections"][1]
+            sustained = summary["sections"][3]
+            self.assertEqual(storage["status"], "mixed result")
+            self.assertEqual(storage["wal_reclamation"]["status"], "passed")
+            self.assertEqual(storage["wal_reclamation"]["rows"][1]["managed_wal_bytes"],
+                             9_800_188)
+            self.assertEqual(summary["evidence_status"]["durable_replication"], "passed")
+            self.assertEqual(len(summary["normalized_results"]["durable_replication"]), 2)
+            self.assertEqual(sustained["checks"][0]["passed_cases"], 2)
+            storage_evidence = {
+                "qualification": "passed",
+                "qualification_errors": [],
+                "sync_probes": {},
+                "records": [
+                    storage_record("baseline", "replace", 1, 100.0, 2.0),
+                    storage_record("candidate", "journal", 1, 150.0, 1.0),
+                ],
+            }
+            combined = build_summary(storage=storage_evidence, reclamation=loaded)["sections"][1]
+            self.assertEqual(combined["status"], "measured lead")
+            self.assertEqual(combined["wal_reclamation"]["status"], "passed")
+            for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+                self.assertIn("WAL physical-reclamation component qualification", rendered)
+                self.assertIn("9,800,188 bytes", rendered)
+                self.assertIn("diagnostic only", rendered)
+                self.assertIn("not complete-service traffic", rendered)
+
+    def test_wal_reclamation_loader_fails_closed_on_receipt_or_summary_drift(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_wal_reclamation(root)
+            summary_path = root / "retained-10000-summary.json"
+            recorded = json.loads(summary_path.read_text())
+            recorded["managed_wal_bytes"] += 1
+            summary_path.write_text(json.dumps(recorded))
+            loaded = load_wal_reclamation(root)
+            self.assertEqual(loaded["qualification"], "failed")
+            self.assertTrue(any("summary disagrees" in error
+                                for error in loaded["qualification_errors"]))
+            section = build_summary(reclamation=loaded)["sections"][1]
+            self.assertEqual(section["wal_reclamation"]["status"], "failed")
+            self.assertFalse(section["wal_reclamation"]["rows"])
+
+            summary_path.unlink()
+            loaded = load_wal_reclamation(root)
+            self.assertEqual(loaded["qualification"], "failed")
+            self.assertTrue(any("file set changed" in error
+                                for error in loaded["qualification_errors"]))
+
     def test_qualified_in_memory_evidence_publishes_one_fair_leaderboard(self):
         micro = {"qualification": "passed", "records": [
             memory_record("rafter", 120, 1.0),

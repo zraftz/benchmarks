@@ -10,7 +10,8 @@ from typing import Iterable
 
 from .comparisons import NotComparable, compare
 from .evidence import source_digest, write_json
-from .results import aggregate_durable, load_durable_suite, load_microbench, load_storage_comparison
+from .results import (aggregate_durable, load_durable_suite, load_microbench,
+                      load_storage_comparison, load_wal_reclamation)
 
 
 MIN_MEMORY_REPETITIONS = 7
@@ -149,7 +150,7 @@ def _consensus_section(micro: dict | None) -> dict:
     return section
 
 
-def _storage_section(storage: dict | None) -> dict:
+def _storage_section(storage: dict | None, reclamation: dict | None) -> dict:
     section = {
         "id": "durable-replication",
         "title": "Durable replication",
@@ -159,52 +160,109 @@ def _storage_section(storage: dict | None) -> dict:
         "conditions": None,
         "rows": [],
         "sync_probes": {},
+        "wal_reclamation": None,
         "source_cases": [],
-        "not_measured": ["Combined WAL component comparison"],
+        "not_measured": [
+            "equivalent OpenRaft persistence comparison",
+            "WAL reclamation under complete service traffic",
+            "Combined WAL physical-reclamation component qualification",
+        ],
         "comparison_kind": "internal optimization",
     }
-    if storage is None:
+    if storage is None and reclamation is None:
         return section
-    if storage["qualification"] != "passed":
-        section.update(status="mixed result", result="The selected storage evidence failed normalization checks.")
-        section["qualification_errors"] = storage["qualification_errors"]
-        return section
-    by_workload = {}
-    for record in storage["records"]:
-        by_workload.setdefault(record["workload"]["batch_size"], {})[record["configuration"]["arm"]] = record
-    rows = []
-    throughput_changes = []
-    p99_advantages = []
-    source_cases = []
-    for batch_size, pair in sorted(by_workload.items()):
-        baseline, candidate = pair["baseline"], pair["candidate"]
-        throughput = compare(candidate, baseline, "throughput_ops_s", higher_is_better=True)
-        p99 = compare(candidate, baseline, "batch_completion_p99_ms", higher_is_better=False)
-        throughput_changes.append(throughput["advantage_percent"])
-        p99_advantages.append(p99["advantage_percent"])
-        source_cases.extend(candidate["source_cases"] + baseline["source_cases"])
-        rows.append({
-            "batch_size": batch_size,
-            "file_replacement_ops_s": baseline["metrics"]["throughput_ops_s"]["median"],
-            "append_only_journal_ops_s": candidate["metrics"]["throughput_ops_s"]["median"],
-            "throughput_change_percent": throughput["advantage_percent"],
-            "file_replacement_batch_p99_ms": baseline["metrics"]["batch_completion_p99_ms"]["median"],
-            "append_only_journal_batch_p99_ms": candidate["metrics"]["batch_completion_p99_ms"]["median"],
-            "batch_p99_improvement_percent": p99["advantage_percent"],
-            "interpretation": throughput["label"],
-        })
-    section.update(
-        status="measured lead",
-        result=(f"The append-only journal improved throughput {min(throughput_changes):.1f}–"
-                f"{max(throughput_changes):.1f}% over Rafter's file-replacement backend."),
-        conditions=("One identical Rafter binary, 256-byte proposals, three repetitions; "
-                    "batch size is explicit in every row. Selected Rafter revision: "
-                    f"{_brief_version(storage['records'][0]['engine']['version'])}."),
-        rows=rows,
-        sync_probes=storage["sync_probes"],
-        batch_p99_improvement_percent={"min": min(p99_advantages), "max": max(p99_advantages)},
-        source_cases=_source_refs("durable_replication", source_cases),
-    )
+    if storage is not None:
+        if storage["qualification"] != "passed":
+            section.update(
+                status="mixed result",
+                result="The selected storage evidence failed normalization checks.",
+            )
+            section["qualification_errors"] = storage["qualification_errors"]
+        else:
+            by_workload = {}
+            for record in storage["records"]:
+                by_workload.setdefault(record["workload"]["batch_size"], {})[
+                    record["configuration"]["arm"]
+                ] = record
+            rows = []
+            throughput_changes = []
+            p99_advantages = []
+            source_cases = []
+            for batch_size, pair in sorted(by_workload.items()):
+                baseline, candidate = pair["baseline"], pair["candidate"]
+                throughput = compare(candidate, baseline, "throughput_ops_s", higher_is_better=True)
+                p99 = compare(candidate, baseline, "batch_completion_p99_ms", higher_is_better=False)
+                throughput_changes.append(throughput["advantage_percent"])
+                p99_advantages.append(p99["advantage_percent"])
+                source_cases.extend(candidate["source_cases"] + baseline["source_cases"])
+                rows.append({
+                    "batch_size": batch_size,
+                    "file_replacement_ops_s": baseline["metrics"]["throughput_ops_s"]["median"],
+                    "append_only_journal_ops_s": candidate["metrics"]["throughput_ops_s"]["median"],
+                    "throughput_change_percent": throughput["advantage_percent"],
+                    "file_replacement_batch_p99_ms": baseline["metrics"]["batch_completion_p99_ms"]["median"],
+                    "append_only_journal_batch_p99_ms": candidate["metrics"]["batch_completion_p99_ms"]["median"],
+                    "batch_p99_improvement_percent": p99["advantage_percent"],
+                    "interpretation": throughput["label"],
+                })
+            section.update(
+                status="measured lead",
+                result=(f"The append-only journal improved throughput {min(throughput_changes):.1f}–"
+                        f"{max(throughput_changes):.1f}% over Rafter's file-replacement backend."),
+                conditions=("One identical Rafter binary, 256-byte proposals, three repetitions; "
+                            "batch size is explicit in every row. Selected Rafter revision: "
+                            f"{_brief_version(storage['records'][0]['engine']['version'])}."),
+                rows=rows,
+                sync_probes=storage["sync_probes"],
+                batch_p99_improvement_percent={"min": min(p99_advantages),
+                                               "max": max(p99_advantages)},
+                source_cases=_source_refs("durable_replication", source_cases),
+            )
+    if reclamation is not None:
+        if reclamation["qualification"] == "passed":
+            records = sorted(reclamation["records"],
+                             key=lambda record: record["configuration"]["retained_entries"])
+            section["wal_reclamation"] = {
+                "status": "passed",
+                "source_revision": _brief_version(records[0]["engine"]["version"]),
+                "rows": [{
+                    "retained_entries": record["configuration"]["retained_entries"],
+                    "managed_wal_bytes": record["metrics"]["managed_wal_bytes"],
+                    "managed_wal_files": record["metrics"]["managed_wal_files"],
+                    "reclamation_pause_p99_ms": record["metrics"]["reclamation_pause_p99_ms"],
+                    "reopen_ms": record["metrics"]["reopen_ms"],
+                    "recovery_verified": record["verification"]["recovery_verified"],
+                    "physical_bound_verified": record["verification"]["physical_bound_verified"],
+                } for record in records],
+                "conditions": (
+                    "Three repeated component cycles at each retained suffix. Physical bounds and "
+                    "exact reopen are qualified; hosted-runner pause and reopen times are diagnostic only."
+                ),
+            }
+            section["not_measured"].remove(
+                "Combined WAL physical-reclamation component qualification"
+            )
+            section["source_cases"] += _source_refs(
+                "wal_reclamation",
+                [case for record in records for case in record["source_cases"]],
+            )
+            if storage is None:
+                section.update(
+                    status="mixed result",
+                    result=("Combined WAL physical reclamation passed its 10k/100k retained-suffix "
+                            "component qualification; comparative persistence performance was not selected."),
+                    conditions=("Selected Rafter revision: "
+                                f"{_brief_version(records[0]['engine']['version'])}."),
+                )
+        else:
+            section["status"] = "mixed result"
+            section["wal_reclamation"] = {
+                "status": "failed",
+                "qualification_errors": reclamation["qualification_errors"],
+                "rows": [],
+            }
+            if storage is None:
+                section["result"] = "The selected WAL reclamation evidence failed normalization checks."
     return section
 
 
@@ -675,7 +733,8 @@ def _history_anomalies(histories: list[dict]) -> list[dict]:
     return anomalies
 
 
-def _failure_section(durable: dict | None, anomalies: list[dict]) -> dict:
+def _failure_section(durable: dict | None, anomalies: list[dict],
+                     reclamation: dict | None) -> dict:
     section = {
         "id": "failure-and-sustained-operation",
         "title": "Failure and sustained operation",
@@ -686,33 +745,68 @@ def _failure_section(durable: dict | None, anomalies: list[dict]) -> dict:
         "history": anomalies,
         "not_measured": ["comparative leader-loss performance", "comparative slow-follower performance",
                          "storage-stall recovery performance",
-                         "snapshot/compaction and WAL-reclamation soak performance"],
+                         "complete-service snapshot/compaction and WAL-reclamation soak performance"],
         "source_cases": [],
     }
-    if durable is None:
+    if durable is None and reclamation is None:
         return section
-    recovered = [case for case in durable["cases"] if (case.get("recovery") or {}).get("status") == "passed"]
-    histories = [case for case in durable["cases"] if (case.get("history_check") or {}).get("status") == "passed"]
-    smokes = [{"scenario": smoke["scenario"], "status": smoke["status"]} for smoke in durable["smokes"]]
-    section.update(
-        status="mixed result",
-        result="Finite recovery checks passed; comparative fault and sustained-operation performance remain unmeasured.",
-        checks=[
+    checks = []
+    source_cases = [{"evidence": item["evidence"], "case": item["case"]} for item in anomalies]
+    result_parts = []
+    if durable is not None:
+        recovered = [case for case in durable["cases"]
+                     if (case.get("recovery") or {}).get("status") == "passed"]
+        histories = [case for case in durable["cases"]
+                     if (case.get("history_check") or {}).get("status") == "passed"]
+        smokes = [{"scenario": smoke["scenario"], "status": smoke["status"]}
+                  for smoke in durable["smokes"]]
+        checks += [
             {"name": "restart and acknowledged-canary checks", "passed_cases": len(recovered),
              "scope": "finite histories and canaries, not every measured write or power loss"},
             {"name": "linearizable qualification histories", "passed_cases": len(histories),
              "scope": "64-operation per-case qualification histories"},
             {"name": "Rafter recovery smoke", "scenarios": smokes,
              "scope": "smoke correctness only; not comparative performance"},
-        ],
-        source_cases=(_source_refs("durable_service", [case["source_case"] for case in durable["cases"]])
-                      + [{"evidence": item["evidence"], "case": item["case"]} for item in anomalies]),
+        ]
+        source_cases = (_source_refs("durable_service",
+                                    [case["source_case"] for case in durable["cases"]])
+                        + source_cases)
+        result_parts.append("Finite recovery checks passed")
+    if reclamation is not None:
+        if reclamation["qualification"] == "passed":
+            checks.append({
+                "name": "WAL physical-reclamation component",
+                "passed_cases": len(reclamation["records"]),
+                "scope": (
+                    "10k and 100k retained suffixes across repeated writes, snapshots, compaction, "
+                    "physical cleanup, and exact reopen; not complete-service traffic or latency evidence"
+                ),
+            })
+            source_cases += _source_refs(
+                "wal_reclamation",
+                [case for record in reclamation["records"] for case in record["source_cases"]],
+            )
+            result_parts.append("WAL physical-reclamation component checks passed")
+        else:
+            checks.append({
+                "name": "WAL physical-reclamation component",
+                "passed_cases": 0,
+                "scope": "normalization failed: " + "; ".join(reclamation["qualification_errors"]),
+            })
+            result_parts.append("WAL physical-reclamation evidence failed normalization")
+    section.update(
+        status="mixed result",
+        result=("; ".join(result_parts)
+                + "; comparative fault and sustained-operation performance remain unmeasured."),
+        checks=checks,
+        source_cases=source_cases,
     )
     return section
 
 
 def build_summary(*, durable: dict | None = None, storage: dict | None = None,
-                  micro: dict | None = None, histories: list[dict] | None = None,
+                  reclamation: dict | None = None, micro: dict | None = None,
+                  histories: list[dict] | None = None,
                   headline_variant: str | None = None,
                   headline_control_variant: str | None = None) -> dict:
     histories = histories or []
@@ -720,18 +814,27 @@ def build_summary(*, durable: dict | None = None, storage: dict | None = None,
     service = _service_section(durable, headline_variant, headline_control_variant)
     sections = [
         _consensus_section(micro),
-        _storage_section(storage),
+        _storage_section(storage, reclamation),
         service,
-        _failure_section(durable, anomalies),
+        _failure_section(durable, anomalies, reclamation),
     ]
+    durable_replication_inputs = [item for item in (storage, reclamation) if item is not None]
+    durable_replication_records = [
+        record for item in durable_replication_inputs for record in item["records"]
+    ]
+    durable_replication_status = (
+        "not measured" if not durable_replication_inputs else
+        "failed" if any(item["qualification"] != "passed"
+                        for item in durable_replication_inputs) else "passed"
+    )
     normalized_results = {
         "consensus_in_memory": micro["records"] if micro else [],
-        "durable_replication": storage["records"] if storage else [],
+        "durable_replication": durable_replication_records,
         "complete_durable_service": aggregate_durable(durable) if durable else [],
     }
     evidence_status = {
         "consensus_in_memory": micro["qualification"] if micro else "not measured",
-        "durable_replication": storage["qualification"] if storage else "not measured",
+        "durable_replication": durable_replication_status,
         "complete_durable_service": durable["qualification"] if durable else "not measured",
     }
     return {
@@ -826,20 +929,37 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                              f"{_fmt_ops(row['openraft_ops_s'])}/s | {_fmt_us(row['rafter_p99_us'])} | "
                              f"{_fmt_us(row['raft_rs_p99_us'])} | {_fmt_us(row['openraft_p99_us'])} |")
             lines.append("")
-        elif section_id == "durable-replication" and section["rows"]:
-            lines += ["| Batch | File replacement | Append-only journal | Throughput change | Replacement p99 | Journal p99 |",
-                      "| ---: | ---: | ---: | ---: | ---: | ---: |"]
-            for row in section["rows"]:
-                lines.append(f"| {row['batch_size']} | {_fmt_ops(row['file_replacement_ops_s'])}/s | "
-                             f"{_fmt_ops(row['append_only_journal_ops_s'])}/s | +{row['throughput_change_percent']:.1f}% | "
-                             f"{_fmt_ms(row['file_replacement_batch_p99_ms'])} | {_fmt_ms(row['append_only_journal_batch_p99_ms'])} |")
-            lines.append("")
-            if section["sync_probes"]:
-                probes = section["sync_probes"]
-                lines += [("Separate hard-state syscall probe: "
-                           f"file replacement {probes['replace']['sync_calls_per_publication']:.1f}, "
-                           f"journal {probes['journal']['sync_calls_per_publication']:.1f} sync calls/publication. "
-                           "This is not synchronization calls per committed entry."), ""]
+        elif section_id == "durable-replication":
+            if section["rows"]:
+                lines += ["| Batch | File replacement | Append-only journal | Throughput change | Replacement p99 | Journal p99 |",
+                          "| ---: | ---: | ---: | ---: | ---: | ---: |"]
+                for row in section["rows"]:
+                    lines.append(f"| {row['batch_size']} | {_fmt_ops(row['file_replacement_ops_s'])}/s | "
+                                 f"{_fmt_ops(row['append_only_journal_ops_s'])}/s | +{row['throughput_change_percent']:.1f}% | "
+                                 f"{_fmt_ms(row['file_replacement_batch_p99_ms'])} | {_fmt_ms(row['append_only_journal_batch_p99_ms'])} |")
+                lines.append("")
+                if section["sync_probes"]:
+                    probes = section["sync_probes"]
+                    lines += [("Separate hard-state syscall probe: "
+                               f"file replacement {probes['replace']['sync_calls_per_publication']:.1f}, "
+                               f"journal {probes['journal']['sync_calls_per_publication']:.1f} sync calls/publication. "
+                               "This is not synchronization calls per committed entry."), ""]
+            reclamation = section["wal_reclamation"]
+            if reclamation and reclamation["status"] == "passed":
+                lines += ["WAL physical-reclamation component qualification:", "",
+                          "| Retained suffix | Managed WAL | Files | Exact recovery | Diagnostic pause p99 | Diagnostic reopen |",
+                          "| ---: | ---: | ---: | :---: | ---: | ---: |"]
+                for row in reclamation["rows"]:
+                    lines.append(
+                        f"| {row['retained_entries']:,} entries | {row['managed_wal_bytes']:,} bytes | "
+                        f"{row['managed_wal_files']} | "
+                        f"{'passed' if row['recovery_verified'] and row['physical_bound_verified'] else 'failed'} | "
+                        f"{_fmt_ms(row['reclamation_pause_p99_ms'])} | {_fmt_ms(row['reopen_ms'])} |"
+                    )
+                lines += ["", reclamation["conditions"], ""]
+            elif reclamation:
+                lines += ["WAL reclamation evidence failed normalization: "
+                          + "; ".join(reclamation["qualification_errors"]), ""]
         elif section_id == "complete-durable-service" and section["rows"]:
             lines += ["| Added loopback egress | Rafter throughput | OpenRaft throughput | Advantage |",
                       "| ---: | ---: | ---: | ---: |"]
@@ -978,21 +1098,41 @@ def render_html(summary: dict, evidence: dict) -> str:
             content.append("<div class='table'><table><thead><tr><th>Workload</th><th>In flight</th>"
                            "<th>Rafter</th><th>raft-rs</th><th>OpenRaft</th><th>Rafter p99</th>"
                            f"<th>raft-rs p99</th><th>OpenRaft p99</th></tr></thead><tbody>{body}</tbody></table></div>")
-        elif section_id == "durable-replication" and section["rows"]:
-            body = "".join(
-                f"<tr><td>{row['batch_size']}</td><td>{_fmt_ops(row['file_replacement_ops_s'])}/s</td>"
-                f"<td>{_fmt_ops(row['append_only_journal_ops_s'])}/s</td><td>+{row['throughput_change_percent']:.1f}%</td>"
-                f"<td>{_fmt_ms(row['file_replacement_batch_p99_ms'])}</td>"
-                f"<td>{_fmt_ms(row['append_only_journal_batch_p99_ms'])}</td></tr>" for row in section["rows"])
-            content.append("<div class='table'><table><thead><tr><th>Batch</th><th>File replacement</th>"
-                           "<th>Append-only journal</th><th>Throughput change</th><th>Replacement p99</th><th>Journal p99</th>"
-                           f"</tr></thead><tbody>{body}</tbody></table></div>")
-            if section["sync_probes"]:
-                probes = section["sync_probes"]
-                content.append("<p>Separate hard-state syscall probe: "
-                               f"file replacement {probes['replace']['sync_calls_per_publication']:.1f}, "
-                               f"journal {probes['journal']['sync_calls_per_publication']:.1f} sync calls/publication. "
-                               "This is not synchronization calls per committed entry.</p>")
+        elif section_id == "durable-replication":
+            if section["rows"]:
+                body = "".join(
+                    f"<tr><td>{row['batch_size']}</td><td>{_fmt_ops(row['file_replacement_ops_s'])}/s</td>"
+                    f"<td>{_fmt_ops(row['append_only_journal_ops_s'])}/s</td><td>+{row['throughput_change_percent']:.1f}%</td>"
+                    f"<td>{_fmt_ms(row['file_replacement_batch_p99_ms'])}</td>"
+                    f"<td>{_fmt_ms(row['append_only_journal_batch_p99_ms'])}</td></tr>" for row in section["rows"])
+                content.append("<div class='table'><table><thead><tr><th>Batch</th><th>File replacement</th>"
+                               "<th>Append-only journal</th><th>Throughput change</th><th>Replacement p99</th><th>Journal p99</th>"
+                               f"</tr></thead><tbody>{body}</tbody></table></div>")
+                if section["sync_probes"]:
+                    probes = section["sync_probes"]
+                    content.append("<p>Separate hard-state syscall probe: "
+                                   f"file replacement {probes['replace']['sync_calls_per_publication']:.1f}, "
+                                   f"journal {probes['journal']['sync_calls_per_publication']:.1f} sync calls/publication. "
+                                   "This is not synchronization calls per committed entry.</p>")
+            reclamation = section["wal_reclamation"]
+            if reclamation and reclamation["status"] == "passed":
+                body = "".join(
+                    f"<tr><td>{row['retained_entries']:,} entries</td>"
+                    f"<td>{row['managed_wal_bytes']:,} bytes</td><td>{row['managed_wal_files']}</td>"
+                    f"<td>{'passed' if row['recovery_verified'] and row['physical_bound_verified'] else 'failed'}</td>"
+                    f"<td>{_fmt_ms(row['reclamation_pause_p99_ms'])}</td>"
+                    f"<td>{_fmt_ms(row['reopen_ms'])}</td></tr>"
+                    for row in reclamation["rows"]
+                )
+                content.append("<p><strong>WAL physical-reclamation component qualification</strong></p>"
+                               "<div class='table'><table><thead><tr><th>Retained suffix</th>"
+                               "<th>Managed WAL</th><th>Files</th><th>Exact recovery</th>"
+                               "<th>Diagnostic pause p99</th><th>Diagnostic reopen</th>"
+                               f"</tr></thead><tbody>{body}</tbody></table></div>"
+                               f"<p>{html.escape(reclamation['conditions'])}</p>")
+            elif reclamation:
+                content.append("<p>WAL reclamation evidence failed normalization: "
+                               + html.escape("; ".join(reclamation["qualification_errors"])) + "</p>")
         elif section_id == "complete-durable-service" and section["rows"]:
             throughput_body = "".join(
                 f"<tr><td>{row['network_delay_ms']} ms</td><td><strong>{_fmt_ops(row['rafter_throughput_ops_s'])}/s</strong></td>"
@@ -1132,10 +1272,12 @@ def _evidence_entry(label: str, path: Path, destination: Path, url: str | None) 
 
 
 def generate(*, destination: Path, durable_path: Path | None = None,
-             storage_path: Path | None = None, micro_path: Path | None = None,
+             storage_path: Path | None = None, reclamation_path: Path | None = None,
+             micro_path: Path | None = None,
              history_paths: list[Path] | None = None, headline_variant: str | None = None,
              headline_control_variant: str | None = None,
              durable_url: str | None = None, storage_url: str | None = None,
+             reclamation_url: str | None = None,
              micro_url: str | None = None, history_urls: list[str] | None = None) -> dict:
     history_paths = history_paths or []
     history_urls = history_urls or []
@@ -1143,9 +1285,10 @@ def generate(*, destination: Path, durable_path: Path | None = None,
         raise ValueError("provide one --history-url for every --history-suite")
     durable = load_durable_suite(durable_path) if durable_path else None
     storage = load_storage_comparison(storage_path) if storage_path else None
+    reclamation = load_wal_reclamation(reclamation_path) if reclamation_path else None
     micro = load_microbench(micro_path) if micro_path else None
     histories = [load_durable_suite(path) for path in history_paths]
-    summary = build_summary(durable=durable, storage=storage, micro=micro,
+    summary = build_summary(durable=durable, storage=storage, reclamation=reclamation, micro=micro,
                             histories=histories, headline_variant=headline_variant,
                             headline_control_variant=headline_control_variant)
     destination = destination.resolve()
@@ -1155,6 +1298,10 @@ def generate(*, destination: Path, durable_path: Path | None = None,
         evidence["durable_service"] = _evidence_entry("Detailed service results", durable_path.resolve(), destination, durable_url)
     if storage_path:
         evidence["durable_replication"] = _evidence_entry("Storage evidence", storage_path.resolve(), destination, storage_url)
+    if reclamation_path:
+        evidence["wal_reclamation"] = _evidence_entry(
+            "WAL reclamation evidence", reclamation_path.resolve(), destination, reclamation_url
+        )
     if micro_path:
         evidence["consensus_in_memory"] = _evidence_entry("In-memory evidence", micro_path.resolve(), destination, micro_url)
     for index, path in enumerate(history_paths):

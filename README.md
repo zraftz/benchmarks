@@ -1,8 +1,8 @@
 # Raft benchmarks
 
-Current qualified evidence: [one-minute summary](reports/qualified-34678152454/summary.md) ·
-[static HTML](reports/qualified-34678152454/report.html) ·
-[normalized JSON](reports/qualified-34678152454/summary.json)
+Current qualified evidence: [one-minute summary](reports/qualified-34678152454-wal-34741175806/summary.md) ·
+[static HTML](reports/qualified-34678152454-wal-34741175806/report.html) ·
+[normalized JSON](reports/qualified-34678152454-wal-34741175806/summary.json)
 
 Qualified in-memory evidence: [summary](reports/qualified-in-memory-34654362991/summary.md) ·
 [HTML](reports/qualified-in-memory-34654362991/report.html) ·
@@ -113,9 +113,16 @@ Generate or regenerate a layered report from immutable evidence with:
 ./raft-bench summary \
   --durable-suite /path/to/results/paired \
   --storage-suite /path/to/hard-state-evidence \
+  --wal-reclamation-suite /path/to/wal-reclamation-evidence \
   --history-suite /path/to/prior/results/paired \
   --output /path/to/new-report
 ```
+
+The WAL reclamation importer expects the exact 10,000- and 100,000-entry
+component receipts plus their independently hashed summaries. It replays
+physical-file, accounting, phase, and reopen invariants. The report labels
+runner timings as diagnostics and does not promote this component check into
+complete-service or competitor performance evidence.
 
 When a paired suite contains several candidate batch caps, pass
 `--headline-variant candidate-b32` (or another explicit variant). The report

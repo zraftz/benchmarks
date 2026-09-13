@@ -5,6 +5,7 @@ from collections import defaultdict
 import json
 import math
 from pathlib import Path
+import re
 from statistics import median
 from typing import Any
 
@@ -519,4 +520,281 @@ def load_storage_comparison(directory: Path) -> dict:
         "qualification_errors": reasons,
         "records": records,
         "sync_probes": probes,
+    }
+
+
+_WAL_RECLAMATION_RETAINED = (10_000, 100_000)
+_WAL_RECLAMATION_PHASES = {
+    "wal_reclamation",
+    "wal_checkpoint_prepare",
+    "wal_manifest_publish",
+    "wal_cleanup",
+}
+_WAL_RECLAMATION_GENERATION = re.compile(
+    r"^raft-wal-(checkpoint|segment)-(\d{20})\.(rfwc|rfwb)$"
+)
+
+
+def _require_wal(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def _check_wal_latency(value: dict, expected_count: int, name: str) -> None:
+    _require_wal(
+        isinstance(value, dict) and set(value) == {"count", "p50_ns", "p99_ns", "max_ns"},
+        f"{name} latency shape changed",
+    )
+    _require_wal(value["count"] == expected_count, f"{name} latency count disagrees")
+    _require_wal(
+        0 <= value["p50_ns"] <= value["p99_ns"] <= value["max_ns"],
+        f"{name} latency ordering disagrees",
+    )
+
+
+def _check_wal_inventory(value: dict, generation: int, expected_bytes: int, name: str) -> None:
+    _require_wal(
+        isinstance(value, dict) and set(value) == {"file_count", "bytes", "names"},
+        f"{name} inventory shape changed",
+    )
+    _require_wal(
+        value["file_count"] == 3 and len(value["names"]) == 3,
+        f"{name} did not retain exactly three managed WAL files",
+    )
+    _require_wal(value["bytes"] == expected_bytes and expected_bytes > 0,
+                 f"{name} managed WAL bytes disagree")
+    _require_wal(value["names"] == sorted(value["names"]), f"{name} names are not sorted")
+    _require_wal(value["names"].count("raft-wal-current") == 1,
+                 f"{name} has no unique authoritative manifest")
+    generations = []
+    kinds = []
+    for filename in value["names"]:
+        if filename == "raft-wal-current":
+            continue
+        match = _WAL_RECLAMATION_GENERATION.fullmatch(filename)
+        _require_wal(match is not None, f"{name} has an unexpected managed filename")
+        kinds.append(match.group(1))
+        generations.append(int(match.group(2)))
+    _require_wal(sorted(kinds) == ["checkpoint", "segment"],
+                 f"{name} does not contain one checkpoint and one segment")
+    _require_wal(generations == [generation, generation],
+                 f"{name} files do not select generation {generation}")
+
+
+def _normalize_wal_reclamation_receipt(raw: dict, retained_entries: int,
+                                       source_cases: list[str]) -> tuple[dict, dict]:
+    _require_wal(set(raw) == {
+        "schema", "layer", "comparison_kind", "source_sha", "completion_boundary",
+        "config", "rounds", "aggregate", "phase_metrics", "final",
+    }, "top-level receipt shape changed")
+    _require_wal(raw["schema"] == 1, "unsupported reclamation receipt schema")
+    _require_wal(raw["layer"] == "durable_replication", "wrong evidence layer")
+    _require_wal(raw["comparison_kind"] == "rafter_component_qualification",
+                 "reclamation evidence was mislabeled as a competitor comparison")
+    _require_wal(re.fullmatch(r"[0-9a-f]{40}", raw["source_sha"]) is not None,
+                 "source identity is not a lowercase full SHA")
+    config = raw["config"]
+    expected_config = {
+        "retained_entries": retained_entries,
+        "rounds": 3,
+        "batches_per_round": 64,
+        "batch_size": 8,
+        "payload_bytes": 64,
+    }
+    _require_wal(config == expected_config, "reclamation qualification configuration changed")
+    rounds = raw["rounds"]
+    _require_wal(isinstance(rounds, list) and len(rounds) == config["rounds"],
+                 "round count disagrees")
+    expected_appended = config["batches_per_round"] * config["batch_size"]
+    aggregate = raw["aggregate"]
+    _require_wal(set(aggregate) == {
+        "write_latency", "reclamation_pause", "reopen_ns", "managed_wal_bytes",
+        "managed_wal_files",
+    }, "aggregate shape changed")
+    expected_bytes = aggregate["managed_wal_bytes"]
+    pauses = []
+    for number, value in enumerate(rounds, 1):
+        _require_wal(set(value) == {
+            "round", "appended_entries", "compacted_through", "snapshot_ns",
+            "reclamation_pause_ns", "write_latency", "managed_wal",
+        }, f"round {number} shape changed")
+        _require_wal(value["round"] == number, f"round {number} sequence disagrees")
+        _require_wal(value["appended_entries"] == expected_appended,
+                     f"round {number} append accounting disagrees")
+        _require_wal(value["compacted_through"] == number * expected_appended,
+                     f"round {number} compaction boundary disagrees")
+        _require_wal(value["snapshot_ns"] > 0 and value["reclamation_pause_ns"] > 0,
+                     f"round {number} timing is absent")
+        _check_wal_latency(value["write_latency"], config["batches_per_round"],
+                           f"round {number} writes")
+        _check_wal_inventory(value["managed_wal"], number, expected_bytes, f"round {number}")
+        pauses.append(value["reclamation_pause_ns"])
+    _check_wal_latency(
+        aggregate["write_latency"],
+        config["rounds"] * config["batches_per_round"],
+        "aggregate writes",
+    )
+    _check_wal_latency(aggregate["reclamation_pause"], config["rounds"],
+                       "aggregate reclamation")
+    _require_wal(aggregate["reopen_ns"] > 0, "reopen timing is absent")
+    _require_wal(aggregate["managed_wal_files"] == 3 and expected_bytes > 0,
+                 "aggregate physical WAL bound disagrees")
+
+    metrics = raw["phase_metrics"]
+    _require_wal(
+        isinstance(metrics, list) and len(metrics) == 4
+        and {metric.get("name") for metric in metrics} == _WAL_RECLAMATION_PHASES,
+        "reclamation phase inventory disagrees",
+    )
+    by_name = {}
+    for metric in metrics:
+        _require_wal(set(metric) == {"name", "calls", "total_ns", "max_ns", "buckets"},
+                     "phase metric shape changed")
+        _require_wal(metric["calls"] == config["rounds"],
+                     f"{metric['name']} call count disagrees")
+        _require_wal(0 < metric["max_ns"] <= metric["total_ns"],
+                     f"{metric['name']} timing is incoherent")
+        _require_wal(sum(metric["buckets"]) == metric["calls"],
+                     f"{metric['name']} histogram accounting disagrees")
+        by_name[metric["name"]] = metric
+    overall = by_name["wal_reclamation"]["total_ns"]
+    _require_wal(
+        sum(by_name[name]["total_ns"] for name in
+            _WAL_RECLAMATION_PHASES - {"wal_reclamation"}) <= overall,
+        "nested reclamation phases exceed the overall timer",
+    )
+    _require_wal(overall <= sum(pauses),
+                 "reclamation telemetry exceeds synchronous pauses")
+
+    final = raw["final"]
+    _require_wal(set(final) == {
+        "hard_commit", "compacted_through", "retained_entries", "next_index",
+        "recovery_verified", "physical_bound_verified", "managed_wal",
+    }, "final verification shape changed")
+    expected_total = retained_entries + config["rounds"] * expected_appended
+    _require_wal(final["hard_commit"] == expected_total
+                 and final["next_index"] == expected_total + 1,
+                 "final hard state or log boundary disagrees")
+    _require_wal(final["compacted_through"] == config["rounds"] * expected_appended,
+                 "final compaction boundary disagrees")
+    _require_wal(final["retained_entries"] == retained_entries,
+                 "final retained suffix length disagrees")
+    _require_wal(final["recovery_verified"] is True
+                 and final["physical_bound_verified"] is True,
+                 "final recovery or physical bound was not verified")
+    _check_wal_inventory(final["managed_wal"], config["rounds"], expected_bytes, "reopen")
+
+    derived_summary = {
+        "schema": 1,
+        "source_sha": raw["source_sha"],
+        "retained_entries": retained_entries,
+        "rounds": config["rounds"],
+        "managed_wal_bytes": expected_bytes,
+        "reclamation_pause_p99_ns": aggregate["reclamation_pause"]["p99_ns"],
+        "reopen_ns": aggregate["reopen_ns"],
+        "qualified": True,
+    }
+    record = {
+        "layer": "durable_replication",
+        "comparison_kind": "rafter_component_qualification",
+        "engine": {"name": "rafter", "version": raw["source_sha"]},
+        "display_name": "Combined WAL physical reclamation",
+        "configuration": dict(config),
+        "workload": {
+            "kind": "repeated_write_snapshot_compaction_reopen",
+            "appended_entries_per_round": expected_appended,
+        },
+        "completion_boundary": raw["completion_boundary"],
+        "environment": {
+            "qualification": "not recorded by component receipt",
+            "timings_publishable": False,
+        },
+        "measurement_mode": "diagnostic",
+        "metric_definitions": {
+            "managed_wal_bytes": "bytes in the authoritative manifest, checkpoint, and segment",
+            "reclamation_pause_p99_ms": "diagnostic p99 across three synchronous component cycles",
+            "reopen_ms": "diagnostic exact-suffix reopen duration",
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "metrics": {
+            "managed_wal_bytes": expected_bytes,
+            "managed_wal_files": aggregate["managed_wal_files"],
+            "reclamation_pause_p99_ms": aggregate["reclamation_pause"]["p99_ns"] / 1_000_000,
+            "reopen_ms": aggregate["reopen_ns"] / 1_000_000,
+        },
+        "verification": {
+            "recovery_verified": True,
+            "physical_bound_verified": True,
+            "final_hard_commit": final["hard_commit"],
+            "final_compacted_through": final["compacted_through"],
+            "final_next_index": final["next_index"],
+        },
+        "source_cases": source_cases,
+    }
+    return record, derived_summary
+
+
+def load_wal_reclamation(directory: Path) -> dict:
+    """Replay the exact 10k/100k component receipts without publishing runner timing."""
+    original = directory.absolute()
+    reasons = []
+    if original.is_symlink() or not original.is_dir():
+        return {
+            "kind": "wal_reclamation",
+            "directory": str(original),
+            "qualification": "failed",
+            "qualification_errors": ["WAL reclamation evidence is not a plain directory"],
+            "records": [],
+        }
+    directory = original.resolve()
+    expected_names = {
+        f"retained-{retained}{suffix}"
+        for retained in _WAL_RECLAMATION_RETAINED
+        for suffix in (".json", "-summary.json")
+    }
+    entries = list(directory.iterdir())
+    if any(path.is_symlink() for path in entries):
+        reasons.append("symlink in WAL reclamation evidence")
+    actual_names = {path.name for path in entries}
+    if actual_names != expected_names:
+        reasons.append("WAL reclamation evidence file set changed from the exact 10k/100k receipts")
+
+    records = []
+    source_shas = set()
+    for retained in _WAL_RECLAMATION_RETAINED:
+        receipt_path = directory / f"retained-{retained}.json"
+        summary_path = directory / f"retained-{retained}-summary.json"
+        if not receipt_path.is_file() or not summary_path.is_file():
+            continue
+        try:
+            raw = _read(receipt_path)
+            record, expected_summary = _normalize_wal_reclamation_receipt(
+                raw,
+                retained,
+                [receipt_path.name, summary_path.name],
+            )
+            expected_summary["receipt_sha256"] = digest(receipt_path)
+            recorded_summary = _read(summary_path)
+            _require_wal(recorded_summary == expected_summary,
+                         f"retained-{retained} verifier summary disagrees")
+            records.append(record)
+            source_shas.add(record["engine"]["version"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            reasons.append(f"retained-{retained}: {error}")
+    if len(source_shas) > 1:
+        reasons.append("WAL reclamation receipts use different Rafter revisions")
+    if len(records) != len(_WAL_RECLAMATION_RETAINED):
+        reasons.append("WAL reclamation evidence did not normalize both retained-suffix shapes")
+    if reasons:
+        for record in records:
+            record["qualification"] = "failed"
+            record["qualification_errors"] = reasons
+    return {
+        "kind": "wal_reclamation",
+        "directory": str(directory),
+        "qualification": "failed" if reasons else "passed",
+        "qualification_errors": reasons,
+        "source_sha": next(iter(source_shas)) if len(source_shas) == 1 else None,
+        "records": records,
     }
