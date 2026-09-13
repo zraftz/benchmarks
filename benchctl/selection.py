@@ -47,6 +47,15 @@ def rewrite_manifest(content: str, sha: str) -> str:
     return "".join(lines)
 
 
+def rewrite_lock_sources(content: str, before: str, after: str) -> str:
+    previous = f"git+{REPOSITORY}?rev={before}#{before}"
+    selected = f"git+{REPOSITORY}?rev={after}#{after}"
+    updated, count = content.replace(previous, selected), content.count(previous)
+    if count == 0:
+        raise ValueError("lockfile has no Rafter source at the selected prior revision")
+    return updated
+
+
 def check_resolution(root: Path, sha: str) -> None:
     for name in MANIFESTS:
         manifest = tomllib.loads((root / name).read_text())
@@ -71,6 +80,10 @@ def check_resolution(root: Path, sha: str) -> None:
 
 def select_rafter(ref: str) -> dict:
     sha = resolve_ref(ref, ROOT / ".cache/rafter-refs.git")
+    pins = json.loads((ROOT / "implementations.lock.json").read_text())
+    previous_sha = pins["rafter"]["rev"]
+    if not re.fullmatch(r"[0-9a-f]{40}", previous_sha):
+        raise ValueError("existing Rafter selection is not a full commit SHA")
     # Resolve in a disposable copy. A bad ref/API/dependency cannot leave half
     # the checkout on one Rafter revision and half on another.
     with tempfile.TemporaryDirectory(prefix="rafter-selection-", dir=ROOT / ".cache") as tmp:
@@ -83,11 +96,47 @@ def select_rafter(ref: str) -> dict:
         for name in MANIFESTS:
             path = staging / name
             path.write_text(rewrite_manifest(path.read_text(), sha))
+        for name in LOCKS:
+            path = staging / name
+            path.write_text(rewrite_lock_sources(path.read_text(), previous_sha, sha))
         for name in ("Cargo.toml", "microbench/Cargo.toml"):
-            subprocess.run(["cargo", "update", "--workspace", "--manifest-path", str(staging / name)],
-                           cwd=staging, check=True)
+            manifest = str(staging / name)
+            try:
+                # Most performance revisions do not change dependency
+                # manifests. Preserve every unrelated lock edge when Cargo can
+                # validate the exact new Git source against the old graph.
+                subprocess.run(
+                    [
+                        "cargo",
+                        "metadata",
+                        "--locked",
+                        "--format-version",
+                        "1",
+                        "--manifest-path",
+                        manifest,
+                    ],
+                    cwd=staging,
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError:
+                # A real Rafter manifest/API dependency change needs Cargo to
+                # update that package and its dependency closure.
+                subprocess.run(
+                    [
+                        "cargo",
+                        "update",
+                        "-p",
+                        "rafter",
+                        "--precise",
+                        sha,
+                        "--manifest-path",
+                        manifest,
+                    ],
+                    cwd=staging,
+                    check=True,
+                )
         check_resolution(staging, sha)
-        pins = json.loads((ROOT / "implementations.lock.json").read_text())
         pins["rafter"] = {"git": REPOSITORY, "rev": sha, "requested_ref": ref}
         # Invalidate receipts before publishing any source/lock changes.
         for receipt in ("dist/build.json", "dist/microbench/build.json"):

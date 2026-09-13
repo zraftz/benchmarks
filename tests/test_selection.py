@@ -5,7 +5,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from benchctl.selection import LOCKS, MANIFESTS, REPOSITORY, check_resolution, resolve_ref, select_rafter
+from benchctl.selection import (
+    LOCKS,
+    MANIFESTS,
+    REPOSITORY,
+    check_resolution,
+    resolve_ref,
+    rewrite_lock_sources,
+    select_rafter,
+)
 
 OLD, NEW = "a" * 40, "b" * 40
 
@@ -55,19 +63,52 @@ class SelectionTests(unittest.TestCase):
     def test_selection_updates_both_locks_and_invalidates_receipts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); fixture(root)
-            def update(command, **kwargs):
-                manifest = Path(command[-1])
-                lock = manifest.with_name("Cargo.lock")
-                lock.write_text(lock.read_text().replace(OLD, NEW))
+            commands = []
+            def update(command, **_kwargs):
+                commands.append(command)
             with patch("benchctl.selection.ROOT", root), patch("benchctl.selection.resolve_ref", return_value=NEW) as resolve, \
                  patch("benchctl.selection.subprocess.run", side_effect=update):
                 selected = select_rafter("perf/test")
             resolve.assert_called_once()
             self.assertEqual(selected["rev"], NEW)
             self.assertEqual(selected["requested_ref"], "perf/test")
+            self.assertEqual(len(commands), 2)
+            for command in commands:
+                self.assertEqual(command[1:5], ["metadata", "--locked", "--format-version", "1"])
+                self.assertNotIn("--workspace", command)
             check_resolution(root, NEW)
             self.assertFalse((root / "dist/build.json").exists())
             self.assertFalse((root / "dist/microbench/build.json").exists())
+
+    def test_changed_dependency_graph_uses_targeted_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); fixture(root)
+            commands = []
+
+            def update(command, **_kwargs):
+                commands.append(command)
+                if command[1] == "metadata":
+                    raise subprocess.CalledProcessError(101, command)
+
+            with patch("benchctl.selection.ROOT", root), \
+                 patch("benchctl.selection.resolve_ref", return_value=NEW), \
+                 patch("benchctl.selection.subprocess.run", side_effect=update):
+                select_rafter("perf/test")
+            self.assertEqual([command[1] for command in commands],
+                             ["metadata", "update", "metadata", "update"])
+            for command in commands[1::2]:
+                self.assertEqual(command[1:6], ["update", "-p", "rafter", "--precise", NEW])
+                self.assertNotIn("--workspace", command)
+
+    def test_lock_rewrite_changes_only_exact_rafter_sources(self):
+        content = (
+            f'source="git+{REPOSITORY}?rev={OLD}#{OLD}"\n'
+            f'checksum="{OLD}"\n'
+        )
+        self.assertEqual(
+            rewrite_lock_sources(content, OLD, NEW),
+            f'source="git+{REPOSITORY}?rev={NEW}#{NEW}"\nchecksum="{OLD}"\n',
+        )
 
     def test_failed_resolution_keeps_checkout_and_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
