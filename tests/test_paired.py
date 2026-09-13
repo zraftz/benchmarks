@@ -21,6 +21,19 @@ class PairedTests(unittest.TestCase):
         ).read_text()
         self.assertIn('--benchmark-sha "$GITHUB_SHA"', workflow)
 
+    def test_hosted_reclamation_run_is_same_code_and_bound_to_workflow_sha(self):
+        workflow = (
+            Path(__file__).parents[1] / ".github/workflows/baseline.yml"
+        ).read_text()
+        self.assertIn("group: baseline-benchmark", workflow)
+        self.assertIn('--benchmark-sha "$GITHUB_SHA"', workflow)
+        self.assertIn("--suite-kind reclamation-under-load", workflow)
+        self.assertIn("--candidate-snapshot-interval-entries", workflow)
+        self.assertIn('PRIOR_REF="$CANDIDATE_REF"', workflow)
+        self.assertIn("OPENRAFT_CONTROLS=none", workflow)
+        self.assertIn("inputs.suite == 'microbench'", workflow)
+        self.assertNotIn("--qualify-machine", workflow)
+
     def test_build_preparation_restores_selection_after_failure(self):
         args = SimpleNamespace(
             prior="a" * 40,

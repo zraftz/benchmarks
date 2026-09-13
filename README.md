@@ -31,6 +31,21 @@ and/or `results/baseline/report.html`. Raw measurements and source/build identit
 are alongside each report. Shared GitHub runners provide an initial reference;
 rerun all engines together when comparing changes.
 
+The baseline workflow's **reclamation** suite runs the predeclared same-code
+service comparison on the hosted runner. It binds the suite to the workflow SHA
+and one exact Rafter SHA, and retains the report even when an objective fails:
+
+```sh
+gh workflow run baseline.yml --repo zraftz/benchmarks \
+  --ref perf/raft-performance -f suite=reclamation \
+  -f rafter_ref=<exact-40-character-sha>
+```
+
+This hosted path deliberately does not claim the fixed-machine qualification.
+Its per-case pressure receipts remain visible, and performance is observational
+unless the recorded host evidence is suitable. Use `./raft-bench
+reclamation-load` on the fixed machine for the qualified result.
+
 Selected runs also produce `results/summary/`:
 
 | File | Use |

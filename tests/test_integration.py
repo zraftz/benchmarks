@@ -21,7 +21,9 @@ class IntegrationTests(unittest.TestCase):
     def case(self,scenario,rate):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            options=SimpleNamespace(scenario=scenario,smoke=True,batch_size=64,duration=2.4,warmup=.1,
+            # Leave enough measured-load time for both controller transitions even
+            # when leader discovery contends with the load generator on a busy host.
+            options=SimpleNamespace(scenario=scenario,smoke=True,batch_size=64,duration=6.0,warmup=.1,
                 concurrency=4,payload=128,rate=rate,keyspace=32,seed=7,read_percent=20,cas_percent=10,timeout=1.5)
             run_case("test-fixture",root/"case",root/"data",options,
                 command=[sys.executable,str(ROOT/"tests/fake_node.py")],

@@ -558,6 +558,46 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                  "environment_qualification"):
         if name in recorded_verdicts:
             section["verdicts"][name] = recorded_verdicts[name]
+    if durable.get("suite", {}).get("kind") == "reclamation-under-load":
+        assessment = durable.get("reclamation_under_load")
+        section["comparison_kind"] = "internal optimization"
+        section["source_cases"] = _source_refs(
+            "durable_service", [case["source_case"] for case in durable.get("cases", [])]
+        )
+        if not isinstance(assessment, dict) or assessment.get("kind") != "reclamation-under-load":
+            section.update(
+                status="mixed result",
+                result=("The selected reclamation-under-load evidence is missing its replayed "
+                        "assessment; no service or competitor headline was computed."),
+            )
+            section["verdicts"]["service_objective"] = {
+                "status": "failed",
+                "detail": "The reclamation-under-load assessment is missing or invalid.",
+            }
+            return section
+        objective = assessment.get("verdicts", {}).get("service_objective", {})
+        objective_status = objective.get("status", "failed")
+        objective_errors = objective.get("errors", [])
+        section["verdicts"]["service_objective"] = {
+            "status": objective_status,
+            "detail": ("The reclamation-under-load service objective passed."
+                       if objective_status == "passed" else
+                       "; ".join(objective_errors) or
+                       "The reclamation-under-load service objective failed."),
+        }
+        evidence_passed = durable["qualification"] == "passed"
+        assessment_passed = assessment.get("status") == "passed"
+        section.update(
+            status="internal qualification" if evidence_passed and assessment_passed else "mixed result",
+            result=(
+                "WAL reclamation met its same-code service, activity, physical-bound, and restart objectives; "
+                "no competitor headline was computed."
+                if evidence_passed and assessment_passed else
+                "WAL reclamation did not meet every same-code under-load objective; no competitor headline was computed."
+            ),
+            conditions=assessment.get("scope"),
+        )
+        return section
     rows = aggregate_durable(durable)
     if durable["qualification"] != "passed" or any(row["qualification"] != "passed" for row in rows):
         section.update(status="mixed result", result="The selected service evidence is incomplete; no headline was computed.")
@@ -828,9 +868,10 @@ def _failure_section(durable: dict | None, anomalies: list[dict],
         "result": "Comparative fault performance has not been measured.",
         "checks": [],
         "history": anomalies,
+        "reclamation_under_load": None,
         "not_measured": ["comparative leader-loss performance", "comparative slow-follower performance",
                          "storage-stall recovery performance",
-                         "complete-service snapshot/compaction and WAL-reclamation soak performance"],
+                         "long-duration snapshot/compaction and WAL-reclamation soak performance"],
         "source_cases": [],
     }
     if durable is None and reclamation is None:
@@ -877,6 +918,22 @@ def _failure_section(durable: dict | None, anomalies: list[dict],
                                     [case["source_case"] for case in durable["cases"]])
                         + source_cases)
         result_parts.append("Finite recovery checks passed")
+        if durable.get("suite", {}).get("kind") == "reclamation-under-load":
+            assessment = durable.get("reclamation_under_load")
+            if isinstance(assessment, dict) and assessment.get("kind") == "reclamation-under-load":
+                section["reclamation_under_load"] = assessment
+                if assessment.get("status") == "passed":
+                    result_parts.append(
+                        "WAL reclamation under complete-service traffic met its predeclared objectives"
+                    )
+                else:
+                    result_parts.append(
+                        "WAL reclamation under complete-service traffic missed at least one predeclared objective"
+                    )
+            else:
+                result_parts.append(
+                    "WAL reclamation under complete-service traffic is missing its replayed assessment"
+                )
     if reclamation is not None:
         if reclamation["qualification"] == "passed":
             checks.append({
@@ -917,9 +974,18 @@ def build_summary(*, durable: dict | None = None, storage: dict | None = None,
     histories = histories or []
     anomalies = _history_anomalies(histories)
     service = _service_section(durable, headline_variant, headline_control_variant)
+    storage_section = _storage_section(storage, reclamation)
+    if (
+        durable is not None
+        and durable.get("suite", {}).get("kind") == "reclamation-under-load"
+        and durable.get("reclamation_under_load") is not None
+    ):
+        storage_section["not_measured"].remove(
+            "WAL reclamation under complete service traffic"
+        )
     sections = [
         _consensus_section(micro),
-        _storage_section(storage, reclamation),
+        storage_section,
         service,
         _failure_section(durable, anomalies, reclamation),
     ]
@@ -966,6 +1032,10 @@ def _fmt_ms(value: float | None) -> str:
 
 def _fmt_us(value: float) -> str:
     return f"{value:,.1f} µs"
+
+
+def _fmt_mib(value: float) -> str:
+    return f"{value / 2**20:,.2f} MiB"
 
 
 def _fmt_capacity(value: float | None, reached_ceiling: bool) -> str:
@@ -1150,6 +1220,38 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                 else:
                     scenarios = ", ".join(f"{item['scenario']} {item['status']}" for item in check["scenarios"])
                     lines.append(f"- {check['name']}: {scenarios} — {check['scope']}")
+            lines.append("")
+        if section_id == "failure-and-sustained-operation" and section.get("reclamation_under_load"):
+            under_load = section["reclamation_under_load"]
+            lines += [
+                f"WAL reclamation under load: **{under_load['status']}**",
+                "",
+                under_load["scope"],
+                "",
+                "| Snapshot interval | Offered | Throughput retained | Worst p99 / p99.9 delta | "
+                "Compactions / max pause | Managed Raft after load | Managed Raft after restart | Max restart |",
+                "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+            for row in under_load["comparisons"]:
+                rate = ("saturation" if row["offered_per_second"] == 0 else
+                        f"{row['offered_per_second']:,}/s")
+                lines.append(
+                    f"| {row['snapshot_interval_entries']:,} | {rate} | "
+                    f"{row['median_throughput_ratio'] * 100:.1f}% | "
+                    f"{row['worst_p99_regression_ms']:+.3f} / "
+                    f"{row['worst_p999_regression_ms']:+.3f} ms | "
+                    f"{row['measured_compactions']:,} / "
+                    f"{row['max_compaction_upper_bound_ns'] / 1e6:.3f} ms | "
+                    f"{_fmt_mib(row['median_candidate_managed_raft_allocated_bytes'])} / "
+                    f"{_fmt_mib(row['median_control_managed_raft_allocated_bytes'])} | "
+                    f"{_fmt_mib(row['median_candidate_final_managed_raft_allocated_bytes'])} / "
+                    f"{_fmt_mib(row['median_control_final_managed_raft_allocated_bytes'])} | "
+                    f"{row['max_candidate_process_restart_ns'] / 1e9:.3f} s |"
+                )
+            lines.append("")
+            for name, verdict in under_load["verdicts"].items():
+                lines.append(f"- {name.replace('_', ' ')}: {verdict['status']}")
+                lines.extend(f"  - {error}" for error in verdict.get("errors", []))
             lines.append("")
         if section_id == "complete-durable-service" and section["capacity"]["variant_boundaries"]:
             objective = section["capacity"]["objective"]
@@ -1343,6 +1445,46 @@ def render_html(summary: dict, evidence: dict) -> str:
                          ", ".join(f"{item['scenario']} {item['status']}" for item in check["scenarios"]))
                 items.append(f"<li><strong>{html.escape(check['name'])}:</strong> {html.escape(value)} — {html.escape(check['scope'])}</li>")
             content.append("<ul>" + "".join(items) + "</ul>")
+        if section_id == "failure-and-sustained-operation" and section.get("reclamation_under_load"):
+            under_load = section["reclamation_under_load"]
+            content.append(
+                f"<p>WAL reclamation under load: <strong>{html.escape(under_load['status'])}</strong></p>"
+                f"<p class='conditions'>{html.escape(under_load['scope'])}</p>"
+            )
+            reclamation_body = ""
+            for row in under_load["comparisons"]:
+                rate = ("saturation" if row["offered_per_second"] == 0 else
+                        f"{row['offered_per_second']:,}/s")
+                reclamation_body += (
+                    f"<tr><td>{row['snapshot_interval_entries']:,}</td><td>{rate}</td>"
+                    f"<td>{row['median_throughput_ratio'] * 100:.1f}%</td>"
+                    f"<td>{row['worst_p99_regression_ms']:+.3f} / "
+                    f"{row['worst_p999_regression_ms']:+.3f} ms</td>"
+                    f"<td>{row['measured_compactions']:,} / "
+                    f"{row['max_compaction_upper_bound_ns'] / 1e6:.3f} ms</td>"
+                    f"<td>{_fmt_mib(row['median_candidate_managed_raft_allocated_bytes'])} / "
+                    f"{_fmt_mib(row['median_control_managed_raft_allocated_bytes'])}</td>"
+                    f"<td>{_fmt_mib(row['median_candidate_final_managed_raft_allocated_bytes'])} / "
+                    f"{_fmt_mib(row['median_control_final_managed_raft_allocated_bytes'])}</td>"
+                    f"<td>{row['max_candidate_process_restart_ns'] / 1e9:.3f} s</td></tr>"
+                )
+            content.append(
+                "<div class='table'><table><thead><tr><th>Snapshot interval</th><th>Offered</th>"
+                "<th>Throughput retained</th><th>Worst p99 / p99.9 delta</th>"
+                "<th>Compactions / max pause</th><th>Managed Raft after load</th>"
+                "<th>Managed Raft after restart</th><th>Max restart</th>"
+                f"</tr></thead><tbody>{reclamation_body}</tbody></table></div>"
+            )
+            verdicts = "".join(
+                f"<li><strong>{html.escape(name.replace('_', ' '))}:</strong> "
+                f"{html.escape(verdict['status'])}"
+                + ("<ul>" + "".join(
+                    f"<li>{html.escape(str(error))}</li>" for error in verdict.get("errors", [])
+                ) + "</ul>" if verdict.get("errors") else "")
+                + "</li>"
+                for name, verdict in under_load["verdicts"].items()
+            )
+            content.append(f"<ul>{verdicts}</ul>")
         if section_id == "complete-durable-service" and section["capacity"]["variant_boundaries"]:
             objective = section["capacity"]["objective"]
             content.append(f"<p>Useful-capacity objective: every repetition achieves at least "

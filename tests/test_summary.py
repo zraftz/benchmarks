@@ -116,6 +116,40 @@ def durable_data():
     }
 
 
+def reclamation_under_load_assessment(*, status="passed"):
+    errors = [] if status == "passed" else ["snap10k p99 exceeded the equal-load budget"]
+    return {
+        "schema": 1,
+        "kind": "reclamation-under-load",
+        "status": status,
+        "scope": (
+            "Same exact Rafter service; only the snapshot and WAL-reclamation interval changes. "
+            "Application-journal physical reclamation is not tested."
+        ),
+        "verdicts": {
+            "evidence_and_correctness": {"status": "passed", "errors": []},
+            "service_objective": {"status": status, "errors": errors},
+            "reclamation_activity": {"status": "passed", "errors": []},
+            "physical_reclamation": {"status": "passed", "errors": []},
+        },
+        "comparisons": [{
+            "variant": "snap10k",
+            "snapshot_interval_entries": 10_000,
+            "offered_per_second": 3_000,
+            "median_throughput_ratio": 0.98,
+            "worst_p99_regression_ms": 0.5,
+            "worst_p999_regression_ms": 1.0,
+            "measured_compactions": 9,
+            "max_compaction_upper_bound_ns": 2_000_000,
+            "median_candidate_managed_raft_allocated_bytes": 2 * 2**20,
+            "median_control_managed_raft_allocated_bytes": 20 * 2**20,
+            "median_candidate_final_managed_raft_allocated_bytes": 2 * 2**20,
+            "median_control_final_managed_raft_allocated_bytes": 20 * 2**20,
+            "max_candidate_process_restart_ns": 250_000_000,
+        }],
+    }
+
+
 def storage_record(arm, backend, batch, throughput, p99):
     return {
         "layer": "durable_replication",
@@ -741,9 +775,49 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("functional smoke only, not performance", check["scope"])
         self.assertIn("snapshot catch-up smoke passed", section["result"])
         self.assertIn(
-            "complete-service snapshot/compaction and WAL-reclamation soak performance",
+            "long-duration snapshot/compaction and WAL-reclamation soak performance",
             section["not_measured"],
         )
+
+    def test_reclamation_under_load_is_reported_as_same_code_sustained_evidence(self):
+        data = durable_data()
+        data["suite"]["kind"] = "reclamation-under-load"
+        data["reclamation_under_load"] = reclamation_under_load_assessment()
+
+        summary = build_summary(durable=data)
+        service = summary["sections"][2]
+        sustained = summary["sections"][3]
+        self.assertNotIn(
+            "WAL reclamation under complete service traffic",
+            summary["sections"][1]["not_measured"],
+        )
+        self.assertEqual(service["status"], "internal qualification")
+        self.assertEqual(service["comparison_kind"], "internal optimization")
+        self.assertFalse(service["rows"])
+        self.assertEqual(
+            service["verdicts"]["service_objective"]["status"], "passed"
+        )
+        self.assertEqual(sustained["reclamation_under_load"]["status"], "passed")
+        self.assertIn("met its predeclared objectives", sustained["result"])
+        for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+            self.assertIn("WAL reclamation under load", rendered)
+            self.assertIn("98.0%", rendered)
+            self.assertIn("2.00 MiB / 20.00 MiB", rendered)
+            self.assertIn("Application-journal physical reclamation is not tested", rendered)
+
+    def test_reclamation_under_load_failure_remains_visible(self):
+        data = durable_data()
+        data["suite"]["kind"] = "reclamation-under-load"
+        data["reclamation_under_load"] = reclamation_under_load_assessment(status="failed")
+
+        summary = build_summary(durable=data)
+        self.assertEqual(summary["sections"][2]["status"], "mixed result")
+        self.assertIn(
+            "missed at least one predeclared objective",
+            summary["sections"][3]["result"],
+        )
+        for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+            self.assertIn("snap10k p99 exceeded the equal-load budget", rendered)
 
     def test_candidate_accounting_loss_labels_result_mixed(self):
         data = durable_data()

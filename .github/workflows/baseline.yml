@@ -15,7 +15,7 @@ on:
       suite:
         description: Benchmark suite
         type: choice
-        options: [both, durable, microbench, rafter-only]
+        options: [both, durable, microbench, rafter-only, reclamation]
         default: both
         required: true
       prior_hard_state:
@@ -85,6 +85,10 @@ on:
         description: Paired diagnostic rates, comma separated and drawn from paired rates
         type: string
         default: 0,100,1000
+      snapshot_intervals:
+        description: Reclamation suite snapshot/checkpoint intervals, comma separated
+        type: string
+        default: 10000,100000
       network_delays_ms:
         description: Paired loopback egress delays, comma separated (blank auto-selects 0,2 for message modes)
         type: string
@@ -166,6 +170,7 @@ jobs:
           CANDIDATE_COMPLETION_PRIORITY: ${{ inputs.candidate_durable_completion_priority }}
           PAIRED_RATES: ${{ inputs.paired_rates }}
           PAIRED_DIAGNOSTIC_RATES: ${{ inputs.paired_diagnostic_rates }}
+          SNAPSHOT_INTERVALS: ${{ inputs.snapshot_intervals }}
           NETWORK_DELAYS: ${{ inputs.network_delays_ms }}
           OPENRAFT_CONTROLS: ${{ inputs.openraft_controls }}
           HEADLINE_OPENRAFT_CONTROL: ${{ inputs.headline_openraft_control }}
@@ -174,9 +179,9 @@ jobs:
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PRIOR_INFLIGHT', 'CANDIDATE_INFLIGHT', 'PRIOR_COMBINE', 'CANDIDATE_COMBINE', 'PRIOR_COMPLETION_PRIORITY', 'CANDIDATE_COMPLETION_PRIORITY', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'NETWORK_DELAYS', 'OPENRAFT_CONTROLS', 'HEADLINE_OPENRAFT_CONTROL', 'GITHUB_SHA')}, indent=2))
+          Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PRIOR_INFLIGHT', 'CANDIDATE_INFLIGHT', 'PRIOR_COMBINE', 'CANDIDATE_COMBINE', 'PRIOR_COMPLETION_PRIORITY', 'CANDIDATE_COMPLETION_PRIORITY', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'SNAPSHOT_INTERVALS', 'NETWORK_DELAYS', 'OPENRAFT_CONTROLS', 'HEADLINE_OPENRAFT_CONTROL', 'GITHUB_SHA')}, indent=2))
           PY
-          if [[ -n "$RAFTER_REF" ]]; then
+          if [[ -n "$RAFTER_REF" && "$SUITE" != reclamation ]]; then
             ./raft-bench select-rafter "$RAFTER_REF" 2>&1 | tee results/selection.log
           fi
           cp implementations.lock.json results/implementations.lock.json
@@ -184,13 +189,19 @@ jobs:
           import json, os
           with open('implementations.lock.json') as stream:
               pin = json.load(stream)['rafter']
+          requested = os.environ['RAFTER_REF'].strip().lower()
+          reclamation = os.environ['SUITE'] == 'reclamation'
+          revision = requested if reclamation and requested else pin['rev']
+          if len(revision) != 40 or any(character not in '0123456789abcdef' for character in revision):
+              raise SystemExit('the reclamation suite requires an exact 40-character Rafter SHA')
+          hard_state = 'wal' if reclamation else os.environ['RAFTER_HARD_STATE']
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
-              stream.write(f"revision={pin['rev']}\n")
+              stream.write(f"revision={revision}\n")
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
-              stream.write(f"Rafter: `{pin['rev']}`\n\nSuite: {os.environ['SUITE']}\n\nRafter hard state: {os.environ['RAFTER_HARD_STATE']}\n\nShared GitHub runner; compare all engines in the same run.\n")
+              stream.write(f"Rafter: `{revision}`\n\nSuite: {os.environ['SUITE']}\n\nRafter hard state: {hard_state}\n\nShared GitHub runner; compare all engines in the same run.\n")
           PY
       - name: In-memory benchmarks
-        if: inputs.suite != 'durable' && inputs.prior_rafter_ref == ''
+        if: ${{ inputs.prior_rafter_ref == '' && (inputs.suite == 'both' || inputs.suite == 'microbench' || inputs.suite == 'rafter-only') }}
         env:
           SUITE: ${{ inputs.suite }}
         run: |
@@ -215,8 +226,8 @@ jobs:
             --concurrency 64 --payload 512 \
             --data-root "$RUNNER_TEMP/raft-bench-data" \
             --output results/baseline 2>&1 | tee results/baseline-run.log
-      - name: Paired durable comparison and batch sweep
-        if: ${{ !cancelled() && inputs.prior_rafter_ref != '' && steps.select.outcome == 'success' }}
+      - name: Paired durable comparison, batch sweep, or reclamation
+        if: ${{ !cancelled() && (inputs.prior_rafter_ref != '' || inputs.suite == 'reclamation') && steps.select.outcome == 'success' }}
         env:
           PRIOR_REF: ${{ inputs.prior_rafter_ref }}
           CANDIDATE_REF: ${{ steps.select.outputs.revision }}
@@ -238,12 +249,40 @@ jobs:
           PAIRED_DIAGNOSTIC_RATES: ${{ inputs.paired_diagnostic_rates }}
           NETWORK_DELAYS: ${{ inputs.network_delays_ms }}
           OPENRAFT_CONTROLS: ${{ inputs.openraft_controls }}
+          SUITE: ${{ inputs.suite }}
+          SNAPSHOT_INTERVALS: ${{ inputs.snapshot_intervals }}
         run: |
+          if [[ "$SUITE" == reclamation ]]; then
+            PRIOR_REF="$CANDIDATE_REF"
+            PRIOR_HARD_STATE=wal
+            CANDIDATE_HARD_STATE=wal
+            PRIOR_MODE=pipeline
+            CANDIDATE_MODE=pipeline
+            PRIOR_BATCH=32
+            CANDIDATE_BATCHES=32
+            PRIOR_SPECULATIVE=1
+            CANDIDATE_SPECULATIVE=1
+            PRIOR_INFLIGHT=8
+            CANDIDATE_INFLIGHT=8
+            PRIOR_COMBINE=false
+            CANDIDATE_COMBINE=false
+            PRIOR_COMPLETION_PRIORITY=true
+            CANDIDATE_COMPLETION_PRIORITY=true
+            PAIRED_RATES=3000,0
+            PAIRED_DIAGNOSTIC_RATES=3000,0
+            NETWORK_DELAYS=0
+            OPENRAFT_CONTROLS=none
+          fi
           flags=()
           if [[ "$PRIOR_COMBINE" == true ]]; then flags+=(--prior-combine-peer-proposals); fi
           if [[ "$CANDIDATE_COMBINE" == true ]]; then flags+=(--candidate-combine-peer-proposals); fi
           if [[ "$PRIOR_COMPLETION_PRIORITY" == true ]]; then flags+=(--prior-durable-completion-priority); fi
           if [[ "$CANDIDATE_COMPLETION_PRIORITY" == true ]]; then flags+=(--candidate-durable-completion-priority); fi
+          if [[ "$SUITE" == reclamation ]]; then
+            flags+=(--prior-snapshot-interval-entries 0)
+            flags+=(--candidate-snapshot-interval-entries "$SNAPSHOT_INTERVALS")
+            flags+=(--suite-kind reclamation-under-load)
+          fi
           if [[ -n "$NETWORK_DELAYS" ]]; then
             flags+=(--network-delays-ms "$NETWORK_DELAYS")
           elif [[ "$PRIOR_MODE" == messages || "$PRIOR_MODE" == pipeline || "$CANDIDATE_MODE" == messages || "$CANDIDATE_MODE" == pipeline ]]; then
