@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import json
+import math
 import os
 import platform
 import subprocess
@@ -10,6 +11,7 @@ import sys
 from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "durable-log+durable-application-v1/logged-reads"
+HISTOGRAM_QUANTIZATION = "64 subdivisions per power of two; upper-bound percentiles"
 
 
 def digest(path: Path) -> str:
@@ -231,6 +233,71 @@ def system_sample(*, proc_root: Path = Path("/proc"),
     return result
 
 
+def _histogram_percentile(histogram: dict[str, Any], percentile: float) -> int:
+    count = histogram["count"]
+    if count == 0:
+        return 0
+    rank = max(1, math.ceil(count * percentile))
+    observed = 0
+    for index, value in enumerate(histogram["bins"]):
+        observed += value
+        if observed < rank:
+            continue
+        exponent, offset = divmod(index, 64)
+        if exponent == 0:
+            return 1
+        base = 1 << (exponent - 1)
+        width = max(1, base >> 6)
+        upper = base + (offset + 1) * width - 1
+        return min(upper, histogram["maximum_ns"])
+    raise ValueError("histogram count exceeds bins")
+
+
+def histogram_summary(histogram: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "count": histogram["count"],
+        "p50_ms": _histogram_percentile(histogram, 0.50) / 1e6,
+        "p95_ms": _histogram_percentile(histogram, 0.95) / 1e6,
+        "p99_ms": _histogram_percentile(histogram, 0.99) / 1e6,
+        "p999_ms": _histogram_percentile(histogram, 0.999) / 1e6,
+        "max_ms": histogram["maximum_ns"] / 1e6,
+        "quantization": HISTOGRAM_QUANTIZATION,
+    }
+
+
+def _histogram_errors(histogram: Any, expected_count: int, name: str) -> list[str]:
+    if not isinstance(histogram, dict):
+        return [f"histogram is not an object: {name}"]
+    bins = histogram.get("bins")
+    count = histogram.get("count")
+    maximum = histogram.get("maximum_ns")
+    if (
+        not isinstance(bins, list)
+        or len(bins) != 4096
+        or any(type(value) is not int or value < 0 for value in bins)
+        or type(count) is not int
+        or count < 0
+        or sum(bins) != count
+        or count != expected_count
+        or type(maximum) is not int
+        or maximum < 0
+    ):
+        return [f"histogram accounting mismatch: {name}"]
+    if count == 0:
+        return [] if maximum == 0 else [f"histogram maximum differs from bins: {name}"]
+    highest = max(index for index, value in enumerate(bins) if value)
+    exponent, offset = divmod(highest, 64)
+    if exponent == 0:
+        return [f"histogram contains an unreachable bin: {name}"]
+    base = 1 << (exponent - 1)
+    width = max(1, base >> 6)
+    lower = base + offset * width
+    upper = base + (offset + 1) * width - 1
+    if not lower <= maximum <= upper:
+        return [f"histogram maximum differs from bins: {name}"]
+    return []
+
+
 def validate_result(r: dict[str, Any]) -> list[str]:
     errors = []
     required = ("offered", "attempted", "not_issued", "ok", "unknown", "errors", "completed_in_window", "network_attempts")
@@ -247,14 +314,38 @@ def validate_result(r: dict[str, Any]) -> list[str]:
         errors.append("in-window completions exceed successes")
     if r.get("contract") != CONTRACT:
         errors.append("unsupported semantic contract")
-    histograms = [("success_histogram", r["ok"]), ("all_histogram", r["attempted"])]
-    if r.get("schema", 1) >= 2:
-        histograms += [("success_execution_histogram", r["ok"]), ("all_execution_histogram", r["attempted"])]
-    for name, count in histograms:
-        hist = r.get(name, {})
-        bins = hist.get("bins", [])
-        if len(bins) != 4096 or any(type(n) is not int or n < 0 for n in bins) or sum(bins) != count or hist.get("count") != count:
-            errors.append(f"histogram accounting mismatch: {name}")
+    schema = r.get("schema", 1)
+    if type(schema) is not int or schema < 1 or schema > 3:
+        errors.append("unsupported measurement schema")
+        return errors
+    histograms = [
+        ("success_histogram", r["ok"], "success_latency"),
+        ("all_histogram", r["attempted"], "all_dispatched_latency"),
+    ]
+    if schema >= 2:
+        histograms += [
+            ("success_execution_histogram", r["ok"], "success_execution_latency"),
+            ("all_execution_histogram", r["attempted"], "all_dispatched_execution_latency"),
+        ]
+    if schema >= 3:
+        config = r.get("config")
+        rate = config.get("rate") if isinstance(config, dict) else None
+        if type(rate) not in (int, float) or not math.isfinite(rate) or rate < 0:
+            errors.append("invalid scheduled rate for measurement schema 3")
+            scheduler_count = -1
+        else:
+            scheduler_count = r["offered"] if rate > 0 else 0
+        histograms += [
+            ("worker_start_lateness_histogram", r["attempted"], "worker_start_lateness"),
+            ("scheduler_lateness_histogram", scheduler_count, "scheduler_lateness"),
+        ]
+    for name, count, summary_name in histograms:
+        histogram = r.get(name)
+        histogram_errors = _histogram_errors(histogram, count, name)
+        errors.extend(histogram_errors)
+        if schema >= 3 and not histogram_errors:
+            if r.get(summary_name) != histogram_summary(histogram):
+                errors.append(f"histogram summary mismatch: {summary_name}")
     return errors
 
 

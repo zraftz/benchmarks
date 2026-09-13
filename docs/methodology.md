@@ -116,6 +116,13 @@ window remain visible as queue-pressure evidence. A highest qualifying point at
 the top of the tested curve is reported as a lower bound, never as maximum
 capacity.
 
+For current measurements, scheduled dispatch and worker-start waiting retain
+their raw fixed-memory histograms. Their counts, bucket-constrained maxima, and
+summary percentiles are independently replayed. Dispatch p99 is displayed
+separately from start-wait and execution p99: unsent work shows admission loss,
+while scheduler lateness shows whether the generator itself emitted arrivals
+late. Neither is silently reclassified as successful demand.
+
 Durable suites publish four independent verdicts. Evidence integrity covers
 expected cases, seals, recorded identities, receipts, and accounting.
 Correctness covers the finite history, restart, and smoke checks. Feature

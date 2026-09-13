@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from benchctl.evidence import (CONTRACT, load_environment_errors,
+from benchctl.evidence import (CONTRACT, histogram_summary, load_environment_errors,
                                runtime_configuration_errors, seal,
                                filesystem_space, system_sample, validate_result,
                                verify, write_json)
@@ -226,3 +226,40 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(validate_result(r), [])
         r["all_execution_histogram"]["count"] = 1
         self.assertTrue(validate_result(r))
+
+    def test_schema_three_replays_scheduler_and_worker_histograms(self):
+        r = result()
+        r["schema"] = 3
+        r["config"] = {"rate": 100}
+        for histogram_name in (
+            "success_execution_histogram",
+            "all_execution_histogram",
+            "worker_start_lateness_histogram",
+        ):
+            r[histogram_name] = copy.deepcopy(r["success_histogram"])
+        scheduler = copy.deepcopy(r["success_histogram"])
+        scheduler["bins"][64] = 3
+        scheduler["count"] = 3
+        r["scheduler_lateness_histogram"] = scheduler
+        for histogram_name, summary_name in (
+            ("success_histogram", "success_latency"),
+            ("all_histogram", "all_dispatched_latency"),
+            ("success_execution_histogram", "success_execution_latency"),
+            ("all_execution_histogram", "all_dispatched_execution_latency"),
+            ("worker_start_lateness_histogram", "worker_start_lateness"),
+            ("scheduler_lateness_histogram", "scheduler_lateness"),
+        ):
+            r[summary_name] = histogram_summary(r[histogram_name])
+        self.assertEqual(validate_result(r), [])
+
+        r["scheduler_lateness"]["p99_ms"] += 1
+        self.assertIn(
+            "histogram summary mismatch: scheduler_lateness",
+            validate_result(r),
+        )
+        r["scheduler_lateness"] = histogram_summary(scheduler)
+        r["scheduler_lateness_histogram"]["maximum_ns"] = 2
+        self.assertIn(
+            "histogram maximum differs from bins: scheduler_lateness_histogram",
+            validate_result(r),
+        )

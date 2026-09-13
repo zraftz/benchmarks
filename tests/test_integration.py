@@ -31,9 +31,12 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(check["status"],"passed",check)
             r=json.loads((root/"case/measurement.json").read_text())
             self.assertGreater(r["ok"],0)
-            self.assertEqual(r["schema"],2)
+            self.assertEqual(r["schema"],3)
             self.assertEqual(r["success_execution_histogram"]["count"],r["ok"])
             self.assertEqual(r["all_execution_histogram"]["count"],r["attempted"])
+            self.assertEqual(r["worker_start_lateness_histogram"]["count"],r["attempted"])
+            expected_dispatches = r["offered"] if rate > 0 else 0
+            self.assertEqual(r["scheduler_lateness_histogram"]["count"],expected_dispatches)
             self.assertEqual(r["offered"],r["attempted"]+r["not_issued"])
             m=json.loads((root/"case/manifest.json").read_text())
             self.assertEqual(m["implementation"],"test-fixture")

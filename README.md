@@ -178,6 +178,12 @@ speculative limits and restrict timing and diagnostic rates independently.
 It can also retain synchronous and asynchronous OpenRaft storage controls as
 separately named arms.
 
+Current load-generator receipts retain raw fixed-memory histograms for scheduled
+dispatch lateness and worker-start waiting. Verification replays their counts,
+bucket-constrained maxima, and published summaries. The capacity table shows
+dispatch p99 separately from worker-start and execution latency, so delayed load
+generation is not guessed from unsent requests.
+
 `--durable-completion-priority` is an opt-in measurement candidate, not the
 default. Its receipt records prioritized peer batches and client completions
 released before a later Raft persistence wait. Current receipts also count the
