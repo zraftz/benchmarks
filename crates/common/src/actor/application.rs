@@ -234,12 +234,14 @@ impl<E: Engine> State<E> {
                                 ..Default::default()
                             }
                         };
-                        let client_completion = Instant::now();
+                        let client_completion = self.diagnostics.start();
                         let sent = reply.send(Reply::applied(response)).is_ok();
                         self.diagnostics
                             .elapsed("application_dispatch_to_client_completion_ns", queued);
                         if sent && !completed {
-                            self.diagnostics.client_completed_at(&c, client_completion);
+                            if let Some(client_completion) = client_completion {
+                                self.diagnostics.client_completed_at(&c, client_completion);
+                            }
                             completed = true;
                         }
                     }

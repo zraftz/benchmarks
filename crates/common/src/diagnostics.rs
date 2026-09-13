@@ -282,6 +282,9 @@ impl Diagnostics {
         }
     }
     pub fn client_completed(&self, command: &Command) {
+        if !self.enabled {
+            return;
+        }
         self.client_completed_at(command, Instant::now());
     }
     pub fn client_completed_at(&self, command: &Command, client_completion: Instant) {
