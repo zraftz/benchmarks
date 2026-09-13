@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from benchctl.paired import (archive_build, candidate_arms, combined_activation_failures,
                              completion_priority_activation_failures, openraft_arms,
-                             ordered_arms, mode_flags)
+                             ordered_arms, mode_flags, qualify_machine)
 from benchctl.evidence import digest
 from benchctl.feature_coverage import verdict as feature_coverage_verdict
 from benchctl.results import _expected_durable_cases
@@ -144,3 +144,36 @@ class PairedTests(unittest.TestCase):
             receipt["observed_bounded_lookahead_during_load"] = True
             (case / "completion-priority-activity.json").write_text(json.dumps(receipt))
             self.assertEqual(completion_priority_activation_failures(root, variants), [])
+
+    def test_machine_qualification_binds_the_passing_profile_seal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            profile = root / "evidence/machine-profile"
+            profile.mkdir(parents=True)
+            (profile / "SHA256SUMS.json").write_text("sealed profile\n")
+            checked = {"status": "passed", "verdicts": {"evidence_integrity": {"status": "passed"}}}
+            with patch("benchctl.machine.capture_profile", return_value={"status": "passed"}), \
+                    patch("benchctl.paired.verify", return_value=checked):
+                receipt = qualify_machine(root / "data", root / "evidence")
+            self.assertEqual(receipt["status"], "passed")
+            self.assertEqual(receipt["seal_sha256"], digest(profile / "SHA256SUMS.json"))
+            self.assertEqual(
+                json.loads((root / "evidence/machine-qualification.json").read_text()),
+                receipt,
+            )
+
+    def test_machine_qualification_retains_and_refuses_a_failed_profile(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            profile = root / "evidence/machine-profile"
+            profile.mkdir(parents=True)
+            (profile / "SHA256SUMS.json").write_text("failed profile\n")
+            checked = {"status": "passed", "verdicts": {"evidence_integrity": {"status": "passed"}}}
+            with patch("benchctl.machine.capture_profile", return_value={"status": "failed"}), \
+                    patch("benchctl.paired.verify", return_value=checked):
+                with self.assertRaisesRegex(RuntimeError, "did not pass"):
+                    qualify_machine(root / "data", root / "evidence")
+            receipt = json.loads(
+                (root / "evidence/machine-qualification.json").read_text()
+            )
+            self.assertEqual(receipt["status"], "failed")

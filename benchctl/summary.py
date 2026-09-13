@@ -404,13 +404,15 @@ def _service_section(durable: dict | None, headline_variant: str | None,
             "evidence_integrity": dict(not_measured_verdict),
             "correctness_checks": dict(not_measured_verdict),
             "feature_coverage": dict(not_measured_verdict),
+            "environment_qualification": dict(not_measured_verdict),
             "service_objective": dict(not_measured_verdict),
         },
     }
     if durable is None:
         return section
     recorded_verdicts = durable.get("verdicts", {})
-    for name in ("evidence_integrity", "correctness_checks", "feature_coverage"):
+    for name in ("evidence_integrity", "correctness_checks", "feature_coverage",
+                 "environment_qualification"):
         if name in recorded_verdicts:
             section["verdicts"][name] = recorded_verdicts[name]
     rows = aggregate_durable(durable)
@@ -474,6 +476,10 @@ def _service_section(durable: dict | None, headline_variant: str | None,
         f"Selected identities: Rafter {_brief_version(example['engine']['version'])}; "
         f"{openraft['display_name']} {_brief_version(openraft['engine']['version'])}."
     )
+    machine_condition = (
+        " Fixed-machine idle/storage profile passed sealed replay immediately after builds."
+        if durable.get("machine_qualification") is not None else ""
+    )
     if not standard_complete:
         if capacity["variant_boundaries"]:
             status = ("mixed result" if section["verdicts"]["feature_coverage"]["status"] == "incomplete"
@@ -482,7 +488,7 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                            conditions=(f"{example['environment']['topology']}; {example['workload']['concurrency']} clients; "
                                        f"{example['workload']['payload_bytes']}-byte writes; {example['repetitions']} repetitions per point. "
                                        "Each capacity decision uses the worst repetition and complete loss accounting. "
-                                       + selected_identities),
+                                       + selected_identities + machine_condition),
                            selected_configuration=selected_configuration,
                            source_cases=capacity["source_cases"])
         else:
@@ -636,7 +642,7 @@ def _service_section(durable: dict | None, headline_variant: str | None,
                     f"{example['workload']['payload_bytes']}-byte writes; medians of {example['repetitions']} repetitions. "
                     "Success requires Raft commitment and durable application completion. Added delay affects client and peer egress. "
                     "Storage, codec, and scheduling choices differ between integrations. "
-                    + selected_identities),
+                    + selected_identities + machine_condition),
         selected_configuration=selected_configuration,
         rows=result_rows,
         accounting={"rafter": candidate_accounting, "openraft": control_accounting},
@@ -802,6 +808,7 @@ def render_markdown(summary: dict, evidence: dict) -> str:
             labels = {
                 "evidence_integrity": "Evidence integrity",
                 "correctness_checks": "Correctness checks",
+                "environment_qualification": "Environment qualification",
                 "feature_coverage": "Feature coverage",
                 "service_objective": "Service objective",
             }
@@ -949,6 +956,7 @@ def render_html(summary: dict, evidence: dict) -> str:
             labels = {
                 "evidence_integrity": "Evidence integrity",
                 "correctness_checks": "Correctness checks",
+                "environment_qualification": "Environment qualification",
                 "feature_coverage": "Feature coverage",
                 "service_objective": "Service objective",
             }

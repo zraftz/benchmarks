@@ -22,6 +22,30 @@ MODES = ("inline", "worker", "messages", "pipeline")
 OPENRAFT_CONTROLS = ("synchronous", "async")
 
 
+def qualify_machine(data_root: Path, output: Path) -> dict:
+    """Capture the idle host after builds and bind its passing seal to this suite."""
+    from .machine import capture_profile
+
+    profile = output / "machine-profile"
+    verdict = capture_profile(data_root.resolve(), profile)
+    checked = verify(profile)
+    status = "passed" if verdict["status"] == "passed" and checked["status"] == "passed" else "failed"
+    receipt = {
+        "schema": 1,
+        "status": status,
+        "profile": profile.name,
+        "seal_sha256": digest(profile / "SHA256SUMS.json"),
+        "data_root": str(data_root.resolve()),
+        "verification": checked["verdicts"],
+    }
+    write_json(output / "machine-qualification.json", receipt)
+    if status != "passed":
+        raise RuntimeError(
+            "fixed-machine idle objective did not pass; sealed evidence was retained"
+        )
+    return receipt
+
+
 def mode_flags(mode: str, engine: str = "rafter") -> dict[str, bool]:
     if mode not in MODES:
         raise ValueError("unsupported embedding mode")
@@ -109,6 +133,11 @@ def main() -> None:
                         help="comma-separated OpenRaft controls: synchronous,async")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--qualify-machine",
+        action="store_true",
+        help="after builds, require a fresh passing idle/storage profile before timing",
+    )
     args = parser.parse_args()
     caps = [int(value) for value in args.peer_batch_sizes.split(",")]
     if not caps or len(set(caps)) != len(caps) or any(cap < 1 or cap > 64 for cap in caps):
@@ -187,6 +216,9 @@ def main() -> None:
     for engine in ("raft-rs", "openraft"):
         if prior["implementations"][engine] != candidate["implementations"][engine]:
             raise RuntimeError("control implementation changed while selecting Rafter")
+    machine_qualification = (
+        qualify_machine(args.data_root, output) if args.qualify_machine else None
+    )
     arms = [("prior", "rafter", args.prior_peer_batch_size, "prior",
              args.prior_max_speculative_proposals, args.prior_combine_peer_proposals,
              args.prior_max_inflight_appends),
@@ -212,7 +244,7 @@ def main() -> None:
         "candidate_combine_peer_proposals": args.candidate_combine_peer_proposals,
         "prior_durable_completion_priority": args.prior_durable_completion_priority,
         "candidate_durable_completion_priority": args.candidate_durable_completion_priority,
-        "data_root": str(data)})
+        "data_root": str(data), "machine_qualification": machine_qualification})
     failures = []
     ordinal = 0
     for delay in delays:

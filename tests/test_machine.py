@@ -3,8 +3,10 @@ import json
 import tempfile
 import unittest
 
-from benchctl.evidence import seal, verify, write_json
+from benchctl.evidence import digest, seal, verify, write_json
 from benchctl.machine import OBJECTIVE, assess_idle, storage_probe, summarize_idle
+from benchctl.results import _load_machine_qualification
+from unittest.mock import patch
 
 
 def sample(at: int, *, iowait: int, steal: int, io_some: int, io_full: int,
@@ -114,6 +116,37 @@ class MachineProfileTests(unittest.TestCase):
             self.assertEqual(
                 checked["verdicts"]["environment_qualification"]["status"], "passed"
             )
+
+    def test_suite_machine_qualification_replays_identity_and_seal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = root / "machine-profile"
+            profile.mkdir()
+            (profile / "SHA256SUMS.json").write_text("profile seal\n")
+            checked = {"status": "passed", "verdicts": {"environment_qualification": {"status": "passed"}}}
+            receipt = {
+                "schema": 1,
+                "status": "passed",
+                "profile": "machine-profile",
+                "seal_sha256": digest(profile / "SHA256SUMS.json"),
+                "data_root": "/benchmark-data",
+                "verification": checked["verdicts"],
+            }
+            write_json(root / "machine-qualification.json", receipt)
+            suite = {"data_root": "/benchmark-data/case-data", "machine_qualification": receipt}
+            with patch("benchctl.results.verify", return_value=checked):
+                observed, errors = _load_machine_qualification(root, suite)
+            self.assertEqual(observed, receipt)
+            self.assertEqual(errors, [])
+
+            changed = dict(receipt, seal_sha256="0" * 64)
+            write_json(root / "replacement.json", changed)
+            suite["machine_qualification"] = changed
+            (root / "machine-qualification.json").unlink()
+            (root / "replacement.json").rename(root / "machine-qualification.json")
+            with patch("benchctl.results.verify", return_value=checked):
+                _, errors = _load_machine_qualification(root, suite)
+            self.assertIn("machine profile seal digest differs", errors)
 
 
 if __name__ == "__main__":

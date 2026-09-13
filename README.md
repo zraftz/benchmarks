@@ -68,6 +68,25 @@ receipt also exercises write/sync/rename/directory-sync/delete on the selected
 volume. Missing Linux counters do not pass. `--record-only` retains an
 incomplete or stressed-host observation without relabeling it as qualified.
 
+For the predeclared useful-capacity curve, use the exact 40-character Rafter
+commit. This command builds both same-code Rafter controls first, then captures
+and seals a fresh idle/storage profile on the selected volume. Timing does not
+start unless that profile passes. The suite binds the profile seal and runs
+FIFO Rafter, completion-priority Rafter, and both OpenRaft storage controls at
+zero added loopback delay:
+
+```sh
+./raft-bench capacity \
+  --rafter-sha <exact-40-character-sha> \
+  --data-root /path/to/benchmark-disk \
+  --output results/capacity-<sha>
+```
+
+The default rates are `1000,2000,3000,4000,6000,8000,10000,12000`; only
+1,000/s gets the separate diagnostic pass. A failed machine profile is retained
+with the aborted suite and cannot be overridden by this command. Use a new
+output directory after correcting the host condition.
+
 ```sh
 ./raft-bench microbench --runs 7
 

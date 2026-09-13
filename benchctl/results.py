@@ -8,7 +8,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from .evidence import CONTRACT, verify
+from .evidence import CONTRACT, digest, verify
 from .feature_coverage import verdict as feature_coverage_verdict
 
 
@@ -187,6 +187,44 @@ def _expected_durable_cases(suite: dict) -> int:
     return len(suite["implementations"]) * len(suite["rates"]) * suite["runs"]
 
 
+def _load_machine_qualification(directory: Path, suite: dict) -> tuple[dict | None, list[str]]:
+    declared = suite.get("machine_qualification")
+    receipt_path = directory / "machine-qualification.json"
+    if declared is None:
+        return (None, ["undeclared machine qualification receipt"] if receipt_path.exists() else [])
+    errors = []
+    receipt = None
+    try:
+        receipt = _read(receipt_path)
+        if receipt != declared:
+            errors.append("suite machine qualification differs from its receipt")
+        if not isinstance(receipt, dict):
+            return receipt, errors + ["machine qualification receipt is not an object"]
+        expected_keys = {"schema", "status", "profile", "seal_sha256", "data_root", "verification"}
+        if set(receipt) != expected_keys or receipt.get("schema") != 1:
+            errors.append("unsupported machine qualification receipt")
+        profile_name = receipt.get("profile")
+        if profile_name != "machine-profile":
+            errors.append("machine profile path is not the fixed suite-local directory")
+        else:
+            profile = directory / profile_name
+            checked = verify(profile)
+            if not isinstance(checked, dict):
+                return receipt, errors + ["machine profile replay verdict is not an object"]
+            if checked.get("status") != "passed" or receipt.get("status") != "passed":
+                errors.append("machine qualification did not pass replay")
+            if receipt.get("verification") != checked.get("verdicts"):
+                errors.append("machine qualification verification differs from replay")
+            if receipt.get("seal_sha256") != digest(profile / "SHA256SUMS.json"):
+                errors.append("machine profile seal digest differs")
+        data_root = suite.get("data_root")
+        if not isinstance(data_root, str) or receipt.get("data_root") != str(Path(data_root).parent):
+            errors.append("machine qualification data root differs from case storage root")
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        errors.append(f"machine qualification could not be replayed: {error}")
+    return receipt, errors
+
+
 def load_durable_suite(directory: Path) -> dict:
     directory = directory.resolve()
     suite = _read(directory / "suite.json")
@@ -201,6 +239,8 @@ def load_durable_suite(directory: Path) -> dict:
             runner_failures.append(item)
     integrity_reasons = [f"runner failure: {item}" for item in runner_failures]
     correctness_reasons = []
+    machine_qualification, machine_errors = _load_machine_qualification(directory, suite)
+    integrity_reasons.extend(machine_errors)
     expected = _expected_durable_cases(suite)
     if len(cases) != expected:
         integrity_reasons.append(f"expected {expected} primary cases, found {len(cases)}")
@@ -260,9 +300,16 @@ def load_durable_suite(directory: Path) -> dict:
                 "scope": "finite history, restart, and smoke checks; not exhaustive proof",
             },
             "feature_coverage": feature_coverage,
+            "environment_qualification": {
+                "status": ("not measured" if machine_qualification is None else
+                           "failed" if machine_errors else "passed"),
+                "errors": machine_errors,
+                "scope": "sealed idle/storage profile immediately after builds; per-case pressure remains separate",
+            },
         },
         "cases": cases,
         "smokes": smokes,
+        "machine_qualification": machine_qualification,
     }
 
 

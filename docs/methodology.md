@@ -151,6 +151,15 @@ Missing counters produce `not measured`, never a silent pass. Passing this
 idle check does not qualify pressure during the benchmark; the per-case samples
 remain the authority for the measured interval.
 
+The `capacity` command captures this profile after both exact same-SHA Rafter
+arms and the controls are built, immediately before timing. It binds the sealed
+profile digest and selected data root into the suite manifest and refuses to
+run any timed case unless the profile passes. There is no record-only override
+on this path. Builds therefore cannot be mistaken for benchmark-time pressure,
+and an older profile cannot be substituted for the one associated with the
+suite. Per-case pressure and loss accounting remain authoritative during the
+curve.
+
 Keep default pins checked in. A requested Rafter ref is resolved once and written
 as an exact commit into both manifests, then Cargo updates their locks while
 retaining existing compatible dependencies. Builds use `--locked`. The selected

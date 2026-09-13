@@ -260,6 +260,13 @@ class SummaryTests(unittest.TestCase):
 
     def test_capacity_curve_uses_declared_objective(self):
         data = durable_data()
+        data["machine_qualification"] = {"status": "passed", "seal_sha256": "a" * 64}
+        data["verdicts"] = {
+            "environment_qualification": {
+                "status": "passed",
+                "scope": "sealed idle/storage profile",
+            }
+        }
         data["cases"] = []
         for rate in (2000, 4000):
             data["cases"].append(service_case(
@@ -275,6 +282,8 @@ class SummaryTests(unittest.TestCase):
         summary = build_summary(durable=data)
         section = summary["sections"][2]
         self.assertEqual(section["status"], "measured lead")
+        self.assertEqual(section["verdicts"]["environment_qualification"]["status"], "passed")
+        self.assertIn("profile passed sealed replay", section["conditions"])
         self.assertEqual(section["rows"], [])
         self.assertEqual(section["capacity"]["boundaries"], [{
             "network_delay_ms": 0,
@@ -286,6 +295,7 @@ class SummaryTests(unittest.TestCase):
         }])
         rendered = render_markdown(summary, {})
         self.assertIn("Useful-capacity objective", rendered)
+        self.assertIn("| Environment qualification | passed |", rendered)
         self.assertIn("Execution p99/p99.9", rendered)
         self.assertIn("Useful-capacity objective", render_html(summary, {}))
 
