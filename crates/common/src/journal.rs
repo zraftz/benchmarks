@@ -86,7 +86,7 @@ impl Journal {
             records,
         ))
     }
-    pub fn append<T: Serialize>(&mut self, record: &T) -> Result<()> {
+    pub fn append<T: Serialize + ?Sized>(&mut self, record: &T) -> Result<()> {
         let started = self.diagnostics.start();
         debug_assert!(self.frame.is_empty());
         self.frame.resize(8, 0);

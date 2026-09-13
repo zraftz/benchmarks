@@ -240,8 +240,7 @@ impl DurableModel {
             index = e.index;
             any = true;
         }
-        self.journal
-            .append(&ApplicationRecord::Entries(entries.to_vec()))?;
+        self.journal.append(entries)?;
         self.replay(entries)
     }
     pub fn snapshot(&self) -> ApplicationSnapshot {
@@ -272,8 +271,7 @@ impl DurableModel {
         if self.has_applied && snapshot.applied_index == self.index {
             bail!("application snapshot conflicts at index {}", self.index);
         }
-        self.journal
-            .append(&ApplicationRecord::Snapshot(snapshot.clone()))?;
+        self.journal.append(&snapshot)?;
         self.restore_snapshot(snapshot)
     }
     pub fn set_diagnostics(&mut self, diagnostics: crate::diagnostics::Diagnostics) {
@@ -471,5 +469,41 @@ mod tests {
         assert_eq!(payload_len, bytes.len() - 8);
         assert_eq!(&bytes[8..], serde_json::to_vec(&entries).unwrap());
         std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn application_snapshot_record_retains_legacy_object_payload() {
+        let source_path = path("snapshot-payload-source");
+        let target_path = path("snapshot-payload-target");
+        let mut source = DurableModel::open(&source_path).unwrap();
+        source
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "value")),
+                metadata: Some(serde_json::json!({"term": 1})),
+            }])
+            .unwrap();
+        let snapshot = source.snapshot();
+        let expected = serde_json::to_vec(&ApplicationRecord::Snapshot(snapshot.clone())).unwrap();
+        assert_eq!(expected, serde_json::to_vec(&snapshot).unwrap());
+
+        let mut target = DurableModel::open(&target_path).unwrap();
+        target.install_snapshot(snapshot).unwrap();
+        drop(target);
+        let bytes = std::fs::read(&target_path).unwrap();
+        let payload_len = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
+        assert_eq!(payload_len, bytes.len() - 8);
+        assert_eq!(&bytes[8..], expected);
+        let reopened = DurableModel::open(&target_path).unwrap();
+        assert_eq!(reopened.index, 1);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("value")
+        );
+        assert_eq!(reopened.metadata, Some(serde_json::json!({"term": 1})));
+        drop(reopened);
+
+        std::fs::remove_file(source_path).unwrap();
+        std::fs::remove_file(target_path).unwrap();
     }
 }

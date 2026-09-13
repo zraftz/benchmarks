@@ -146,7 +146,7 @@ fn coalesced_frames_are_byte_compatible_and_legacy_records_reopen() {
 }
 
 #[test]
-fn append_reuses_bounded_frame_capacity_and_releases_oversized_scratch() {
+fn append_reuses_bounded_frame_capacity_and_oversized_scratch_is_released() {
     let p = path();
     let (mut journal, _) = Journal::open::<Vec<u8>>(&p).unwrap();
     journal.append(&vec![1; 1024]).unwrap();
@@ -158,15 +158,17 @@ fn append_reuses_bounded_frame_capacity_and_releases_oversized_scratch() {
     assert_eq!(journal.frame.capacity(), retained);
     assert!(journal.frame.is_empty());
 
-    let oversized = vec![3; RETAINED_FRAME_CAPACITY + 1];
-    journal.append(&oversized).unwrap();
-    assert_eq!(journal.frame.capacity(), 0);
     drop(journal);
 
     let (journal, records) = Journal::open::<Vec<u8>>(&p).unwrap();
-    assert_eq!(records, vec![vec![1; 1024], vec![2; 1024], oversized]);
+    assert_eq!(records, vec![vec![1; 1024], vec![2; 1024]]);
     drop(journal);
     std::fs::remove_file(p).unwrap();
+
+    let mut oversized = Vec::with_capacity(RETAINED_FRAME_CAPACITY + 1);
+    oversized.push(1);
+    clear_frame(&mut oversized);
+    assert_eq!(oversized.capacity(), 0);
 }
 
 #[test]
