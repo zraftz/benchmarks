@@ -15,8 +15,11 @@ from .build import IMPLEMENTATIONS, PUBLIC_APPLICATION_WORKER, build
 
 CAPACITY_RATES = "1000,2000,3000,4000,6000,8000,10000,12000"
 PIPELINE_THRESHOLD_RATES = "0,1000"
+RECLAMATION_LOAD_RATES = "3000,0"
 CAPACITY_RUNS = 4
 PIPELINE_THRESHOLD_RUNS = 6
+RECLAMATION_LOAD_RUNS = 3
+RECLAMATION_SNAPSHOT_INTERVALS = "10000,100000"
 
 
 def exact_rafter_sha(options) -> str:
@@ -81,6 +84,40 @@ def pipeline_threshold_command(options) -> list[str]:
         "--diagnostic-rates", options.diagnostic_rates,
         "--network-delays-ms", "0",
         "--openraft-controls", "synchronous",
+        "--qualify-machine",
+        "--data-root", str(options.data_root),
+        "--output", str(options.output),
+    ]
+
+
+def reclamation_load_command(options) -> list[str]:
+    sha = exact_rafter_sha(options)
+    return [
+        sys.executable,
+        "-m",
+        "benchctl.paired",
+        "--prior", sha,
+        "--candidate", sha,
+        "--prior-hard-state", "wal",
+        "--candidate-hard-state", "wal",
+        "--prior-mode", "pipeline",
+        "--candidate-mode", "pipeline",
+        "--prior-peer-batch-size", "32",
+        "--peer-batch-sizes", "32",
+        "--prior-max-speculative-proposals", "1",
+        "--candidate-max-speculative-proposals", "1",
+        "--prior-max-inflight-appends", "8",
+        "--candidate-max-inflight-appends", "8",
+        "--prior-durable-completion-priority",
+        "--candidate-durable-completion-priority",
+        "--prior-snapshot-interval-entries", "0",
+        "--candidate-snapshot-interval-entries", options.snapshot_intervals,
+        "--runs", str(RECLAMATION_LOAD_RUNS),
+        "--rates", options.rates,
+        "--diagnostic-rates", options.diagnostic_rates,
+        "--network-delays-ms", "0",
+        "--openraft-controls", "none",
+        "--suite-kind", "reclamation-under-load",
         "--qualify-machine",
         "--data-root", str(options.data_root),
         "--output", str(options.output),
@@ -241,6 +278,16 @@ def main() -> None:
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--rates", default=PIPELINE_THRESHOLD_RATES)
     p.add_argument("--diagnostic-rates", default=PIPELINE_THRESHOLD_RATES)
+    p = sub.add_parser(
+        "reclamation-load",
+        help="compare live WAL reclamation intervals against the same-code no-snapshot control",
+    )
+    p.add_argument("--rafter-sha", required=True)
+    p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--rates", default=RECLAMATION_LOAD_RATES)
+    p.add_argument("--diagnostic-rates", default=RECLAMATION_LOAD_RATES)
+    p.add_argument("--snapshot-intervals", default=RECLAMATION_SNAPSHOT_INTERVALS)
     p = sub.add_parser("build", help="test and build all durable adapters with locked dependencies")
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
     p.add_argument("--rafter-hard-state", choices=("replace", "journal", "wal"), default="replace", help="journal and wal require a Rafter revision supporting that backend")
@@ -332,6 +379,8 @@ def main() -> None:
             subprocess.run(capacity_command(args), cwd=ROOT, check=True)
         elif args.command == "pipeline-thresholds":
             subprocess.run(pipeline_threshold_command(args), cwd=ROOT, check=True)
+        elif args.command == "reclamation-load":
+            subprocess.run(reclamation_load_command(args), cwd=ROOT, check=True)
         elif args.command == "select-rafter":
             from .selection import select_rafter
             select_rafter(args.ref)

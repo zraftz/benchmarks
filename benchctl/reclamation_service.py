@@ -8,6 +8,25 @@ def _nodes(statuses: dict) -> dict[str, dict]:
     return {str(node): reply for node, reply in statuses.items()}
 
 
+def _histogram(values: Any, completed: int, node: str, boundary: str) -> list[int]:
+    if (
+        not isinstance(values, list)
+        or len(values) != 64
+        or any(type(value) is not int or value < 0 for value in values)
+        or sum(values) != completed
+    ):
+        raise ValueError(f"node {node} {boundary} compaction histogram is invalid")
+    return values
+
+
+def _upper_bound_ns(buckets: list[int]) -> int | None:
+    populated = [index for index, count in enumerate(buckets) if count]
+    if not populated:
+        return None
+    highest = populated[-1]
+    return (1 << (highest + 1)) - 1 if highest < 63 else (1 << 64) - 1
+
+
 def activity(
     before: dict,
     after: dict,
@@ -25,6 +44,7 @@ def activity(
         failures.append("snapshot activity requires status from all three nodes")
 
     nodes = {}
+    histogram_nodes = 0
     for node in ("1", "2", "3"):
         try:
             before_info = before_nodes[node]["info"]
@@ -35,6 +55,8 @@ def activity(
             new_completed = new["completed"]
             old_installs = old["application_installs"]
             new_installs = new["application_installs"]
+            old_total_ns = old["total_ns"]
+            new_total_ns = new["total_ns"]
             current_index = new["current_index"]
             applied_index = after_info["application"]["applied_index"]
             commit_index = after_info["engine"]["commit_index"]
@@ -46,6 +68,8 @@ def activity(
                 current_index,
                 applied_index,
                 commit_index,
+                old_total_ns,
+                new_total_ns,
                 new["max_ns"],
                 new["latest_payload_bytes"],
             )
@@ -54,12 +78,40 @@ def activity(
             if old["interval_entries"] != interval or new["interval_entries"] != interval:
                 failures.append(f"node {node} snapshot interval differs from the case")
             restarted = restarted_node is not None and str(restarted_node) == node
-            if not restarted and (new_completed < old_completed or new_installs < old_installs):
+            if not restarted and (
+                new_completed < old_completed
+                or new_installs < old_installs
+                or new_total_ns < old_total_ns
+            ):
                 failures.append(f"node {node} snapshot counters regressed")
             if not 0 < current_index <= applied_index <= commit_index:
                 failures.append(f"node {node} snapshot/application/commit boundaries are incoherent")
             completed = new_completed if restarted else new_completed - old_completed
             installs = new_installs if restarted else new_installs - old_installs
+            total_ns = new_total_ns if restarted else new_total_ns - old_total_ns
+            old_buckets = old.get("buckets_log2")
+            new_buckets = new.get("buckets_log2")
+            measurement = None
+            if old_buckets is not None or new_buckets is not None:
+                if old_buckets is None or new_buckets is None:
+                    failures.append(f"node {node} compaction histogram changed availability")
+                else:
+                    first = _histogram(old_buckets, old_completed, node, "before")
+                    last = _histogram(new_buckets, new_completed, node, "after")
+                    buckets = last if restarted else [
+                        right - left for left, right in zip(first, last, strict=True)
+                    ]
+                    if any(value < 0 for value in buckets) or sum(buckets) != completed:
+                        failures.append(f"node {node} compaction histogram regressed")
+                    else:
+                        histogram_nodes += 1
+                        measurement = {
+                            "samples": completed,
+                            "total_ns": total_ns,
+                            "mean_ns": total_ns / completed if completed else None,
+                            "max_upper_bound_ns": _upper_bound_ns(buckets),
+                            "buckets_log2": buckets,
+                        }
             if completed and (new["max_ns"] == 0 or new["latest_payload_bytes"] == 0):
                 failures.append(f"node {node} completed snapshot lacks timing or payload evidence")
             nodes[node] = {
@@ -71,8 +123,13 @@ def activity(
                 "max_compaction_ns": new["max_ns"],
                 "latest_payload_bytes": new["latest_payload_bytes"],
             }
+            if measurement is not None:
+                nodes[node]["measurement_compaction"] = measurement
         except (KeyError, TypeError, ValueError) as error:
             failures.append(f"node {node} snapshot activity is invalid: {error}")
+
+    if histogram_nodes not in (0, 3):
+        failures.append("snapshot compaction histograms are not available on all three nodes")
 
     compactions = sum(node["compactions_since_before_status"] for node in nodes.values())
     installs = sum(node["application_installs_since_before_status"] for node in nodes.values())
@@ -94,7 +151,7 @@ def activity(
                     or restarted["application_applied_index"] < required_snapshot_index):
                 failures.append("restarted follower did not reach the required snapshot boundary")
     return {
-        "schema": 1,
+        "schema": 2 if histogram_nodes == 3 else 1,
         "status": "passed" if not failures else "failed",
         "interval_entries": interval,
         "scenario": scenario,

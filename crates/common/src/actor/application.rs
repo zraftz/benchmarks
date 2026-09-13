@@ -106,6 +106,9 @@ impl<E: Engine> State<E> {
         self.snapshot_compaction_total_ns =
             self.snapshot_compaction_total_ns.saturating_add(elapsed);
         self.snapshot_compaction_max_ns = self.snapshot_compaction_max_ns.max(elapsed);
+        let bucket = 63 - elapsed.max(1).leading_zeros() as usize;
+        self.snapshot_compaction_buckets_log2[bucket] =
+            self.snapshot_compaction_buckets_log2[bucket].saturating_add(1);
         self.snapshot_payload_bytes = payload_bytes;
         Ok(())
     }

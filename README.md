@@ -122,6 +122,38 @@ then proves snapshot installation and acknowledged canaries after restart. It
 does not qualify reclamation latency. The Raft WAL is reclaimed; the benchmark
 application journal remains append-only.
 
+On a fixed machine, qualify the service cost and physical effect of reclamation
+without editing the suite after observing results:
+
+```sh
+./raft-bench reclamation-load \
+  --rafter-sha <exact-40-character-sha> \
+  --data-root /path/to/benchmark-disk \
+  --output results/reclamation-load-<sha>
+```
+
+This is a same-binary Rafter comparison: reclamation disabled versus checkpoint
+intervals of 10,000 and 100,000 applied entries, at 3,000 writes/s and
+saturation. Three repetitions rotate the three arms through every execution
+position. The command first requires a fresh fixed-machine profile, then emits
+`reclamation-under-load.json` and a concise Markdown report. It fails unless
+every snapshot arm compacts during every measured interval, preserves complete
+request accounting, stays within the predeclared throughput/tail budgets, and
+uses fewer post-load allocated managed Raft bytes than its same-seed
+no-snapshot control. Managed Raft bytes include WAL and snapshot data and
+metadata. After final restart, the receipt must also show exactly one selected
+snapshot envelope and manifest on each node and no temporary snapshot
+artifacts. These values are checkpoint intervals, not retained-suffix sizes.
+
+Every current Rafter WAL case records controller-observed logical and allocated
+bytes before measurement, after measurement, and after final restart. Raft WAL,
+its manifest, Raft snapshot envelopes, manifests and temporary artifacts, and
+the append-only application journal are reported separately. Temporary bytes
+remain part of the managed Raft total but do not count as retained snapshot
+generations. The live node files are removed after verification, so the sealed
+receipt is a controller `stat` observation rather than a retained copy of the
+database.
+
 Results live under `results/`. Verify a case or an in-memory suite with:
 
 ```sh

@@ -477,6 +477,49 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
     return errors
 
 
+def storage_footprint_errors(directory: Path, manifest: dict) -> list[str]:
+    """Validate controller-observed storage receipts when explicitly declared."""
+    declared = manifest.get("storage_footprint_observation")
+    receipt_path = directory / "storage-footprint.json"
+    if declared is None:
+        return ["unexpected storage footprint receipt"] if receipt_path.exists() else []
+    from .storage_footprint import OBSERVATION, errors
+
+    expected = OBSERVATION
+    if declared != expected:
+        return ["unsupported storage footprint observation declaration"]
+    if not receipt_path.exists():
+        return ["declared storage footprint receipt is missing"]
+    failures = []
+    for boundary, name in expected["status_barriers"].items():
+        barrier_path = directory / name
+        if not barrier_path.exists():
+            failures.append(f"storage footprint {boundary} status barrier is missing")
+            continue
+        try:
+            statuses = json.loads(barrier_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            failures.append(f"storage footprint {boundary} status barrier is invalid")
+            continue
+        if not isinstance(statuses, dict) or set(statuses) != {"1", "2", "3"}:
+            failures.append(f"storage footprint {boundary} status barrier is incomplete")
+            continue
+        if any(
+            not isinstance(status, dict)
+            or status.get("status") != "ok"
+            or not isinstance(status.get("info"), dict)
+            or status["info"].get("node_id") != int(node)
+            for node, status in statuses.items()
+        ):
+            failures.append(f"storage footprint {boundary} status barrier is incoherent")
+    try:
+        value = json.loads(receipt_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        failures.append("storage footprint receipt is invalid")
+        return failures
+    return failures + errors(value)
+
+
 def verify(directory: Path) -> dict[str, Any]:
     integrity_errors = []
     correctness_errors = []
@@ -546,6 +589,7 @@ def verify(directory: Path) -> dict[str, Any]:
         integrity_errors.extend(load_environment_errors(directory, manifest))
         integrity_errors.extend(runtime_configuration_errors(directory, manifest))
         integrity_errors.extend(snapshot_reclamation_errors(directory, manifest))
+        integrity_errors.extend(storage_footprint_errors(directory, manifest))
         if manifest.get("options", {}).get("diagnostics"):
             from .timelines import extract, recorded_extract_matches
             actual_timelines = extract(

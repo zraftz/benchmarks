@@ -8,8 +8,12 @@ from benchctl.cli import (
     CAPACITY_RATES,
     PIPELINE_THRESHOLD_RUNS,
     PIPELINE_THRESHOLD_RATES,
+    RECLAMATION_LOAD_RATES,
+    RECLAMATION_LOAD_RUNS,
+    RECLAMATION_SNAPSHOT_INTERVALS,
     capacity_command,
     pipeline_threshold_command,
+    reclamation_load_command,
 )
 
 
@@ -72,6 +76,27 @@ class CapacityCommandTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "exact 40-character"):
                     pipeline_threshold_command(self.options(value))
+
+    def test_reclamation_load_is_same_code_position_balanced_and_fixed_machine(self):
+        options = self.options()
+        options.rates = RECLAMATION_LOAD_RATES
+        options.diagnostic_rates = RECLAMATION_LOAD_RATES
+        options.snapshot_intervals = RECLAMATION_SNAPSHOT_INTERVALS
+        command = reclamation_load_command(options)
+        self.assertEqual(command[command.index("--prior") + 1], "a" * 40)
+        self.assertEqual(command[command.index("--candidate") + 1], "a" * 40)
+        self.assertEqual(command[command.index("--openraft-controls") + 1], "none")
+        self.assertEqual(
+            command[command.index("--candidate-snapshot-interval-entries") + 1],
+            "10000,100000",
+        )
+        self.assertEqual(int(command[command.index("--runs") + 1]), RECLAMATION_LOAD_RUNS)
+        self.assertIn("--prior-durable-completion-priority", command)
+        self.assertIn("--candidate-durable-completion-priority", command)
+        self.assertIn("--qualify-machine", command)
+        self.assertEqual(
+            command[command.index("--suite-kind") + 1], "reclamation-under-load"
+        )
 
 
 if __name__ == "__main__":

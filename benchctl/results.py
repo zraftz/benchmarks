@@ -192,6 +192,11 @@ def _normalize_case(case: Path, root: Path) -> dict:
             if (case / "snapshot-compaction-activity.json").exists()
             else None
         ),
+        "storage_footprint": (
+            _read(case / "storage-footprint.json")
+            if (case / "storage-footprint.json").exists()
+            else None
+        ),
     }
 
 
@@ -209,7 +214,7 @@ def _expected_durable_cases(suite: dict) -> int:
 def _execution_plan_errors(directory: Path, suite: dict) -> list[str]:
     recorded = suite.get("execution_plan")
     schema = suite.get("schema", 1)
-    if type(schema) is not int or schema not in (1, 2, 3):
+    if type(schema) is not int or schema not in (1, 2, 3, 4):
         return ["unsupported durable suite schema"]
     if schema < 3:
         return ["unexpected execution plan on legacy suite"] if recorded is not None else []
@@ -274,7 +279,7 @@ def _load_machine_qualification(directory: Path, suite: dict) -> tuple[dict | No
     return receipt, errors
 
 
-def load_durable_suite(directory: Path) -> dict:
+def load_durable_suite(directory: Path, *, require_derived: bool = True) -> dict:
     directory = directory.resolve()
     suite = _read(directory / "suite.json")
     completion = _read(directory / "completion.json")
@@ -332,7 +337,7 @@ def load_durable_suite(directory: Path) -> dict:
     if failed_smokes:
         correctness_reasons.append(f"failed recovery smoke: {', '.join(failed_smokes)}")
     reasons = integrity_reasons + correctness_reasons
-    return {
+    result = {
         "kind": "durable_service",
         "directory": str(directory),
         "suite": suite,
@@ -361,6 +366,24 @@ def load_durable_suite(directory: Path) -> dict:
         "smokes": smokes,
         "machine_qualification": machine_qualification,
     }
+    if suite.get("kind") == "reclamation-under-load" and require_derived:
+        from .reclamation_load import assess
+
+        assessment_path = directory / "reclamation-under-load.json"
+        expected_assessment = assess(result)
+        try:
+            recorded_assessment = _read(assessment_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            recorded_assessment = None
+        result["reclamation_under_load"] = recorded_assessment
+        if recorded_assessment != expected_assessment:
+            error = "reclamation-under-load assessment is missing or differs from sealed cases"
+            result["qualification"] = "failed"
+            result["qualification_errors"].append(error)
+            evidence = result["verdicts"]["evidence_integrity"]
+            evidence["status"] = "failed"
+            evidence["errors"].append(error)
+    return result
 
 
 def _median_metric(samples: list[dict], name: str) -> dict:

@@ -44,6 +44,16 @@ impl Journal {
             f.read_exact(&mut header)?;
             let size = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
             let checksum = u32::from_be_bytes(header[4..].try_into().unwrap());
+            if size == 0
+                && header.iter().all(|byte| *byte == 0)
+                && zero_filled(&mut f, length - valid - 8)?
+            {
+                // A killed append can leave its newly allocated EOF extent
+                // visible as zeros even though no frame bytes reached storage.
+                // Prior appends are serialized and synced before the next starts,
+                // so this is the incomplete current append, not a valid record.
+                break;
+            }
             if size == 0 || size > MAX_RECORD {
                 bail!("invalid journal record length at {valid}");
             }
@@ -96,6 +106,20 @@ impl Journal {
         Ok(())
     }
 }
+
+fn zero_filled(file: &mut File, mut remaining: u64) -> Result<bool> {
+    let mut buffer = [0u8; 8192];
+    while remaining != 0 {
+        let length = remaining.min(buffer.len() as u64) as usize;
+        file.read_exact(&mut buffer[..length])?;
+        if buffer[..length].iter().any(|byte| *byte != 0) {
+            return Ok(false);
+        }
+        remaining -= length as u64;
+    }
+    Ok(true)
+}
+
 pub fn crc32(bytes: &[u8]) -> u32 {
     crc32fast::hash(bytes)
 }

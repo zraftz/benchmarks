@@ -62,6 +62,33 @@ class PairedTests(unittest.TestCase):
         self.assertTrue(candidate["options"]["durable_completion_priority"])
         self.assertEqual(plan[-1]["measurement_mode"], "diagnostic")
         self.assertEqual(plan[-1]["options"]["seed"], 1)
+        self.assertEqual(plan[-1]["options"]["snapshot_interval_entries"], 0)
+
+    def test_snapshot_aware_plan_binds_each_interval_without_pooling(self):
+        suite = {
+            "schema": 4,
+            "arms": [
+                ["prior", "rafter", 32, "prior", 1, False, 8, 0],
+                ["snap10k", "rafter", 32, "candidate", 1, False, 8, 10000],
+                ["snap100k", "rafter", 32, "candidate", 1, False, 8, 100000],
+            ],
+            "rates": [3000],
+            "runs": 3,
+            "network_delays_ms": [0],
+            "diagnostic_arms": ["prior", "snap10k", "snap100k"],
+            "diagnostic_rates": [3000],
+            "prior_mode": "pipeline",
+            "candidate_mode": "pipeline",
+            "prior_durable_completion_priority": True,
+            "candidate_durable_completion_priority": True,
+        }
+        plan = execution_plan(suite)
+        timing = [item for item in plan if item["measurement_mode"] == "timing"]
+        self.assertEqual(len(timing), 9)
+        self.assertEqual(
+            {item["arm"]: item["options"]["snapshot_interval_entries"] for item in timing},
+            {"prior": 0, "snap10k": 10000, "snap100k": 100000},
+        )
 
     def test_execution_plan_replay_rejects_case_or_recorded_plan_drift(self):
         suite = {
@@ -109,7 +136,7 @@ class PairedTests(unittest.TestCase):
                 _execution_plan_errors(root, suite),
             )
             self.assertEqual(
-                _execution_plan_errors(root, {"schema": 4}),
+                _execution_plan_errors(root, {"schema": 5}),
                 ["unsupported durable suite schema"],
             )
 

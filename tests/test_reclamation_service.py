@@ -137,6 +137,31 @@ class ReclamationServiceTests(unittest.TestCase):
                 ["snapshot catch-up fault actions differ from the declared scenario"],
             )
 
+    def test_current_status_reports_measurement_window_compaction_histogram(self):
+        before = statuses(completed=1, installs=(0, 0, 0), index=64)
+        after = statuses(completed=3, installs=(0, 0, 0), index=128)
+        for status in before.values():
+            buckets = [0] * 64
+            buckets[6] = 1
+            status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
+        for status in after.values():
+            buckets = [0] * 64
+            buckets[6] = 1
+            buckets[7] = 2
+            status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
+        receipt = activity(before, after, 64, "durable-kv")
+        self.assertEqual(receipt["schema"], 2)
+        self.assertEqual(
+            receipt["nodes"]["1"]["measurement_compaction"],
+            {
+                "samples": 2,
+                "total_ns": 200,
+                "mean_ns": 100.0,
+                "max_upper_bound_ns": 255,
+                "buckets_log2": [0] * 7 + [2] + [0] * 56,
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

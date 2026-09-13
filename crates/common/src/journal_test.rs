@@ -31,6 +31,48 @@ fn recover_and_trim_partial_tail() {
     drop(j);
     std::fs::remove_file(p).unwrap();
 }
+
+#[test]
+fn recover_and_trim_zero_filled_eof_extent() {
+    let p = path();
+    let (mut j, _) = Journal::open::<Vec<u64>>(&p).unwrap();
+    j.append(&vec![1u64, 2, 3]).unwrap();
+    drop(j);
+    let valid = std::fs::metadata(&p).unwrap().len();
+    OpenOptions::new()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_len(valid + 4096)
+        .unwrap();
+    let (j, records) = Journal::open::<Vec<u64>>(&p).unwrap();
+    assert_eq!(records, vec![vec![1, 2, 3]]);
+    assert_eq!(std::fs::metadata(&p).unwrap().len(), valid);
+    drop(j);
+    std::fs::remove_file(p).unwrap();
+}
+
+#[test]
+fn reject_zero_length_header_with_nonzero_tail() {
+    let p = path();
+    let (mut j, _) = Journal::open::<Vec<u64>>(&p).unwrap();
+    j.append(&vec![1u64, 2, 3]).unwrap();
+    drop(j);
+    OpenOptions::new()
+        .append(true)
+        .open(&p)
+        .unwrap()
+        .write_all(&[0; 8])
+        .unwrap();
+    OpenOptions::new()
+        .append(true)
+        .open(&p)
+        .unwrap()
+        .write_all(&[1])
+        .unwrap();
+    assert!(Journal::open::<Vec<u64>>(&p).is_err());
+    std::fs::remove_file(p).unwrap();
+}
 #[test]
 fn reject_complete_corruption() {
     let p = path();

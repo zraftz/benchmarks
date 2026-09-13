@@ -203,6 +203,45 @@ and an older profile cannot be substituted for the one associated with the
 suite. Replayed per-case measured-load context and loss accounting remain
 authoritative during the curve.
 
+The `reclamation-load` command applies the same fixed-machine gate to an internal
+same-SHA Rafter comparison. All arms use WAL, pipeline mode, peer cap 32,
+speculative threshold 1, inflight append bound 8, and completion-priority
+scheduling. Only snapshot/checkpoint interval changes: the control disables
+snapshots and the candidates use 10,000 and 100,000 applied entries. Three
+repetitions form one complete position-balanced block at 3,000 writes/s and
+saturation. Those intervals govern maintenance frequency; they are not claims
+about a 10,000- or 100,000-entry retained live suffix.
+
+The objective is declared in code before results exist. Fixed-load cases must
+achieve at least 99% of offered work with zero errors, unknown outcomes, or
+unsent requests. Each snapshot candidate must execute measured-load compaction
+in every repetition, retain at least 95% of its same-seed control's saturated
+throughput, remain within the larger of a 10% or 1 ms p99 regression and the
+larger of a 10% or 2 ms p99.9 regression at equal offered load, and end with
+fewer allocated managed Raft bytes than the no-snapshot control. Managed Raft
+bytes cover WAL and snapshot data and metadata. After final restart, a candidate
+must retain exactly one selected snapshot envelope and manifest on each node.
+A candidate must also retain no temporary snapshot artifacts after that final
+owner-thread barrier. A failed row stays in the report and fails the suite;
+queue growth is not hidden by weakening the objective.
+
+Rafter WAL cases retain controller filesystem inventories at three boundaries:
+before measurement, after measurement, and after the final process restart.
+Each filesystem inventory follows a complete-status owner-thread barrier.
+Logical size and allocated blocks are accounted by node and separated into Raft
+WAL data, Raft-WAL publication metadata, Raft snapshot data, Raft snapshot
+metadata, recognized temporary snapshot artifacts, application journal, and
+other files. Temporary bytes remain in the managed Raft total but are not
+counted as retained snapshot generations. Derived totals and deltas are replayed
+from the sealed receipt. The paired runner then deletes the live stores, so
+these receipts are controller observations rather than independently retained
+database files. Measurement-window compaction counts and duration histograms
+are subtracted from pre/post node-status watermarks; reported maxima are log2
+upper bounds rather than warmup-contaminated exact timings. Final process
+restart timing is monotonic same-host controller time.
+Application-journal reclamation remains unmeasured and no bound is inferred
+from managed Raft cleanup.
+
 Keep default pins checked in. A requested Rafter ref is resolved once and written
 as an exact commit into both manifests, then Cargo updates their locks while
 retaining existing compatible dependencies. Builds use `--locked`. The selected

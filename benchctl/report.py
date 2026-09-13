@@ -52,6 +52,7 @@ def render(suite: Path, destination: Path) -> None:
                 "combine_peer_proposals": manifest["options"].get("combine_peer_proposals", False),
                 "durable_completion_priority": manifest["options"].get("durable_completion_priority", False),
                 "openraft_async_flush": manifest["options"].get("openraft_async_flush", False),
+                "snapshot_interval_entries": manifest["options"].get("snapshot_interval_entries", 0),
                 "peer_group_commit": (manifest.get("build_receipt") or {}).get("peer_group_commit", False),
                 "diagnostics": manifest["options"].get("diagnostics", False)}, sort_keys=True)
             key = (manifest["implementation"], revision, variant, manifest["scenario"], r["config"]["rate"],
@@ -78,7 +79,12 @@ def render(suite: Path, destination: Path) -> None:
         tuning = (f"speculative ≤{settings['max_speculative_proposals']} · "
                   f"append window ≤{settings['max_inflight_appends']} · "
                   if engine == "rafter" else "")
-        detail = f"{settings['variant']} · {persistence} · {settings['backend']} · peers ≤{settings['peer_batch_size']} · {tuning}{combine}{completion_priority}{apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
+        snapshots = (
+            f"snapshot interval {settings['snapshot_interval_entries']:,} · "
+            if settings["snapshot_interval_entries"]
+            else "snapshots off · "
+        )
+        detail = f"{settings['variant']} · {persistence} · {settings['backend']} · {snapshots}peers ≤{settings['peer_batch_size']} · {tuning}{combine}{completion_priority}{apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
         config = f"{scenario} · {detail} · {payload} bytes · {concurrency} clients · {reads}% reads · {cas}% CAS"
         fields = (engine, revision[:12], config, rate, len(values), f"{median(rates):.1f}",
                   f"{min(rates):.1f}–{max(rates):.1f}", median_latency(values, "success_latency"),

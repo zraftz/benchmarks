@@ -13,7 +13,7 @@ use rafter::{
     LogIndex, Message, NodeConfig, NodeId, Output, RaftSnapshot, RaftSnapshotMetadata, Role,
     SnapshotChunkRequest, SnapshotChunkSource, SnapshotGroupId,
 };
-use rafter_storage::PersistedRaftSnapshot;
+use rafter_storage::{PersistedRaftSnapshot, SnapshotRetention};
 mod storage;
 use storage::{Node, NodeStores, HARD_STATE_BACKEND};
 struct Rafter {
@@ -111,6 +111,23 @@ type PeerGate = rafter_runtime::PeerBatchGate;
 type PeerGate = ();
 
 impl Rafter {
+    fn translate_outputs(&mut self, outputs: Vec<Output>) -> Result<Vec<Effect>> {
+        let installed_snapshot = outputs
+            .iter()
+            .any(|output| matches!(output, Output::ApplySnapshot { .. }));
+        let ready = (!self.node.pending()).then(|| self.node.ready());
+        let translated = effects(ready, outputs, self.ordered_apply)?;
+        if installed_snapshot {
+            if self.node.pending() {
+                anyhow::bail!("snapshot application output escaped pending persistence")
+            }
+            self.node
+                .ready_mut()
+                .prune_snapshot_files(SnapshotRetention::CurrentOnly)?;
+        }
+        Ok(translated)
+    }
+
     fn observe_replication_windows(&mut self) {
         if !self.replication_windows.enabled() {
             return;
@@ -134,8 +151,7 @@ impl Rafter {
         if !self.node.pending() {
             self.observe_replication_windows();
         }
-        let ready = (!self.node.pending()).then(|| self.node.ready());
-        effects(ready, outputs, self.ordered_apply)
+        self.translate_outputs(outputs)
     }
 }
 impl Engine for Rafter {
@@ -143,15 +159,12 @@ impl Engine for Rafter {
         self.node.pending()
     }
     fn complete_persistence(&mut self) -> Result<Option<Vec<Effect>>> {
-        let completed = self
-            .node
-            .complete()?
-            .map(|outputs| effects(Some(self.node.ready()), outputs, self.ordered_apply))
-            .transpose()?;
-        if completed.is_some() {
-            self.observe_replication_windows();
-        }
-        Ok(completed)
+        let Some(outputs) = self.node.complete()? else {
+            return Ok(None);
+        };
+        let completed = self.translate_outputs(outputs)?;
+        self.observe_replication_windows();
+        Ok(Some(completed))
     }
     fn term(&self) -> u64 {
         self.node.current_term().0
@@ -235,6 +248,7 @@ impl Engine for Rafter {
             metadata,
             application_payload: payload,
         })?;
+        node.prune_snapshot_files(SnapshotRetention::CurrentOnly)?;
         self.observe_replication_windows();
         Ok(())
     }

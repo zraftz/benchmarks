@@ -56,8 +56,11 @@ def openraft_arms(controls: list[str]) -> list[tuple[str, str, int, str, int, bo
 
 def candidate_arms(caps: list[int], thresholds: list[int], windows: list[int],
                    combine: bool, durable_completion_priority: bool = False,
-                   ) -> list[tuple[str, str, int, str, int, bool, int]]:
-    def label(cap: int, threshold: int, window: int) -> str:
+                   snapshot_intervals: list[int] | None = None) -> list[tuple]:
+    snapshot_aware = snapshot_intervals is not None
+    intervals = snapshot_intervals or [0]
+
+    def label(cap: int, threshold: int, window: int, interval: int) -> str:
         result = f"candidate-b{cap}" if thresholds == [1] else f"candidate-b{cap}-s{threshold}"
         if combine:
             result += "-combined"
@@ -65,10 +68,19 @@ def candidate_arms(caps: list[int], thresholds: list[int], windows: list[int],
             result += "-commit-first"
         if windows != [8]:
             result += f"-w{window}"
+        if snapshot_aware:
+            result += f"-snapshot{interval}"
         return result
 
-    return [(label(cap, threshold, window), "rafter", cap, "candidate", threshold, combine, window)
-            for cap in caps for threshold in thresholds for window in windows]
+    arms = []
+    for cap in caps:
+        for threshold in thresholds:
+            for window in windows:
+                for interval in intervals:
+                    arm = (label(cap, threshold, window, interval), "rafter", cap,
+                           "candidate", threshold, combine, window)
+                    arms.append((*arm, interval) if snapshot_aware else arm)
+    return arms
 
 
 def worker_smoke_scenarios(candidate_mode: str, hard_state: str) -> list[str]:
@@ -123,11 +135,16 @@ def main() -> None:
     parser.add_argument("--candidate-combine-peer-proposals", action="store_true")
     parser.add_argument("--prior-durable-completion-priority", action="store_true")
     parser.add_argument("--candidate-durable-completion-priority", action="store_true")
+    parser.add_argument("--prior-snapshot-interval-entries", type=int, default=0)
+    parser.add_argument("--candidate-snapshot-interval-entries",
+                        help="comma-separated Rafter snapshot/checkpoint intervals")
     parser.add_argument("--rates", default="0,100,1000")
     parser.add_argument("--diagnostic-rates", help="defaults to all timing rates")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--openraft-controls", default="synchronous",
-                        help="comma-separated OpenRaft controls: synchronous,async")
+                        help="comma-separated OpenRaft controls: synchronous,async; use none for an internal Rafter comparison")
+    parser.add_argument("--suite-kind", choices=("paired-durable-service", "reclamation-under-load"),
+                        default="paired-durable-service")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument(
@@ -155,6 +172,56 @@ def main() -> None:
         raise ValueError("distinct candidate inflight append limits in 1..64 are required")
     if not 1 <= args.prior_max_inflight_appends <= 64:
         raise ValueError("prior inflight append limit must be 1..64")
+    snapshot_aware = args.candidate_snapshot_interval_entries is not None
+    snapshot_intervals = (
+        [int(value) for value in args.candidate_snapshot_interval_entries.split(",")]
+        if snapshot_aware else [0]
+    )
+    if (
+        not snapshot_intervals
+        or len(set(snapshot_intervals)) != len(snapshot_intervals)
+        or any(value < 0 or value > 1_000_000_000 for value in snapshot_intervals)
+    ):
+        raise ValueError("distinct candidate snapshot intervals in 0..1000000000 are required")
+    if not 0 <= args.prior_snapshot_interval_entries <= 1_000_000_000:
+        raise ValueError("prior snapshot interval must be in 0..1000000000")
+    if args.prior_snapshot_interval_entries and (
+        args.prior_mode != "pipeline" or args.prior_hard_state != "wal"
+    ):
+        raise ValueError("prior snapshot compaction requires pipeline mode with WAL")
+    if any(snapshot_intervals) and (
+        args.candidate_mode != "pipeline" or args.candidate_hard_state != "wal"
+    ):
+        raise ValueError("candidate snapshot compaction requires pipeline mode with WAL")
+    if args.suite_kind == "reclamation-under-load" and (
+        not snapshot_aware
+        or not snapshot_intervals
+        or any(interval == 0 for interval in snapshot_intervals)
+        or args.prior_snapshot_interval_entries != 0
+    ):
+        raise ValueError("reclamation-under-load requires a no-snapshot prior and nonzero candidate intervals")
+    if args.suite_kind == "reclamation-under-load":
+        exact = lambda value: (
+            len(value) == 40
+            and all(character in "0123456789abcdef" for character in value.lower())
+        )
+        if not exact(args.prior) or args.prior.lower() != args.candidate.lower():
+            raise ValueError("reclamation-under-load requires the same exact Rafter SHA in both arms")
+        if (
+            args.prior_hard_state != "wal"
+            or args.candidate_hard_state != "wal"
+            or args.prior_mode != "pipeline"
+            or args.candidate_mode != "pipeline"
+            or caps != [args.prior_peer_batch_size]
+            or thresholds != [args.prior_max_speculative_proposals]
+            or windows != [args.prior_max_inflight_appends]
+            or args.prior_combine_peer_proposals != args.candidate_combine_peer_proposals
+            or args.prior_durable_completion_priority
+            != args.candidate_durable_completion_priority
+        ):
+            raise ValueError(
+                "reclamation-under-load arms may differ only by snapshot interval and build label"
+            )
     if args.prior_combine_peer_proposals and args.prior_mode != "pipeline":
         raise ValueError("prior combined peer/proposal steps require pipeline mode")
     if args.candidate_combine_peer_proposals and args.candidate_mode != "pipeline":
@@ -175,8 +242,10 @@ def main() -> None:
     if (not diagnostic_rates or len(set(diagnostic_rates)) != len(diagnostic_rates)
             or any(value not in rates for value in diagnostic_rates)):
         raise ValueError("diagnostic rates must be distinct members of the timing rates")
-    controls = args.openraft_controls.split(",")
-    control_arms = openraft_arms(controls)
+    controls = [] if args.openraft_controls == "none" else args.openraft_controls.split(",")
+    control_arms = [] if not controls else openraft_arms(controls)
+    if args.suite_kind == "reclamation-under-load" and controls:
+        raise ValueError("reclamation-under-load is a same-code internal Rafter comparison")
     delays = [int(value) for value in args.network_delays_ms.split(",")]
     if not delays or len(set(delays)) != len(delays) or any(value < 0 or value > 100 for value in delays):
         raise ValueError("distinct network delays in 0..100 are required")
@@ -222,17 +291,25 @@ def main() -> None:
     machine_qualification = (
         qualify_machine(args.data_root, output) if args.qualify_machine else None
     )
-    arms = [("prior", "rafter", args.prior_peer_batch_size, "prior",
-             args.prior_max_speculative_proposals, args.prior_combine_peer_proposals,
-             args.prior_max_inflight_appends),
-            *control_arms]
+    prior_arm = ("prior", "rafter", args.prior_peer_batch_size, "prior",
+                 args.prior_max_speculative_proposals, args.prior_combine_peer_proposals,
+                 args.prior_max_inflight_appends)
+    if snapshot_aware or args.prior_snapshot_interval_entries:
+        prior_arm = (*prior_arm, args.prior_snapshot_interval_entries)
+    arms = [prior_arm, *control_arms]
     candidates = candidate_arms(caps, thresholds, windows, args.candidate_combine_peer_proposals,
-                                args.candidate_durable_completion_priority)
+                                args.candidate_durable_completion_priority,
+                                snapshot_intervals if snapshot_aware else None)
     arms += candidates
-    diagnostic_arms = (arms if len(thresholds) > 1 or len(windows) > 1 else
+    if args.suite_kind == "reclamation-under-load" and args.runs % len(arms):
+        raise ValueError(
+            "reclamation-under-load repetitions must be a multiple of the arm count for position balance"
+        )
+    diagnostic_arms = (arms if len(thresholds) > 1 or len(windows) > 1 or len(snapshot_intervals) > 1 else
                        [arms[0], *control_arms,
                         next((arm for arm in candidates if arm[2] == 32), candidates[-1])])
-    suite = {"schema": 3, "arms": arms, "rates": rates, "runs": args.runs,
+    suite = {"schema": 4 if snapshot_aware or args.prior_snapshot_interval_entries else 3,
+        "kind": args.suite_kind, "arms": arms, "rates": rates, "runs": args.runs,
         "order": "cyclic arm rotation by repetition; all cases sequential on one host",
         "diagnostics": "separate cases after timing runs; never pooled",
         "diagnostic_arms": [arm[0] for arm in diagnostic_arms], "diagnostic_rates": diagnostic_rates,
@@ -247,6 +324,8 @@ def main() -> None:
         "candidate_combine_peer_proposals": args.candidate_combine_peer_proposals,
         "prior_durable_completion_priority": args.prior_durable_completion_priority,
         "candidate_durable_completion_priority": args.candidate_durable_completion_priority,
+        "prior_snapshot_interval_entries": args.prior_snapshot_interval_entries,
+        "candidate_snapshot_interval_entries": snapshot_intervals,
         "data_root": str(data), "machine_qualification": machine_qualification}
     plan = execution_plan(suite)
     suite["execution_plan"] = plan
@@ -294,8 +373,18 @@ def main() -> None:
         "feature_coverage": feature_coverage,
     })
     render(output, output / "report.html")
+    assessment = None
+    if args.suite_kind == "reclamation-under-load":
+        from .reclamation_load import assess, markdown
+        from .results import load_durable_suite
+
+        assessment = assess(load_durable_suite(output, require_derived=False))
+        write_json(output / "reclamation-under-load.json", assessment)
+        (output / "reclamation-under-load.md").write_text(markdown(assessment))
     if failures:
         raise RuntimeError(f"{len(failures)} cases failed; evidence retained")
+    if assessment is not None and assessment["status"] != "passed":
+        raise RuntimeError("reclamation-under-load objective did not pass; evidence retained")
 
 
 if __name__ == "__main__":

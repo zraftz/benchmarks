@@ -22,8 +22,8 @@ def ordered_arms(arms: list, repeat: int) -> list:
 def execution_plan(suite: dict) -> list[dict]:
     """Expand a suite declaration into the exact case order and option set."""
     arms = [tuple(arm) for arm in suite["arms"]]
-    if not arms or any(len(arm) != 7 for arm in arms):
-        raise ValueError("paired arms must contain seven fields")
+    if not arms or any(len(arm) not in (7, 8) for arm in arms):
+        raise ValueError("paired arms must contain seven legacy fields or eight snapshot-aware fields")
     labels = [arm[0] for arm in arms]
     if len(set(labels)) != len(labels):
         raise ValueError("paired arm labels must be distinct")
@@ -46,7 +46,8 @@ def execution_plan(suite: dict) -> list[dict]:
             for repeat in range(repeats):
                 for rate in rates:
                     for position, arm in enumerate(ordered_arms(selected_arms, repeat), start=1):
-                        label, engine, cap, binary_set, threshold, combine, window = arm
+                        label, engine, cap, binary_set, threshold, combine, window = arm[:7]
+                        snapshot_interval = arm[7] if len(arm) == 8 else 0
                         mode = suite[
                             "prior_mode" if binary_set == "prior" else "candidate_mode"
                         ]
@@ -77,6 +78,7 @@ def execution_plan(suite: dict) -> list[dict]:
                             "max_inflight_appends": window,
                             "combine_peer_proposals": combine,
                             "durable_completion_priority": priority,
+                            "snapshot_interval_entries": snapshot_interval,
                             "concurrency": 64,
                             "payload": 512,
                             "rate": rate,

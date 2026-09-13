@@ -18,6 +18,9 @@ from .evidence import (ROOT, capture, digest, host_info, seal, source_digest,
                        validate_result, write_json)
 from .load_sampling import LoadSampler
 from .machine import LOAD_ENVIRONMENT_SCHEMA, load_environment_receipt
+from .storage_footprint import capture as capture_storage_footprint
+from .storage_footprint import OBSERVATION as STORAGE_FOOTPRINT_OBSERVATION
+from .storage_footprint import receipt as storage_footprint_receipt
 
 
 def load_command(nodes: dict[int, str], directory: Path, name: str, *, duration: float,
@@ -74,6 +77,11 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         raise RuntimeError("case binary differs from the supplied build receipt")
     case_id = uuid.uuid4().hex
     sample_interval_seconds = 0.1 if options.smoke else 1.0
+    observe_storage_footprint = bool(
+        implementation == "rafter"
+        and receipt
+        and receipt.get("rafter_hard_state_backend") == "wal"
+    )
     manifest = {"schema": 1, "implementation": implementation, "case_id": case_id,
         "scenario": options.scenario, "topology": "three processes on one host; real TCP, not three physical hosts",
         "smoke": options.smoke, "controller_start_unix_ns": time.time_ns(),
@@ -82,6 +90,9 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             "expected_duration_seconds": options.duration,
             "nominal_sample_interval_seconds": sample_interval_seconds,
         },
+        "storage_footprint_observation": (
+            STORAGE_FOOTPRINT_OBSERVATION if observe_storage_footprint else None
+        ),
         "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(options).items()},
         "host": host_info(data), "source_digest": source_digest(),
         "implementation_pins": receipt["implementations"] if receipt else json.loads((ROOT / "implementations.lock.json").read_text()),
@@ -128,6 +139,9 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             checked_load(args, directory / "warmup.log", options.warmup + options.timeout * 3 + 30)
         before = protocol.complete_statuses(cluster.nodes)
         write_json(directory / "before.json", before)
+        footprint_before = (
+            capture_storage_footprint(data) if observe_storage_footprint else None
+        )
         args = load_command(cluster.nodes, directory, "measurement", duration=options.duration,
             concurrency=options.concurrency, payload=options.payload, rate=options.rate,
             keyspace=options.keyspace, seed=options.seed, reads=options.read_percent,
@@ -254,8 +268,11 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         if (getattr(options, "diagnostics", False)
                 or (getattr(options, "pipelined_durability", False)
                     and options.scenario == "durable-kv")
-                or getattr(options, "snapshot_interval_entries", 0)):
+                or getattr(options, "snapshot_interval_entries", 0)
+                or observe_storage_footprint):
             after_load = protocol.complete_statuses(cluster.nodes)
+        if observe_storage_footprint:
+            write_json(directory / "after-measurement-status.json", after_load)
         if getattr(options, "diagnostics", False):
             from .timelines import extract
             write_json(directory / "diagnostics-after-load.json", after_load)
@@ -292,13 +309,43 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 raise RuntimeError(
                     f"live snapshot/reclamation activity did not pass: {reclamation['failures']}"
                 )
+        footprint_after_load = (
+            capture_storage_footprint(data) if observe_storage_footprint else None
+        )
         post = canaries(cluster.nodes, case_id + "post")
         write_json(directory / "after.json", protocol.complete_statuses(cluster.nodes))
         cluster.stop_all()
+        restart_started = time.monotonic_ns()
         cluster.start(initialize=False)
+        process_restart_ns = time.monotonic_ns() - restart_started
+        confirmation_started = time.monotonic_ns()
         recovery = confirm_canaries(cluster.nodes, pre + post, case_id + "final")
+        recovery["timing"] = {
+            "process_restart_ns": process_restart_ns,
+            "canary_confirmation_ns": time.monotonic_ns() - confirmation_started,
+            "scope": (
+                "controller monotonic time; same-host process restart and finite canary reads, "
+                "not power-loss recovery"
+            ),
+        }
         recovery["scope"] = "24 pre/post-load acknowledged canaries survived process restarts; finite check, not all measured writes or power loss"
         write_json(directory / "recovery.json", recovery)
+        if observe_storage_footprint:
+            # A status response is an owner-thread barrier. With no further client
+            # writes, all snapshot maintenance triggered by the final canaries has
+            # completed before the filesystem inventory is observed.
+            write_json(
+                directory / "after-final-restart.json",
+                protocol.complete_statuses(cluster.nodes),
+            )
+            write_json(
+                directory / "storage-footprint.json",
+                storage_footprint_receipt(
+                    footprint_before,
+                    footprint_after_load,
+                    capture_storage_footprint(data),
+                ),
+            )
         write_json(directory / "outcome.json", {"status": "completed", "smoke": options.smoke,
             "evidence_class": "smoke-only" if options.smoke else "embedding-baseline",
             "completed_unix_ns": time.time_ns()})

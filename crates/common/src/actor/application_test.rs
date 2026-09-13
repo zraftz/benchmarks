@@ -169,6 +169,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         snapshot_compactions: 0,
         snapshot_compaction_total_ns: 0,
         snapshot_compaction_max_ns: 0,
+        snapshot_compaction_buckets_log2: vec![0; 64],
         snapshot_payload_bytes: 0,
         application_snapshots_installed: 0,
     };

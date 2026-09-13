@@ -221,6 +221,7 @@ impl Actor {
                 snapshot_compactions: 0,
                 snapshot_compaction_total_ns: 0,
                 snapshot_compaction_max_ns: 0,
+                snapshot_compaction_buckets_log2: vec![0; 64],
                 snapshot_payload_bytes: 0,
                 application_snapshots_installed: 0,
             };
@@ -278,6 +279,7 @@ struct State<E> {
     snapshot_compactions: u64,
     snapshot_compaction_total_ns: u64,
     snapshot_compaction_max_ns: u64,
+    snapshot_compaction_buckets_log2: Vec<u64>,
     snapshot_payload_bytes: u64,
     application_snapshots_installed: u64,
 }
@@ -602,6 +604,7 @@ impl<E: Engine> State<E> {
                         "current_index":self.engine.snapshot_index(),
                         "total_ns":self.snapshot_compaction_total_ns,
                         "max_ns":self.snapshot_compaction_max_ns,
+                        "buckets_log2":self.snapshot_compaction_buckets_log2,
                         "latest_payload_bytes":self.snapshot_payload_bytes,
                         "application_installs":self.application_snapshots_installed},
                     "transport":self.outbound.iter().map(|(id,peer)|(id.to_string(),peer.stats())).collect::<BTreeMap<_,_>>(),
