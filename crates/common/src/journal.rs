@@ -11,9 +11,11 @@ use std::{
 };
 
 const MAX_RECORD: usize = 64 * 1024 * 1024;
+const RETAINED_FRAME_CAPACITY: usize = 4 * 1024 * 1024;
 #[derive(Debug)]
 pub struct Journal {
     file: File,
+    frame: Vec<u8>,
     pub diagnostics: Diagnostics,
     pub syncs: u64,
     pub bytes: u64,
@@ -76,6 +78,7 @@ impl Journal {
         Ok((
             Self {
                 file: f,
+                frame: Vec::new(),
                 diagnostics: Diagnostics::default(),
                 syncs: 0,
                 bytes: 0,
@@ -85,25 +88,41 @@ impl Journal {
     }
     pub fn append<T: Serialize>(&mut self, record: &T) -> Result<()> {
         let started = self.diagnostics.start();
-        let mut frame = vec![0; 8];
-        serde_json::to_writer(&mut frame, record)?;
-        let payload_len = frame.len() - 8;
+        debug_assert!(self.frame.is_empty());
+        self.frame.resize(8, 0);
+        if let Err(error) = serde_json::to_writer(&mut self.frame, record) {
+            clear_frame(&mut self.frame);
+            return Err(error.into());
+        }
+        let payload_len = self.frame.len() - 8;
         if payload_len == 0 || payload_len > MAX_RECORD {
+            clear_frame(&mut self.frame);
             bail!("journal record exceeds limit");
         }
-        let checksum = crc32(&frame[8..]);
-        frame[..4].copy_from_slice(&(payload_len as u32).to_be_bytes());
-        frame[4..8].copy_from_slice(&checksum.to_be_bytes());
+        let checksum = crc32(&self.frame[8..]);
+        self.frame[..4].copy_from_slice(&(payload_len as u32).to_be_bytes());
+        self.frame[4..8].copy_from_slice(&checksum.to_be_bytes());
         self.diagnostics.elapsed("journal_encode_ns", started);
         let started = self.diagnostics.start();
-        self.file.write_all(&frame)?;
+        let frame_len = self.frame.len();
+        let write_result = self.file.write_all(&self.frame);
+        clear_frame(&mut self.frame);
+        write_result?;
         self.diagnostics.elapsed("journal_write_ns", started);
         let started = self.diagnostics.start();
         self.file.sync_data()?;
         self.diagnostics.elapsed("journal_sync_ns", started);
         self.syncs += 1;
-        self.bytes += frame.len() as u64;
+        self.bytes += frame_len as u64;
         Ok(())
+    }
+}
+
+fn clear_frame(frame: &mut Vec<u8>) {
+    if frame.capacity() > RETAINED_FRAME_CAPACITY {
+        *frame = Vec::new();
+    } else {
+        frame.clear();
     }
 }
 

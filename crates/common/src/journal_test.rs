@@ -146,6 +146,56 @@ fn coalesced_frames_are_byte_compatible_and_legacy_records_reopen() {
 }
 
 #[test]
+fn append_reuses_bounded_frame_capacity_and_releases_oversized_scratch() {
+    let p = path();
+    let (mut journal, _) = Journal::open::<Vec<u8>>(&p).unwrap();
+    journal.append(&vec![1; 1024]).unwrap();
+    let retained = journal.frame.capacity();
+    assert!(retained >= 1024);
+    assert!(journal.frame.is_empty());
+
+    journal.append(&vec![2; 1024]).unwrap();
+    assert_eq!(journal.frame.capacity(), retained);
+    assert!(journal.frame.is_empty());
+
+    let oversized = vec![3; RETAINED_FRAME_CAPACITY + 1];
+    journal.append(&oversized).unwrap();
+    assert_eq!(journal.frame.capacity(), 0);
+    drop(journal);
+
+    let (journal, records) = Journal::open::<Vec<u8>>(&p).unwrap();
+    assert_eq!(records, vec![vec![1; 1024], vec![2; 1024], oversized]);
+    drop(journal);
+    std::fs::remove_file(p).unwrap();
+}
+
+#[test]
+fn append_clears_reused_frame_after_serialization_failure() {
+    struct FailingRecord;
+
+    impl Serialize for FailingRecord {
+        fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("injected serialization failure"))
+        }
+    }
+
+    let p = path();
+    let (mut journal, _) = Journal::open::<Vec<u8>>(&p).unwrap();
+    assert!(journal.append(&FailingRecord).is_err());
+    assert!(journal.frame.is_empty());
+    journal.append(&vec![4; 1024]).unwrap();
+    drop(journal);
+
+    let (journal, records) = Journal::open::<Vec<u8>>(&p).unwrap();
+    assert_eq!(records, vec![vec![4; 1024]]);
+    drop(journal);
+    std::fs::remove_file(p).unwrap();
+}
+
+#[test]
 fn every_partial_frame_recovers_only_the_complete_prefix() {
     let p = path();
     let first = legacy_frame(&vec![1u64, 2, 3]);
