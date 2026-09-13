@@ -101,7 +101,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             STORAGE_FOOTPRINT_OBSERVATION if observe_storage_footprint else None
         ),
         "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(options).items()},
-        "host": host_info(data), "source_digest": source_digest(),
+        "host": host_info(data),
+        "source_digest": receipt.get("source_digest") if receipt else source_digest(),
         "implementation_pins": receipt["implementations"] if receipt else json.loads((ROOT / "implementations.lock.json").read_text()),
         "binary_sha256": digest(Path(command[0])), "loadgen_sha256": digest(ROOT / "dist/raft-bench-load"),
         "build_receipt": receipt,

@@ -109,6 +109,9 @@ this command. Use a new output directory after correcting the host condition.
 manifests and lockfiles; omitted refs use the current selection. Use
 `./raft-bench select-rafter <SHA>` to select once before running both suites.
 Rafter source is fetched as a dependency; its checkout is never edited.
+Paired suites archive both builds, run their functional smokes, then restore the
+tracked dependency selection and invalidate the working build receipt. This
+leaves the exact benchmark checkout clean for the next fixed-machine suite.
 Pipeline experiments may vary the bounded per-follower replication window with
 `--max-inflight-appends`; the default remains Rafter's eight append batches.
 The WAL pipeline can also run the finite live-reclamation smoke directly:

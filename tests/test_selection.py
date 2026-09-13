@@ -10,8 +10,10 @@ from benchctl.selection import (
     MANIFESTS,
     REPOSITORY,
     check_resolution,
+    capture_rafter_selection,
     resolve_ref,
     rewrite_lock_sources,
+    restore_rafter_selection,
     select_rafter,
 )
 
@@ -40,6 +42,23 @@ def fixture(root):
 
 
 class SelectionTests(unittest.TestCase):
+    def test_captured_selection_restores_exact_files_and_invalidates_receipts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture(root)
+            captured = capture_rafter_selection(root=root)
+            for name in captured:
+                (root / name).write_bytes(b"changed")
+            restore_rafter_selection(captured, root=root)
+            self.assertEqual(
+                capture_rafter_selection(root=root),
+                captured,
+            )
+            self.assertFalse((root / "dist/build.json").exists())
+            self.assertFalse((root / "dist/microbench/build.json").exists())
+            with self.assertRaisesRegex(ValueError, "unexpected file inventory"):
+                restore_rafter_selection({}, root=root)
+
     def test_bad_refs_are_rejected_before_fetch(self):
         for ref in ("--upload-pack=evil", "main;id", "../main", "main~1", "", "x\ny"):
             with patch("benchctl.selection.subprocess.run") as run:

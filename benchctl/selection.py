@@ -12,6 +12,28 @@ from .evidence import ROOT
 REPOSITORY = "https://github.com/zsumz/rafter"
 MANIFESTS = ("adapters/rafter/Cargo.toml", "crates/common/Cargo.toml", "microbench/Cargo.toml")
 LOCKS = ("Cargo.lock", "microbench/Cargo.lock")
+SELECTION_FILES = (*MANIFESTS, *LOCKS, "implementations.lock.json")
+
+
+def capture_rafter_selection(*, root: Path | None = None) -> dict[str, bytes]:
+    """Capture only the tracked files changed by Rafter dependency selection."""
+    repository = root or ROOT
+    return {name: (repository / name).read_bytes() for name in SELECTION_FILES}
+
+
+def restore_rafter_selection(
+    captured: dict[str, bytes], *, root: Path | None = None
+) -> None:
+    """Restore an exact captured selection and invalidate now-stale receipts."""
+    if set(captured) != set(SELECTION_FILES):
+        raise ValueError("captured Rafter selection has an unexpected file inventory")
+    repository = root or ROOT
+    for receipt in ("dist/build.json", "dist/microbench/build.json"):
+        (repository / receipt).unlink(missing_ok=True)
+    for name in SELECTION_FILES:
+        (repository / name).write_bytes(captured[name])
+    pins = json.loads((repository / "implementations.lock.json").read_text())
+    check_resolution(repository, pins["rafter"]["rev"])
 
 
 def resolve_ref(ref: str, cache: Path) -> str:

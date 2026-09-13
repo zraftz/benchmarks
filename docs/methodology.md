@@ -169,7 +169,11 @@ Fixed-machine commands additionally require the exact benchmark repository
 commit. Before creating an output directory, the runner verifies that `HEAD`
 matches it and refuses tracked or untracked changes. The suite manifest retains
 that clean repository identity; the selected Rafter revision and source digest
-remain separate because dependency selection is part of the run setup.
+remain separate because dependency selection is part of the run setup. Both
+selected builds are archived with their own source digests before the tracked
+dependency selection is restored. The working build receipt is then invalidated;
+cases use the archived receipt and binary set, and the next suite starts from the
+same clean benchmark commit.
 
 Durable cases also sample Linux PSI, CPU and cgroup throttling counters, load,
 per-process I/O, filesystem capacity, and raw `/proc/diskstats` block-device

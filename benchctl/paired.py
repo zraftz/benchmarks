@@ -14,7 +14,7 @@ from .evidence import ROOT, digest, require_clean_repository, verify, write_json
 from .feature_coverage import combined_step_checks, completion_priority_checks, verdict as coverage_verdict
 from .report import render
 from .runner import run_case
-from .selection import select_rafter
+from .selection import capture_rafter_selection, restore_rafter_selection, select_rafter
 from .network import loopback_delay
 from .suite_plan import MODES, execution_plan, load_window_plan, mode_flags, ordered_arms
 
@@ -114,6 +114,88 @@ def completion_priority_activation_failures(output: Path, variants: set[str]) ->
     return [{"case": f"suite:{check['variant']}", "error": check["detail"]}
             for check in completion_priority_checks(output, variants)
             if check["status"] != "passed"]
+
+
+def prepare_builds_and_smokes(
+    args,
+    output: Path,
+    work: Path,
+    data: Path,
+    thresholds: list[int],
+    windows: list[int],
+) -> tuple[dict, dict]:
+    """Build selected revisions, run functional smokes, then restore source pins."""
+    original = capture_rafter_selection()
+    try:
+        select_rafter(args.prior)
+        build(
+            args.prior_hard_state,
+            peer_group_commit=args.prior_peer_batch_size > 1,
+            ordered_apply=args.prior_mode != "inline",
+            pipelined_durability=args.prior_mode == "pipeline",
+        )
+        prior = archive_build(work / "prior")
+        write_json(output / "prior-build.json", prior)
+        select_rafter(args.candidate)
+        build(
+            args.candidate_hard_state,
+            peer_group_commit=True,
+            ordered_apply=args.candidate_mode != "inline",
+            pipelined_durability=args.candidate_mode == "pipeline",
+        )
+        candidate = archive_build(work / "candidate")
+        write_json(output / "candidate-build.json", candidate)
+        if args.candidate_mode != "inline":
+            scenarios = worker_smoke_scenarios(
+                args.candidate_mode, args.candidate_hard_state
+            )
+            for scenario in scenarios:
+                flags = (
+                    ["--peer-message-stream"]
+                    if args.candidate_mode in ("messages", "pipeline")
+                    else []
+                )
+                engines = "rafter,raft-rs"
+                if args.candidate_mode == "pipeline":
+                    flags.extend([
+                        "--pipelined-durability",
+                        "--max-speculative-proposals",
+                        str(thresholds[0]),
+                        "--max-inflight-appends",
+                        str(windows[0]),
+                    ])
+                    if args.candidate_combine_peer_proposals:
+                        flags.append("--combine-peer-proposals")
+                    if args.candidate_durable_completion_priority:
+                        flags.append("--durable-completion-priority")
+                    if scenario == "snapshot-catchup":
+                        flags.extend(["--snapshot-interval-entries", "8"])
+                    engines = "rafter"
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "raft-bench"),
+                        "run",
+                        "--smoke",
+                        "--implementations",
+                        engines,
+                        "--ordered-apply",
+                        "--peer-batch-size",
+                        "32",
+                        "--scenario",
+                        scenario,
+                        *flags,
+                        "--output",
+                        str(output / f"worker-smoke-{scenario}"),
+                        "--data-root",
+                        str(data / "smoke"),
+                    ],
+                    cwd=ROOT,
+                    check=True,
+                )
+        return prior, candidate
+    finally:
+        restore_rafter_selection(original)
 
 
 def main() -> None:
@@ -262,36 +344,9 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=False)
     work = ROOT / ".cache/paired" / uuid.uuid4().hex
     data = args.data_root.resolve() / work.name
-    select_rafter(args.prior)
-    build(args.prior_hard_state, peer_group_commit=args.prior_peer_batch_size > 1, ordered_apply=args.prior_mode != "inline", pipelined_durability=args.prior_mode == "pipeline")
-    prior = archive_build(work / "prior")
-    write_json(output / "prior-build.json", prior)
-    select_rafter(args.candidate)
-    build(args.candidate_hard_state, peer_group_commit=True, ordered_apply=args.candidate_mode != "inline", pipelined_durability=args.candidate_mode == "pipeline")
-    candidate = archive_build(work / "candidate")
-    write_json(output / "candidate-build.json", candidate)
-    if args.candidate_mode != "inline":
-        scenarios = worker_smoke_scenarios(
-            args.candidate_mode, args.candidate_hard_state
-        )
-        for scenario in scenarios:
-            flags = ["--peer-message-stream"] if args.candidate_mode in ("messages", "pipeline") else []
-            engines = "rafter,raft-rs"
-            if args.candidate_mode == "pipeline":
-                flags.extend(["--pipelined-durability", "--max-speculative-proposals", str(thresholds[0]),
-                              "--max-inflight-appends", str(windows[0])])
-                if args.candidate_combine_peer_proposals:
-                    flags.append("--combine-peer-proposals")
-                if args.candidate_durable_completion_priority:
-                    flags.append("--durable-completion-priority")
-                if scenario == "snapshot-catchup":
-                    flags.extend(["--snapshot-interval-entries", "8"])
-                engines = "rafter"
-            subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
-                "--implementations", engines, "--ordered-apply", "--peer-batch-size", "32",
-                "--scenario", scenario, *flags,
-                "--output", str(output / f"worker-smoke-{scenario}"), "--data-root", str(data / "smoke")],
-                cwd=ROOT, check=True)
+    prior, candidate = prepare_builds_and_smokes(
+        args, output, work, data, thresholds, windows
+    )
     if prior["loadgen"] != candidate["loadgen"] or digest(ROOT / "dist/raft-bench-load") != candidate["loadgen"]:
         raise RuntimeError("paired runs require the identical load generator")
     for engine in ("raft-rs", "openraft"):

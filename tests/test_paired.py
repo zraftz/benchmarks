@@ -1,11 +1,12 @@
 from pathlib import Path
+from types import SimpleNamespace
 import json
 import tempfile
 import unittest
 from unittest.mock import patch
 from benchctl.paired import (archive_build, candidate_arms, combined_activation_failures,
                              completion_priority_activation_failures, openraft_arms,
-                             ordered_arms, mode_flags, qualify_machine,
+                             ordered_arms, mode_flags, prepare_builds_and_smokes, qualify_machine,
                              worker_smoke_scenarios)
 from benchctl.evidence import digest
 from benchctl.feature_coverage import verdict as feature_coverage_verdict
@@ -14,6 +15,64 @@ from benchctl.suite_plan import execution_plan, load_window_plan
 
 
 class PairedTests(unittest.TestCase):
+    def test_build_preparation_restores_selection_after_failure(self):
+        args = SimpleNamespace(
+            prior="a" * 40,
+            candidate="b" * 40,
+            prior_hard_state="wal",
+            candidate_hard_state="wal",
+            prior_peer_batch_size=32,
+            prior_mode="pipeline",
+            candidate_mode="inline",
+            candidate_combine_peer_proposals=False,
+            candidate_durable_completion_priority=False,
+        )
+        captured = {"selection": b"original"}
+        with tempfile.TemporaryDirectory() as temp, \
+                patch("benchctl.paired.capture_rafter_selection", return_value=captured), \
+                patch("benchctl.paired.restore_rafter_selection") as restore, \
+                patch("benchctl.paired.select_rafter", side_effect=RuntimeError("fetch failed")):
+            root = Path(temp)
+            with self.assertRaisesRegex(RuntimeError, "fetch failed"):
+                prepare_builds_and_smokes(
+                    args, root / "output", root / "work", root / "data", [1], [8]
+                )
+        restore.assert_called_once_with(captured)
+
+    def test_build_preparation_returns_archives_then_restores_selection(self):
+        args = SimpleNamespace(
+            prior="a" * 40,
+            candidate="b" * 40,
+            prior_hard_state="journal",
+            candidate_hard_state="wal",
+            prior_peer_batch_size=1,
+            prior_mode="inline",
+            candidate_mode="inline",
+            candidate_combine_peer_proposals=False,
+            candidate_durable_completion_priority=False,
+        )
+        captured = {"selection": b"original"}
+        prior = {"source_digest": "prior"}
+        candidate = {"source_digest": "candidate"}
+        with tempfile.TemporaryDirectory() as temp, \
+                patch("benchctl.paired.capture_rafter_selection", return_value=captured), \
+                patch("benchctl.paired.restore_rafter_selection") as restore, \
+                patch("benchctl.paired.select_rafter") as select, \
+                patch("benchctl.paired.build") as build, \
+                patch("benchctl.paired.archive_build", side_effect=[prior, candidate]):
+            root = Path(temp)
+            output = root / "output"
+            output.mkdir()
+            self.assertEqual(
+                prepare_builds_and_smokes(
+                    args, output, root / "work", root / "data", [1], [8]
+                ),
+                (prior, candidate),
+            )
+        self.assertEqual([call.args[0] for call in select.call_args_list], [args.prior, args.candidate])
+        self.assertEqual(build.call_count, 2)
+        restore.assert_called_once_with(captured)
+
     def test_only_the_wal_pipeline_adds_snapshot_catchup_smoke(self):
         base = ["durable-kv", "leader-loss", "follower-catchup"]
         self.assertEqual(worker_smoke_scenarios("messages", "wal"), base)
