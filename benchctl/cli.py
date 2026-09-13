@@ -5,7 +5,6 @@ import json
 import math
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import uuid
@@ -265,7 +264,7 @@ def node_configs(inventory_path: Path, destination: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="raft-bench: protocol diagnostics and durable networked embedding baselines")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("doctor", help="show required tools; makes no installations")
+    sub.add_parser("doctor", help="verify required tool versions; makes no installations")
     p = sub.add_parser("machine-profile", help="record and assess the fixed benchmark host while idle")
     p.add_argument("--data-root", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
@@ -380,7 +379,11 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "doctor":
-            print(json.dumps({t: shutil.which(t) for t in ("cargo", "rustc", "go", "protoc", "git", "python3")}, indent=2))
+            from .doctor import inspect
+            verdict = inspect()
+            print(json.dumps(verdict, indent=2))
+            if verdict["status"] != "passed":
+                raise RuntimeError("benchmark toolchain preflight failed")
         elif args.command == "machine-profile":
             from .machine import capture_profile
             verdict = capture_profile(args.data_root, args.output,

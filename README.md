@@ -52,6 +52,15 @@ repetitions, with 60 seconds measured per case. Allow about 40–60 minutes.
 
 Needs Rust 1.88.0, Python 3.11+, Go 1.22+, Git, `protoc`, and a C compiler.
 Linux is recommended. Data storage must support file and directory syncs.
+Verify the exact compiler and tool prerequisites before investing in a long run:
+
+```sh
+./raft-bench doctor
+```
+
+The doctor makes no installations and exits unsuccessfully when the pinned
+Rust/Cargo version, minimum Python/Go versions, or required unversioned tools
+are unavailable.
 
 Before using a new fixed machine for evidence, characterize the exact data
 volume while the host is idle:
