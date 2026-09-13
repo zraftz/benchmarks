@@ -34,6 +34,17 @@ class PairedTests(unittest.TestCase):
         self.assertIn("inputs.suite == 'microbench'", workflow)
         self.assertNotIn("--qualify-machine", workflow)
 
+    def test_hosted_numeric_list_defaults_remain_strings(self):
+        workflow = (
+            Path(__file__).parents[1] / ".github/workflows/baseline.yml"
+        ).read_text()
+        for value in (
+            "8,16,32,64",
+            "0,100,1000",
+            "10000,100000",
+        ):
+            self.assertIn(f"default: '{value}'", workflow)
+
     def test_hosted_layered_report_is_published_to_the_run_summary(self):
         workflow = (
             Path(__file__).parents[1] / ".github/workflows/baseline.yml"

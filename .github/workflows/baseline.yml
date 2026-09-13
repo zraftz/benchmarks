@@ -44,7 +44,7 @@ on:
       peer_batch_sizes:
         description: Candidate peer batch caps, comma separated
         type: string
-        default: 8,16,32,64
+        default: '8,16,32,64'
       prior_max_speculative_proposals:
         description: Prior pipeline speculative proposal limit
         type: number
@@ -80,15 +80,15 @@ on:
       paired_rates:
         description: Paired offered rates, comma separated
         type: string
-        default: 0,100,1000
+        default: '0,100,1000'
       paired_diagnostic_rates:
         description: Paired diagnostic rates, comma separated and drawn from paired rates
         type: string
-        default: 0,100,1000
+        default: '0,100,1000'
       snapshot_intervals:
         description: Reclamation suite snapshot/checkpoint intervals, comma separated
         type: string
-        default: 10000,100000
+        default: '10000,100000'
       network_delays_ms:
         description: Paired loopback egress delays, comma separated (blank auto-selects 0,2 for message modes)
         type: string
