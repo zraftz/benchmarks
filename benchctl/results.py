@@ -214,7 +214,7 @@ def _expected_durable_cases(suite: dict) -> int:
 def _execution_plan_errors(directory: Path, suite: dict) -> list[str]:
     recorded = suite.get("execution_plan")
     schema = suite.get("schema", 1)
-    if type(schema) is not int or schema not in (1, 2, 3, 4):
+    if type(schema) is not int or schema not in (1, 2, 3, 4, 5):
         return ["unsupported durable suite schema"]
     if schema < 3:
         return ["unexpected execution plan on legacy suite"] if recorded is not None else []
@@ -225,6 +225,21 @@ def _execution_plan_errors(directory: Path, suite: dict) -> list[str]:
         return [f"execution plan could not be derived: {error}"]
     if recorded != expected:
         errors.append("recorded execution plan differs from suite declaration")
+    benchmark_repository = suite.get("benchmark_repository")
+    if schema >= 5:
+        exact_commit = (
+            isinstance(benchmark_repository, dict)
+            and set(benchmark_repository) == {"commit", "status"}
+            and isinstance(benchmark_repository.get("commit"), str)
+            and len(benchmark_repository["commit"]) == 40
+            and all(
+                character in "0123456789abcdef"
+                for character in benchmark_repository["commit"]
+            )
+            and benchmark_repository.get("status") == "clean"
+        )
+        if not exact_commit:
+            errors.append("benchmark repository identity is not an exact clean commit")
     manifests = {path.parent.name: path for path in directory.glob("*/manifest.json")}
     expected_names = {item["name"] for item in expected}
     if set(manifests) != expected_names:
@@ -238,6 +253,16 @@ def _execution_plan_errors(directory: Path, suite: dict) -> list[str]:
             errors.append(f"case classification differs from plan: {item['name']}")
         if manifest.get("options") != item["options"]:
             errors.append(f"case options differ from plan: {item['name']}")
+        if schema >= 5 and isinstance(benchmark_repository, dict):
+            git = manifest.get("host", {}).get("git", {})
+            if (
+                git.get("returncode") != 0
+                or git.get("stdout", "").lower()
+                != benchmark_repository.get("commit")
+            ):
+                errors.append(
+                    f"case benchmark repository differs from suite: {item['name']}"
+                )
     return errors
 
 

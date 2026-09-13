@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from benchctl.evidence import (CONTRACT, histogram_summary, load_environment_errors,
                                runtime_configuration_errors, seal,
-                               filesystem_space, system_sample, validate_result,
+                               filesystem_space, require_clean_repository, system_sample, validate_result,
                                verify, write_json)
 from benchctl.machine import load_environment_receipt
 from benchctl.replication_windows import configuration_receipt
@@ -19,6 +20,28 @@ def result():
             "completed_in_window":2,"network_attempts":2,"success_histogram":h,"all_histogram":copy.deepcopy(h)}
 
 class EvidenceTests(unittest.TestCase):
+    def test_fixed_repository_identity_requires_exact_clean_head(self):
+        head = {"returncode": 0, "stdout": "a" * 40, "stderr": ""}
+        clean = {"returncode": 0, "stdout": "", "stderr": ""}
+        with patch("benchctl.evidence.capture", side_effect=[head, clean]):
+            self.assertEqual(
+                require_clean_repository("A" * 40),
+                {"commit": "a" * 40, "status": "clean"},
+            )
+        with self.assertRaisesRegex(ValueError, "exact 40-character"):
+            require_clean_repository("main")
+
+    def test_fixed_repository_identity_refuses_wrong_or_dirty_head(self):
+        head = {"returncode": 0, "stdout": "a" * 40, "stderr": ""}
+        clean = {"returncode": 0, "stdout": "", "stderr": ""}
+        dirty = {"returncode": 0, "stdout": " M benchctl/cli.py", "stderr": ""}
+        with patch("benchctl.evidence.capture", side_effect=[head, clean]):
+            with self.assertRaisesRegex(RuntimeError, "expected"):
+                require_clean_repository("b" * 40)
+        with patch("benchctl.evidence.capture", side_effect=[head, dirty]):
+            with self.assertRaisesRegex(RuntimeError, "tracked or untracked"):
+                require_clean_repository("a" * 40)
+
     def test_system_sample_records_pressure_and_throttling_counters(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -39,6 +39,29 @@ def capture(command: list[str], *, cwd: Path = ROOT) -> dict[str, Any]:
         return {"command": command, "unavailable": str(exc)}
 
 
+def require_clean_repository(expected_sha: str, *, root: Path | None = None) -> dict[str, str]:
+    """Bind a fixed-machine run to one clean, exact benchmark revision."""
+    expected = expected_sha.lower()
+    if len(expected) != 40 or any(character not in "0123456789abcdef" for character in expected):
+        raise ValueError("benchmark SHA must be an exact 40-character hexadecimal commit")
+    repository = (root or ROOT).resolve()
+    head = capture(["git", "rev-parse", "HEAD"], cwd=repository)
+    status = capture(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=repository,
+    )
+    if head.get("returncode") != 0 or status.get("returncode") != 0:
+        raise RuntimeError("cannot verify benchmark repository revision and cleanliness")
+    observed = head["stdout"].lower()
+    if observed != expected:
+        raise RuntimeError(
+            f"benchmark repository HEAD is {observed}, expected {expected}"
+        )
+    if status["stdout"]:
+        raise RuntimeError("benchmark repository has tracked or untracked changes")
+    return {"commit": observed, "status": "clean"}
+
+
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text().strip()

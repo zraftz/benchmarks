@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import uuid
 
 from .build import build
-from .evidence import ROOT, digest, verify, write_json
+from .evidence import ROOT, digest, require_clean_repository, verify, write_json
 from .feature_coverage import combined_step_checks, completion_priority_checks, verdict as coverage_verdict
 from .report import render
 from .runner import run_case
@@ -120,6 +120,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prior", required=True)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument(
+        "--benchmark-sha",
+        help="exact clean benchmark repository revision required by fixed-machine runs",
+    )
     parser.add_argument("--prior-hard-state", choices=("replace", "journal", "wal"), default="journal")
     parser.add_argument("--candidate-hard-state", choices=("replace", "journal", "wal"), default="journal")
     parser.add_argument("--peer-batch-sizes", default="8,16,32,64")
@@ -153,6 +157,11 @@ def main() -> None:
         help="after builds, require a fresh passing idle/storage profile before timing",
     )
     args = parser.parse_args()
+    if args.qualify_machine and not args.benchmark_sha:
+        raise ValueError("--qualify-machine requires --benchmark-sha")
+    benchmark_repository = (
+        require_clean_repository(args.benchmark_sha) if args.benchmark_sha else None
+    )
     if not 3 <= args.runs <= 10:
         raise ValueError("paired evidence requires 3..10 repetitions")
     caps = [int(value) for value in args.peer_batch_sizes.split(",")]
@@ -308,7 +317,7 @@ def main() -> None:
     diagnostic_arms = (arms if len(thresholds) > 1 or len(windows) > 1 or len(snapshot_intervals) > 1 else
                        [arms[0], *control_arms,
                         next((arm for arm in candidates if arm[2] == 32), candidates[-1])])
-    suite = {"schema": 4 if snapshot_aware or args.prior_snapshot_interval_entries else 3,
+    suite = {"schema": 5,
         "kind": args.suite_kind, "arms": arms, "rates": rates, "runs": args.runs,
         "order": "cyclic arm rotation by repetition; all cases sequential on one host",
         "diagnostics": "separate cases after timing runs; never pooled",
@@ -326,7 +335,8 @@ def main() -> None:
         "candidate_durable_completion_priority": args.candidate_durable_completion_priority,
         "prior_snapshot_interval_entries": args.prior_snapshot_interval_entries,
         "candidate_snapshot_interval_entries": snapshot_intervals,
-        "data_root": str(data), "machine_qualification": machine_qualification}
+        "data_root": str(data), "machine_qualification": machine_qualification,
+        "benchmark_repository": benchmark_repository}
     plan = execution_plan(suite)
     suite["execution_plan"] = plan
     write_json(output / "suite.json", suite)

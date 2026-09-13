@@ -82,6 +82,7 @@ zero added loopback delay:
 ```sh
 ./raft-bench capacity \
   --rafter-sha <exact-40-character-sha> \
+  --benchmark-sha <exact-benchmark-commit> \
   --data-root /path/to/benchmark-disk \
   --output results/capacity-<sha>
 ```
@@ -128,6 +129,7 @@ without editing the suite after observing results:
 ```sh
 ./raft-bench reclamation-load \
   --rafter-sha <exact-40-character-sha> \
+  --benchmark-sha <exact-benchmark-commit> \
   --data-root /path/to/benchmark-disk \
   --output results/reclamation-load-<sha>
 ```
@@ -258,6 +260,7 @@ suite or choosing thresholds after measurement:
 ```sh
 ./raft-bench pipeline-thresholds \
   --rafter-sha <exact-40-character-sha> \
+  --benchmark-sha <exact-benchmark-commit> \
   --data-root /path/to/benchmark-disk \
   --output results/pipeline-thresholds-<sha>
 ```

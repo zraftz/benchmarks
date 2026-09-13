@@ -29,14 +29,23 @@ def exact_rafter_sha(options) -> str:
     return sha
 
 
+def exact_benchmark_sha(options) -> str:
+    sha = options.benchmark_sha.lower()
+    if len(sha) != 40 or any(character not in "0123456789abcdef" for character in sha):
+        raise ValueError("--benchmark-sha must be an exact 40-character hexadecimal commit")
+    return sha
+
+
 def capacity_command(options) -> list[str]:
     sha = exact_rafter_sha(options)
+    benchmark_sha = exact_benchmark_sha(options)
     return [
         sys.executable,
         "-m",
         "benchctl.paired",
         "--prior", sha,
         "--candidate", sha,
+        "--benchmark-sha", benchmark_sha,
         "--prior-hard-state", "wal",
         "--candidate-hard-state", "wal",
         "--prior-mode", "pipeline",
@@ -61,12 +70,14 @@ def capacity_command(options) -> list[str]:
 
 def pipeline_threshold_command(options) -> list[str]:
     sha = exact_rafter_sha(options)
+    benchmark_sha = exact_benchmark_sha(options)
     return [
         sys.executable,
         "-m",
         "benchctl.paired",
         "--prior", sha,
         "--candidate", sha,
+        "--benchmark-sha", benchmark_sha,
         "--prior-hard-state", "wal",
         "--candidate-hard-state", "wal",
         "--prior-mode", "pipeline",
@@ -92,12 +103,14 @@ def pipeline_threshold_command(options) -> list[str]:
 
 def reclamation_load_command(options) -> list[str]:
     sha = exact_rafter_sha(options)
+    benchmark_sha = exact_benchmark_sha(options)
     return [
         sys.executable,
         "-m",
         "benchctl.paired",
         "--prior", sha,
         "--candidate", sha,
+        "--benchmark-sha", benchmark_sha,
         "--prior-hard-state", "wal",
         "--candidate-hard-state", "wal",
         "--prior-mode", "pipeline",
@@ -265,6 +278,7 @@ def main() -> None:
         help="run the predeclared same-SHA fixed-machine service capacity curve",
     )
     p.add_argument("--rafter-sha", required=True)
+    p.add_argument("--benchmark-sha", required=True)
     p.add_argument("--data-root", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--rates", default=CAPACITY_RATES)
@@ -274,6 +288,7 @@ def main() -> None:
         help="sweep predeclared speculative limits on one exact Rafter SHA",
     )
     p.add_argument("--rafter-sha", required=True)
+    p.add_argument("--benchmark-sha", required=True)
     p.add_argument("--data-root", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--rates", default=PIPELINE_THRESHOLD_RATES)
@@ -283,6 +298,7 @@ def main() -> None:
         help="compare live WAL reclamation intervals against the same-code no-snapshot control",
     )
     p.add_argument("--rafter-sha", required=True)
+    p.add_argument("--benchmark-sha", required=True)
     p.add_argument("--data-root", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--rates", default=RECLAMATION_LOAD_RATES)

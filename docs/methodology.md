@@ -165,6 +165,12 @@ durable report excludes failed cases from aggregates; always inspect errors,
 unknowns, and unsent work alongside speed. Checksums detect artifact changes;
 they are not signatures.
 
+Fixed-machine commands additionally require the exact benchmark repository
+commit. Before creating an output directory, the runner verifies that `HEAD`
+matches it and refuses tracked or untracked changes. The suite manifest retains
+that clean repository identity; the selected Rafter revision and source digest
+remain separate because dependency selection is part of the run setup.
+
 Durable cases also sample Linux PSI, CPU and cgroup throttling counters, load,
 per-process I/O, filesystem capacity, and raw `/proc/diskstats` block-device
 latency/utilization counters during the measured load. These cumulative counters

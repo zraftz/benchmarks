@@ -136,9 +136,50 @@ class PairedTests(unittest.TestCase):
                 _execution_plan_errors(root, suite),
             )
             self.assertEqual(
-                _execution_plan_errors(root, {"schema": 5}),
+                _execution_plan_errors(root, {"schema": 6}),
                 ["unsupported durable suite schema"],
             )
+
+    def test_schema_five_replays_clean_benchmark_repository_identity(self):
+        commit = "a" * 40
+        suite = {
+            "schema": 5,
+            "arms": [["candidate", "rafter", 32, "candidate", 1, False, 8]],
+            "rates": [1000],
+            "runs": 3,
+            "network_delays_ms": [0],
+            "diagnostic_arms": ["candidate"],
+            "diagnostic_rates": [1000],
+            "prior_mode": "pipeline",
+            "candidate_mode": "pipeline",
+            "prior_durable_completion_priority": False,
+            "candidate_durable_completion_priority": True,
+            "benchmark_repository": {"commit": commit, "status": "clean"},
+        }
+        suite["execution_plan"] = execution_plan(suite)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for item in suite["execution_plan"]:
+                case = root / item["name"]
+                case.mkdir()
+                (case / "manifest.json").write_text(json.dumps({
+                    "implementation": item["implementation"],
+                    "scenario": "durable-kv",
+                    "smoke": False,
+                    "options": item["options"],
+                    "host": {"git": {"returncode": 0, "stdout": commit}},
+                }))
+            self.assertEqual(_execution_plan_errors(root, suite), [])
+            suite["benchmark_repository"]["status"] = "dirty"
+            self.assertIn(
+                "benchmark repository identity is not an exact clean commit",
+                _execution_plan_errors(root, suite),
+            )
+            suite["benchmark_repository"] = {"commit": "b" * 40, "status": "clean"}
+            self.assertTrue(any(
+                error.startswith("case benchmark repository differs from suite:")
+                for error in _execution_plan_errors(root, suite)
+            ))
 
     def test_archive_preserves_independent_receipt_and_rejects_changed_binary(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -21,6 +21,7 @@ class CapacityCommandTests(unittest.TestCase):
     def options(self, sha="a" * 40):
         return SimpleNamespace(
             rafter_sha=sha,
+            benchmark_sha="b" * 40,
             data_root=Path("/benchmark-data"),
             output=Path("/evidence/capacity"),
             rates=CAPACITY_RATES,
@@ -32,6 +33,7 @@ class CapacityCommandTests(unittest.TestCase):
         self.assertEqual(command[:3], [sys.executable, "-m", "benchctl.paired"])
         self.assertEqual(command[command.index("--prior") + 1], "a" * 40)
         self.assertEqual(command[command.index("--candidate") + 1], "a" * 40)
+        self.assertEqual(command[command.index("--benchmark-sha") + 1], "b" * 40)
         self.assertEqual(command[command.index("--rates") + 1], CAPACITY_RATES)
         self.assertEqual(int(command[command.index("--runs") + 1]), CAPACITY_RUNS)
         self.assertIn("--candidate-durable-completion-priority", command)
@@ -46,6 +48,14 @@ class CapacityCommandTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "exact 40-character"):
                     capacity_command(self.options(value))
+
+    def test_capacity_refuses_a_moving_benchmark_ref(self):
+        for value in ("main", "abc123", "g" * 40):
+            with self.subTest(value=value):
+                options = self.options()
+                options.benchmark_sha = value
+                with self.assertRaisesRegex(ValueError, "--benchmark-sha must be an exact"):
+                    capacity_command(options)
 
     def test_threshold_sweep_changes_only_the_speculative_limit(self):
         options = self.options()
