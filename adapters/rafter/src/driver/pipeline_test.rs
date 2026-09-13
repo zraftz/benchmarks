@@ -189,7 +189,7 @@ fn combined_ack_and_proposal_share_one_synchronous_wal_step(peer_first: bool) {
     let outputs = pipeline.step(inputs).unwrap();
 
     assert!(pipeline.node.ready_node().is_some());
-    assert!(pipeline.node.pending_operation().is_none());
+    assert!(!pipeline.node.persistence_pending());
     assert_eq!(pipeline.node.progress().durable, LogIndex(3));
     assert_eq!(pipeline.node.progress().committed, LogIndex(2));
     assert!(outputs
@@ -233,7 +233,7 @@ fn ready_multi_proposal_batch_uses_synchronous_group_commit() {
     let mut pipeline = Pipeline::new(leader, true, 1).unwrap();
     let outputs = pipeline.step(vec![proposal_at(1), proposal_at(2)]).unwrap();
     assert!(pipeline.node.ready_node().is_some());
-    assert!(pipeline.node.pending_operation().is_none());
+    assert!(!pipeline.node.persistence_pending());
     assert_eq!(pipeline.node.progress().accepted, LogIndex(3));
     assert_eq!(pipeline.node.progress().durable, LogIndex(3));
     assert!(outputs
@@ -256,7 +256,7 @@ fn configured_multi_proposal_batch_uses_one_speculative_operation() {
     let mut pipeline = Pipeline::new(leader, true, 2).unwrap();
     let outputs = pipeline.step(vec![proposal_at(1), proposal_at(2)]).unwrap();
     assert!(pipeline.node.ready_node().is_none());
-    assert!(pipeline.node.pending_operation().is_some());
+    assert!(pipeline.node.persistence_pending());
     assert!(outputs
         .iter()
         .any(|output| matches!(output, Output::Send { .. })));
@@ -275,7 +275,7 @@ fn shutdown_joins_outstanding_native_persistence_without_publishing_a_commit() {
     let (leader, follower) = elected(&directory.0);
     let mut pipeline = Pipeline::new(leader, false, 1).unwrap();
     pipeline.step(proposal()).unwrap();
-    assert!(pipeline.node.pending_operation().is_some());
+    assert!(pipeline.node.persistence_pending());
     // Drop joins the single worker; its unconsumed completion cannot release outputs.
     drop(pipeline);
     drop(follower);

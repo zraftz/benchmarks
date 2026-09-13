@@ -3,13 +3,12 @@ use crate::storage;
 use anyhow::{anyhow, bail, Result};
 use rafter::{ClientProposalInput, Input, NodeId, Output, Role, Term};
 use rafter_runtime::pipelined::{
-    PersistenceWorkerOptions, PersistenceWorkerTelemetry, PreparedProposals,
+    PersistenceWorkerOptions, PersistenceWorkerTelemetry, ThreadedPersistenceDisposition,
 };
 use std::collections::BTreeMap;
 
 pub struct Pipeline {
     pub node: storage::Pipeline,
-    worker: storage::PipelineWorker,
     pub term: Term,
     pub role: Role,
     pub leader: Option<NodeId>,
@@ -42,10 +41,11 @@ impl Pipeline {
             term: node.current_term(),
             role: node.role(),
             leader: node.leader_hint(),
-            node: storage::Pipeline::new(node),
-            worker: storage::PipelineWorker::start(
+            node: storage::Pipeline::start(
+                node,
                 PersistenceWorkerOptions::new().with_storage_telemetry(diagnostics),
-            )?,
+            )
+            .map_err(|error| anyhow!("{error}"))?,
             counters: Vec::new(),
             submitted: 0,
             completed: 0,
@@ -94,22 +94,18 @@ impl Pipeline {
                     }
                 })
                 .collect();
-            match self.node.prepare_proposals(proposals)? {
-                PreparedProposals::Durable(outputs) => outputs,
-                PreparedProposals::Pending { replication, work } => {
-                    self.worker.try_submit(work).map_err(|error| {
-                        anyhow!("persistence worker request queue unavailable: {error}")
-                    })?;
-                    self.submitted += 1;
-                    self.speculative_proposal_batches =
-                        self.speculative_proposal_batches.saturating_add(1);
-                    self.speculative_proposals = self
-                        .speculative_proposals
-                        .saturating_add(proposal_count as u64);
-                    replication
-                }
-                _ => bail!("unsupported persistence preparation result"),
+            let prepared = self.node.step_proposal_batch(proposals)?;
+            let disposition = prepared.persistence();
+            let outputs = prepared.into_outputs();
+            if disposition == ThreadedPersistenceDisposition::Pending {
+                self.submitted += 1;
+                self.speculative_proposal_batches =
+                    self.speculative_proposal_batches.saturating_add(1);
+                self.speculative_proposals = self
+                    .speculative_proposals
+                    .saturating_add(proposal_count as u64);
             }
+            outputs
         } else {
             let outputs = self.node.step_batch(inputs)?;
             if proposal_count != 0 {
@@ -142,12 +138,14 @@ impl Pipeline {
         Ok(outputs)
     }
     pub fn complete(&mut self) -> Result<Option<Vec<Output>>> {
-        if self.node.pending_operation().is_none() {
+        if !self.node.persistence_pending() {
             return Ok(None);
         }
-        let (completion, counters) = self.worker.complete()?.into_parts();
-        // The runtime checks generation and operation before restoring consensus ownership.
-        let outputs = self.node.complete(completion)?;
+        let (outputs, counters) = self
+            .node
+            .complete()?
+            .expect("pending pipeline must return one completion")
+            .into_parts();
         self.counters = counters;
         self.completed += 1;
         self.refresh();

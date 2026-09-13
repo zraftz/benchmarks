@@ -83,7 +83,7 @@ impl Driver {
         match self {
             Self::Direct(_) => false,
             #[cfg(feature = "pipelined-durability")]
-            Self::Pipeline(state) => state.node.pending_operation().is_some(),
+            Self::Pipeline(state) => state.node.persistence_pending(),
         }
     }
     pub fn complete(&mut self) -> Result<Option<Vec<Output>>> {
