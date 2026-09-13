@@ -4,7 +4,9 @@ import sys
 import unittest
 
 from benchctl.cli import (
+    CAPACITY_RUNS,
     CAPACITY_RATES,
+    PIPELINE_THRESHOLD_RUNS,
     PIPELINE_THRESHOLD_RATES,
     capacity_command,
     pipeline_threshold_command,
@@ -27,6 +29,7 @@ class CapacityCommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--prior") + 1], "a" * 40)
         self.assertEqual(command[command.index("--candidate") + 1], "a" * 40)
         self.assertEqual(command[command.index("--rates") + 1], CAPACITY_RATES)
+        self.assertEqual(int(command[command.index("--runs") + 1]), CAPACITY_RUNS)
         self.assertIn("--candidate-durable-completion-priority", command)
         self.assertIn("--qualify-machine", command)
         self.assertEqual(command[command.index("--network-delays-ms") + 1], "0")
@@ -57,6 +60,9 @@ class CapacityCommandTests(unittest.TestCase):
         self.assertIn("--prior-durable-completion-priority", command)
         self.assertIn("--candidate-durable-completion-priority", command)
         self.assertEqual(command[command.index("--rates") + 1], "0,1000")
+        self.assertEqual(
+            int(command[command.index("--runs") + 1]), PIPELINE_THRESHOLD_RUNS
+        )
         self.assertEqual(command[command.index("--diagnostic-rates") + 1], "0,1000")
         self.assertEqual(command[command.index("--network-delays-ms") + 1], "0")
         self.assertIn("--qualify-machine", command)

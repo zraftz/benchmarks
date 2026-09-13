@@ -87,9 +87,11 @@ zero added loopback delay:
 ```
 
 The default rates are `1000,2000,3000,4000,6000,8000,10000,12000`; only
-1,000/s gets the separate diagnostic pass. A failed machine profile is retained
-with the aborted suite and cannot be overridden by this command. Use a new
-output directory after correcting the host condition.
+1,000/s gets the separate diagnostic pass. Four timing repetitions use a full
+cyclic arm rotation, so each of the four implementations occupies every
+execution position once at each rate. A failed machine profile is retained with
+the aborted suite and cannot be overridden by this command. Use a new output
+directory after correcting the host condition.
 
 ```sh
 ./raft-bench microbench --runs 7
@@ -217,7 +219,9 @@ This holds the exact Rafter source, WAL, peer batch cap, append window,
 completion-priority policy, topology, and network delay constant while testing
 limits `1/2/4/8` at saturation and 1,000 writes/s. The prior arm is the same
 exact SHA at limit 1, and diagnostics retain proposal geometry and pipeline
-activity for every threshold. Machine qualification runs before timing.
+activity for every threshold. Six timing repetitions use a full cyclic arm
+rotation, so each of the six implementations occupies every execution position
+once at each rate. Machine qualification runs before timing.
 
 ## Development
 

@@ -15,6 +15,8 @@ from .build import IMPLEMENTATIONS, PUBLIC_APPLICATION_WORKER, build
 
 CAPACITY_RATES = "1000,2000,3000,4000,6000,8000,10000,12000"
 PIPELINE_THRESHOLD_RATES = "0,1000"
+CAPACITY_RUNS = 4
+PIPELINE_THRESHOLD_RUNS = 6
 
 
 def exact_rafter_sha(options) -> str:
@@ -43,6 +45,7 @@ def capacity_command(options) -> list[str]:
         "--prior-max-inflight-appends", "8",
         "--candidate-max-inflight-appends", "8",
         "--candidate-durable-completion-priority",
+        "--runs", str(CAPACITY_RUNS),
         "--rates", options.rates,
         "--diagnostic-rates", options.diagnostic_rates,
         "--network-delays-ms", "0",
@@ -73,6 +76,7 @@ def pipeline_threshold_command(options) -> list[str]:
         "--candidate-max-inflight-appends", "8",
         "--prior-durable-completion-priority",
         "--candidate-durable-completion-priority",
+        "--runs", str(PIPELINE_THRESHOLD_RUNS),
         "--rates", options.rates,
         "--diagnostic-rates", options.diagnostic_rates,
         "--network-delays-ms", "0",

@@ -14,9 +14,12 @@ from benchctl.results import _expected_durable_cases
 class PairedTests(unittest.TestCase):
     def test_order_is_balanced_and_each_arm_runs_once(self):
         arms = list("abcdef")
-        orders = [ordered_arms(arms, repeat) for repeat in range(3)]
-        self.assertEqual(orders, [list("abcdef"), list("afedcb"), list("cdefab")])
+        orders = [ordered_arms(arms, repeat) for repeat in range(len(arms))]
+        self.assertEqual(orders[0], list("abcdef"))
+        self.assertEqual(orders[1], list("bcdefa"))
         self.assertTrue(all(sorted(order) == arms for order in orders))
+        for arm in arms:
+            self.assertEqual(sorted(order.index(arm) for order in orders), list(range(len(arms))))
 
     def test_archive_preserves_independent_receipt_and_rejects_changed_binary(self):
         with tempfile.TemporaryDirectory() as temp:

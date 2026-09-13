@@ -92,8 +92,7 @@ def archive_build(destination: Path) -> dict:
 
 
 def ordered_arms(arms: list, repeat: int) -> list:
-    rotated = arms[repeat % len(arms):] + arms[:repeat % len(arms)]
-    return rotated if repeat % 2 == 0 else list(reversed(rotated))
+    return arms[repeat % len(arms):] + arms[:repeat % len(arms)]
 
 
 def combined_activation_failures(output: Path, arms: list[tuple]) -> list[dict]:
@@ -129,6 +128,7 @@ def main() -> None:
     parser.add_argument("--candidate-durable-completion-priority", action="store_true")
     parser.add_argument("--rates", default="0,100,1000")
     parser.add_argument("--diagnostic-rates", help="defaults to all timing rates")
+    parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--openraft-controls", default="synchronous",
                         help="comma-separated OpenRaft controls: synchronous,async")
     parser.add_argument("--output", type=Path, required=True)
@@ -139,6 +139,8 @@ def main() -> None:
         help="after builds, require a fresh passing idle/storage profile before timing",
     )
     args = parser.parse_args()
+    if not 3 <= args.runs <= 10:
+        raise ValueError("paired evidence requires 3..10 repetitions")
     caps = [int(value) for value in args.peer_batch_sizes.split(",")]
     if not caps or len(set(caps)) != len(caps) or any(cap < 1 or cap > 64 for cap in caps):
         raise ValueError("distinct peer batch sizes in 1..64 are required")
@@ -229,8 +231,8 @@ def main() -> None:
     diagnostic_arms = (arms if len(thresholds) > 1 or len(windows) > 1 else
                        [arms[0], *control_arms,
                         next((arm for arm in candidates if arm[2] == 32), candidates[-1])])
-    write_json(output / "suite.json", {"schema": 2, "arms": arms, "rates": rates, "runs": 3,
-        "order": "rotate and reverse arms by repetition; all cases sequential on one host",
+    write_json(output / "suite.json", {"schema": 2, "arms": arms, "rates": rates, "runs": args.runs,
+        "order": "cyclic arm rotation by repetition; all cases sequential on one host",
         "diagnostics": "separate cases after timing runs; never pooled",
         "diagnostic_arms": [arm[0] for arm in diagnostic_arms], "diagnostic_rates": diagnostic_rates,
         "network_delays_ms": delays, "prior_mode": args.prior_mode, "candidate_mode": args.candidate_mode,
@@ -251,7 +253,7 @@ def main() -> None:
         with loopback_delay(delay) as network:
             write_json(output / f"network-{delay}ms.json", network)
             for diagnostic in (False, True):
-                for repeat in range(1 if diagnostic else 3):
+                for repeat in range(1 if diagnostic else args.runs):
                     for rate in diagnostic_rates if diagnostic else rates:
                         for arm_label, engine, cap, binary_set, threshold, combine, window in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
                             ordinal += 1
