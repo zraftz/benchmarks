@@ -313,7 +313,10 @@ jobs:
           fi
           if [[ -d results/paired ]]; then args+=(--headline-control-variant "$HEADLINE_OPENRAFT_CONTROL"); fi
           if [[ -d results/paired && -n "$HEADLINE_RAFTER_VARIANT" ]]; then args+=(--headline-variant "$HEADLINE_RAFTER_VARIANT"); fi
-          if (( ${#args[@]} > 0 )); then ./raft-bench summary "${args[@]}" --output results/summary; fi
+          if (( ${#args[@]} > 0 )); then
+            ./raft-bench summary "${args[@]}" --output results/summary
+            cat results/summary/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Retain reports and evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

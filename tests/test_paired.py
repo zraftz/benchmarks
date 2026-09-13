@@ -34,6 +34,14 @@ class PairedTests(unittest.TestCase):
         self.assertIn("inputs.suite == 'microbench'", workflow)
         self.assertNotIn("--qualify-machine", workflow)
 
+    def test_hosted_layered_report_is_published_to_the_run_summary(self):
+        workflow = (
+            Path(__file__).parents[1] / ".github/workflows/baseline.yml"
+        ).read_text()
+        self.assertIn(
+            'cat results/summary/summary.md >> "$GITHUB_STEP_SUMMARY"', workflow
+        )
+
     def test_build_preparation_restores_selection_after_failure(self):
         args = SimpleNamespace(
             prior="a" * 40,
