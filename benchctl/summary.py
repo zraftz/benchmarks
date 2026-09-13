@@ -537,6 +537,7 @@ def _service_section(durable: dict | None, headline_variant: str | None,
             "scope": "no durable-service evidence selected",
         },
         "source_cases": [],
+        "benchmark_repository": None,
         "comparison_kind": "competitor comparison",
         "verdicts": {
             "evidence_integrity": dict(not_measured_verdict),
@@ -548,6 +549,9 @@ def _service_section(durable: dict | None, headline_variant: str | None,
     }
     if durable is None:
         return section
+    section["benchmark_repository"] = durable.get("suite", {}).get(
+        "benchmark_repository"
+    )
     section["measured_load_context"] = _measured_load_context(durable)
     recorded_verdicts = durable.get("verdicts", {})
     for name in ("evidence_integrity", "correctness_checks", "feature_coverage",
@@ -1036,6 +1040,12 @@ def render_markdown(summary: dict, evidence: dict) -> str:
         section = sections[section_id]
         lines += [f"## {section['title']}", "", f"*{section['question']}*", "", f"**{section['result']}**", ""]
         if section_id == "complete-durable-service":
+            repository = section.get("benchmark_repository")
+            if repository:
+                lines += [
+                    f"Benchmark source: `{repository['commit']}` ({repository['status']} at preflight).",
+                    "",
+                ]
             labels = {
                 "evidence_integrity": "Evidence integrity",
                 "correctness_checks": "Correctness checks",
@@ -1206,6 +1216,13 @@ def render_html(summary: dict, evidence: dict) -> str:
         content = [f"<p class='question'>{html.escape(section['question'])}</p>",
                    f"<p class='result'>{html.escape(section['result'])}</p>"]
         if section_id == "complete-durable-service":
+            repository = section.get("benchmark_repository")
+            if repository:
+                content.append(
+                    "<p class='conditions'>Benchmark source: "
+                    f"<code>{html.escape(repository['commit'])}</code> "
+                    f"({html.escape(repository['status'])} at preflight).</p>"
+                )
             labels = {
                 "evidence_integrity": "Evidence integrity",
                 "correctness_checks": "Correctness checks",

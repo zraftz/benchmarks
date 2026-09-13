@@ -529,6 +529,10 @@ class SummaryTests(unittest.TestCase):
 
     def test_capacity_curve_separates_coverage_from_service_failure(self):
         data = durable_data()
+        data["suite"]["benchmark_repository"] = {
+            "commit": "b" * 40,
+            "status": "clean",
+        }
         data["cases"] = [
             service_case("candidate-b32", "rafter", 0, 1000, 940, 247, p999=705, unsent=60),
             service_case("openraft", "openraft", 0, 1000, 900, 300, p999=800, unsent=100),
@@ -558,6 +562,11 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(section["verdicts"]["service_objective"]["status"], "failed")
         self.assertTrue(section["capacity"]["rows"])
         rendered = render_markdown(build_summary(durable=data), {})
+        self.assertIn(f"Benchmark source: `{'b' * 40}` (clean at preflight).", rendered)
+        self.assertIn(
+            f"<code>{'b' * 40}</code> (clean at preflight)",
+            render_html(build_summary(durable=data), {}),
+        )
         self.assertIn("| Feature coverage | incomplete | bounded completion-priority", rendered)
         self.assertIn("| Service objective | failed |", rendered)
 
