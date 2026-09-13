@@ -16,7 +16,7 @@ from .report import render
 from .runner import run_case
 from .selection import select_rafter
 from .network import loopback_delay
-from .suite_plan import MODES, execution_plan, mode_flags, ordered_arms
+from .suite_plan import MODES, execution_plan, load_window_plan, mode_flags, ordered_arms
 
 
 OPENRAFT_CONTROLS = ("synchronous", "async")
@@ -339,7 +339,15 @@ def main() -> None:
         "benchmark_repository": benchmark_repository}
     plan = execution_plan(suite)
     suite["execution_plan"] = plan
+    suite["load_window_plan"] = load_window_plan(plan)
     write_json(output / "suite.json", suite)
+    planned = suite["load_window_plan"]
+    print(
+        f"Plan: {planned['cases']} cases; "
+        f"{planned['declared_load_window_seconds'] / 60:.1f} declared load-window minutes "
+        "plus qualification, recovery, build, and process overhead",
+        flush=True,
+    )
     failures = []
     by_delay = {delay: [] for delay in delays}
     for planned in plan:

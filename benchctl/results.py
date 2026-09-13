@@ -11,7 +11,7 @@ from typing import Any
 
 from .evidence import CONTRACT, digest, verify
 from .feature_coverage import verdict as feature_coverage_verdict
-from .suite_plan import execution_plan
+from .suite_plan import execution_plan, load_window_plan
 
 
 def _read(path: Path) -> Any:
@@ -225,6 +225,8 @@ def _execution_plan_errors(directory: Path, suite: dict) -> list[str]:
         return [f"execution plan could not be derived: {error}"]
     if recorded != expected:
         errors.append("recorded execution plan differs from suite declaration")
+    if schema >= 5 and suite.get("load_window_plan") != load_window_plan(expected):
+        errors.append("recorded load-window plan differs from execution plan")
     benchmark_repository = suite.get("benchmark_repository")
     if schema >= 5:
         exact_commit = (

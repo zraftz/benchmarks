@@ -101,3 +101,24 @@ def execution_plan(suite: dict) -> list[dict]:
                             "options": options,
                         })
     return plan
+
+
+def load_window_plan(plan: list[dict]) -> dict:
+    """Summarize declared load windows without pretending to predict wall time."""
+    timing = sum(item["measurement_mode"] == "timing" for item in plan)
+    diagnostic = sum(item["measurement_mode"] == "diagnostic" for item in plan)
+    warmup = sum(item["options"]["warmup"] for item in plan)
+    measurement = sum(item["options"]["duration"] for item in plan)
+    return {
+        "schema": 1,
+        "cases": len(plan),
+        "timing_cases": timing,
+        "diagnostic_cases": diagnostic,
+        "warmup_seconds": warmup,
+        "measurement_seconds": measurement,
+        "declared_load_window_seconds": warmup + measurement,
+        "scope": (
+            "declared warmup and measurement windows only; excludes builds, "
+            "finite qualification histories, recovery checks, and process overhead"
+        ),
+    }

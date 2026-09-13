@@ -10,7 +10,7 @@ from benchctl.paired import (archive_build, candidate_arms, combined_activation_
 from benchctl.evidence import digest
 from benchctl.feature_coverage import verdict as feature_coverage_verdict
 from benchctl.results import _execution_plan_errors, _expected_durable_cases
-from benchctl.suite_plan import execution_plan
+from benchctl.suite_plan import execution_plan, load_window_plan
 
 
 class PairedTests(unittest.TestCase):
@@ -157,6 +157,7 @@ class PairedTests(unittest.TestCase):
             "benchmark_repository": {"commit": commit, "status": "clean"},
         }
         suite["execution_plan"] = execution_plan(suite)
+        suite["load_window_plan"] = load_window_plan(suite["execution_plan"])
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             for item in suite["execution_plan"]:
@@ -175,11 +176,30 @@ class PairedTests(unittest.TestCase):
                 "benchmark repository identity is not an exact clean commit",
                 _execution_plan_errors(root, suite),
             )
+            suite["benchmark_repository"]["status"] = "clean"
+            suite["load_window_plan"]["cases"] += 1
+            self.assertIn(
+                "recorded load-window plan differs from execution plan",
+                _execution_plan_errors(root, suite),
+            )
+            suite["load_window_plan"] = load_window_plan(suite["execution_plan"])
             suite["benchmark_repository"] = {"commit": "b" * 40, "status": "clean"}
             self.assertTrue(any(
                 error.startswith("case benchmark repository differs from suite:")
                 for error in _execution_plan_errors(root, suite)
             ))
+
+    def test_load_window_plan_counts_declared_windows_without_overhead_claim(self):
+        plan = [
+            {"measurement_mode": "timing", "options": {"warmup": 10, "duration": 60}},
+            {"measurement_mode": "diagnostic", "options": {"warmup": 10, "duration": 60}},
+        ]
+        summary = load_window_plan(plan)
+        self.assertEqual(summary["cases"], 2)
+        self.assertEqual(summary["timing_cases"], 1)
+        self.assertEqual(summary["diagnostic_cases"], 1)
+        self.assertEqual(summary["declared_load_window_seconds"], 140)
+        self.assertIn("excludes builds", summary["scope"])
 
     def test_archive_preserves_independent_receipt_and_rejects_changed_binary(self):
         with tempfile.TemporaryDirectory() as temp:

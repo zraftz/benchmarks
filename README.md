@@ -92,9 +92,11 @@ The default rates are `1000,2000,3000,4000,6000,8000,10000,12000`; only
 cyclic arm rotation, so each of the four implementations occupies every
 execution position once at each rate. The suite records the exact case sequence,
 arm position, seed, rate, mode, and workload options before timing; report
-generation replays every case against that plan. A failed machine profile is
-retained with the aborted suite and cannot be overridden by this command. Use a
-new output directory after correcting the host condition.
+generation replays every case against that plan. The default is 132 cases and
+154 declared warmup/measurement minutes; builds, finite qualification histories,
+recovery checks, and process overhead are outside that estimate. A failed
+machine profile is retained with the aborted suite and cannot be overridden by
+this command. Use a new output directory after correcting the host condition.
 
 ```sh
 ./raft-bench microbench --runs 7
@@ -137,8 +139,10 @@ without editing the suite after observing results:
 This is a same-binary Rafter comparison: reclamation disabled versus checkpoint
 intervals of 10,000 and 100,000 applied entries, at 3,000 writes/s and
 saturation. Three repetitions rotate the three arms through every execution
-position. The command first requires a fresh fixed-machine profile, then emits
-`reclamation-under-load.json` and a concise Markdown report. It fails unless
+position. The default is 24 cases and 28 declared warmup/measurement minutes,
+excluding qualification and process overhead. The command first requires a
+fresh fixed-machine profile, then emits `reclamation-under-load.json` and a
+concise Markdown report. It fails unless
 every snapshot arm compacts during every measured interval, preserves complete
 request accounting, stays within the predeclared throughput/tail budgets, and
 uses fewer post-load allocated managed Raft bytes than its same-seed
@@ -271,7 +275,9 @@ limits `1/2/4/8` at saturation and 1,000 writes/s. The prior arm is the same
 exact SHA at limit 1, and diagnostics retain proposal geometry and pipeline
 activity for every threshold. Six timing repetitions use a full cyclic arm
 rotation, so each of the six implementations occupies every execution position
-once at each rate. Machine qualification runs before timing.
+once at each rate. The default is 84 cases and 98 declared warmup/measurement
+minutes, excluding qualification and process overhead. Machine qualification
+runs before timing.
 
 ## Development
 
