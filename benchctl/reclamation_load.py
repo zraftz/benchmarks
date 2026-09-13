@@ -53,10 +53,62 @@ def _allocated(case: dict, category: str, checkpoint: str = "after_measurement")
     return _category_value(case, checkpoint, category, "allocated_bytes")
 
 
+def _legacy_wal_allocated(case: dict, checkpoint: str = "after_measurement") -> int:
+    """Count the initial RFWB generation stored at the legacy pathname.
+
+    Before its first reclamation, the combined WAL deliberately occupies
+    ``raft/hard-state``. The generic footprint receipt classifies that
+    backend-neutral pathname as ``other``; this assessment knows the selected
+    backend is WAL and must include the file in the no-reclamation control.
+    """
+    if case.get("configuration", {}).get("hard_state") != "wal":
+        return 0
+    try:
+        nodes = case["storage_footprint"]["snapshots"][checkpoint]["nodes"]
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"missing {checkpoint} storage node inventory") from error
+    if not isinstance(nodes, dict) or set(nodes) != {"1", "2", "3"}:
+        raise ValueError(f"invalid {checkpoint} storage node inventory")
+    allocated = 0
+    for node, observed in nodes.items():
+        try:
+            files = observed["files"]
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"missing {checkpoint} storage files for node {node}") from error
+        if not isinstance(files, list):
+            raise ValueError(f"invalid {checkpoint} storage files for node {node}")
+        matches = [
+            item
+            for item in files
+            if isinstance(item, dict)
+            and item.get("path") == f"node-{node}/raft/hard-state"
+        ]
+        if len(matches) > 1:
+            raise ValueError(f"duplicate {checkpoint} initial WAL for node {node}")
+        if matches:
+            item = matches[0]
+            value = item.get("allocated_bytes")
+            category = item.get("category")
+            if type(value) is not int or value < 0:
+                raise ValueError(f"invalid {checkpoint} initial WAL allocation for node {node}")
+            # A future footprint schema may classify this path directly. Avoid
+            # counting it twice when that happens.
+            if category != "raft_wal_data":
+                allocated += value
+    return allocated
+
+
+def _wal_allocated(case: dict, checkpoint: str = "after_measurement") -> int:
+    return _allocated(case, "raft_wal_data", checkpoint) + _legacy_wal_allocated(
+        case, checkpoint
+    )
+
+
 def _managed_raft_allocated(case: dict, checkpoint: str = "after_measurement") -> int:
-    return sum(
+    categorized = sum(
         _allocated(case, category, checkpoint) for category in MANAGED_RAFT_CATEGORIES
     )
+    return categorized + _legacy_wal_allocated(case, checkpoint)
 
 
 def _final_snapshot_artifacts(case: dict) -> dict[str, dict[str, int]]:
@@ -241,8 +293,8 @@ def assess(data: dict) -> dict[str, Any]:
                         f"{variant} at {rate}/s repetition {repetition}: {error}"
                     )
                 try:
-                    control_wal = _allocated(control, "raft_wal_data")
-                    candidate_wal = _allocated(candidate, "raft_wal_data")
+                    control_wal = _wal_allocated(control)
+                    candidate_wal = _wal_allocated(candidate)
                     control_snapshot = _allocated(control, "raft_snapshot_data")
                     candidate_snapshot = _allocated(candidate, "raft_snapshot_data")
                     control_managed = _managed_raft_allocated(control)
@@ -318,21 +370,26 @@ def assess(data: dict) -> dict[str, Any]:
                         f"{variant} at {rate}/s repetition {repetition}: {error}"
                     )
 
+                control_metrics = control.get("metrics") or {}
+                candidate_metrics = candidate.get("metrics") or {}
+                comparable_metrics = all(
+                    type(metrics.get(name)) in (int, float)
+                    for metrics in (control_metrics, candidate_metrics)
+                    for name in ("throughput_ops_s", "client_p99_ms", "client_p999_ms")
+                )
                 throughput_ratio = (
-                    candidate["metrics"]["throughput_ops_s"]
-                    / control["metrics"]["throughput_ops_s"]
-                    if not pair_failures and control["metrics"]["throughput_ops_s"] > 0
+                    candidate_metrics["throughput_ops_s"]
+                    / control_metrics["throughput_ops_s"]
+                    if comparable_metrics and control_metrics["throughput_ops_s"] > 0
                     else 0.0
                 )
                 p99_regression = (
-                    candidate["metrics"]["client_p99_ms"]
-                    - control["metrics"]["client_p99_ms"]
-                    if not pair_failures else 0.0
+                    candidate_metrics["client_p99_ms"] - control_metrics["client_p99_ms"]
+                    if comparable_metrics else 0.0
                 )
                 p999_regression = (
-                    candidate["metrics"]["client_p999_ms"]
-                    - control["metrics"]["client_p999_ms"]
-                    if not pair_failures else 0.0
+                    candidate_metrics["client_p999_ms"] - control_metrics["client_p999_ms"]
+                    if comparable_metrics else 0.0
                 )
                 if rate == 0 and not pair_failures and (
                     throughput_ratio < OBJECTIVE["minimum_saturated_throughput_ratio"]
@@ -363,8 +420,6 @@ def assess(data: dict) -> dict[str, Any]:
                     f"{variant} at {rate}/s repetition {repetition}: {failure}"
                     for failure in pair_failures
                 )
-                candidate_metrics = candidate.get("metrics") or {}
-                control_metrics = control.get("metrics") or {}
                 paired.append({
                     "repetition": repetition,
                     "throughput_ratio": throughput_ratio,

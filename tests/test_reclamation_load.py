@@ -4,7 +4,13 @@ import unittest
 from benchctl.reclamation_load import assess, markdown
 
 
-def footprint(raft_bytes: int, application_bytes: int, *, candidate: bool) -> dict:
+def footprint(
+    raft_bytes: int,
+    application_bytes: int,
+    *,
+    candidate: bool,
+    legacy_wal_bytes: int = 0,
+) -> dict:
     categories = {
         "raft_wal_data": {"allocated_bytes": raft_bytes},
         "raft_wal_metadata": {"allocated_bytes": 10},
@@ -21,6 +27,11 @@ def footprint(raft_bytes: int, application_bytes: int, *, candidate: bool) -> di
     }
     nodes = {
         str(node): {
+            "files": ([{
+                "path": f"node-{node}/raft/hard-state",
+                "category": "other",
+                "allocated_bytes": legacy_wal_bytes,
+            }] if legacy_wal_bytes else []),
             "totals": {
                 "raft_snapshot_data": {"files": 1 if candidate else 0},
                 "raft_snapshot_metadata": {"files": 1 if candidate else 0},
@@ -31,7 +42,10 @@ def footprint(raft_bytes: int, application_bytes: int, *, candidate: bool) -> di
     }
     return {
         "snapshots": {
-            "after_measurement": {"totals": categories},
+            "after_measurement": {
+                "totals": categories,
+                "nodes": copy.deepcopy(nodes),
+            },
             "after_final_restart": {
                 "totals": copy.deepcopy(categories),
                 "nodes": nodes,
@@ -46,7 +60,7 @@ def case(variant: str, rate: int, repetition: int, *, candidate: bool) -> dict:
         "smoke": False,
         "measurement_mode": "timing",
         "qualification": "passed",
-        "configuration": {"variant": variant},
+        "configuration": {"variant": variant, "hard_state": "wal"},
         "workload": {"offered_per_second": rate},
         "repetition": repetition,
         "metrics": {
@@ -137,6 +151,38 @@ class ReclamationLoadTests(unittest.TestCase):
             row["median_candidate_application_journal_allocated_bytes"] == 10_000_000
             for row in value["comparisons"]
         ))
+
+    def test_initial_wal_path_is_included_in_no_reclamation_control(self):
+        data = suite()
+        for item in data["cases"]:
+            if item["configuration"]["variant"] == "prior":
+                item["storage_footprint"] = footprint(
+                    0, 2000, candidate=False, legacy_wal_bytes=1000
+                )
+        value = assess(data)
+        self.assertEqual(value["verdicts"]["physical_reclamation"]["status"], "passed")
+        self.assertTrue(all(
+            row["median_control_managed_raft_allocated_bytes"] == 3010
+            for row in value["comparisons"]
+        ))
+
+    def test_failed_service_pair_retains_observed_metrics(self):
+        data = suite()
+        candidate = next(
+            item
+            for item in data["cases"]
+            if item["configuration"]["variant"] == "snap10k"
+            and item["workload"]["offered_per_second"] == 3000
+            and item["repetition"] == 1
+        )
+        candidate["accounting"]["not_issued"] = 1
+        value = assess(data)
+        fixed = next(
+            row for row in value["comparisons"] if row["offered_per_second"] == 3000
+        )
+        self.assertEqual(value["verdicts"]["service_objective"]["status"], "failed")
+        self.assertAlmostEqual(fixed["repetitions"][0]["throughput_ratio"], 2995 / 3000)
+        self.assertEqual(fixed["repetitions"][0]["p99_regression_ms"], 0.5)
 
     def test_accumulated_snapshot_envelopes_fail_physical_reclamation(self):
         data = suite()

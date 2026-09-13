@@ -650,10 +650,16 @@ class SummaryTests(unittest.TestCase):
             },
             "feature_coverage": {
                 "status": "incomplete",
-                "checks": [{
-                    "status": "incomplete",
-                    "detail": "bounded completion-priority lookahead was not observed in any completed case",
-                }],
+                "checks": [
+                    {
+                        "status": "incomplete",
+                        "detail": "bounded completion-priority lookahead was not observed in any completed case",
+                    },
+                    {
+                        "status": "incomplete",
+                        "detail": "bounded completion-priority lookahead was not observed in any completed case",
+                    },
+                ],
             },
         }
         section = build_summary(durable=data)["sections"][2]
@@ -670,6 +676,7 @@ class SummaryTests(unittest.TestCase):
             render_html(build_summary(durable=data), {}),
         )
         self.assertIn("| Feature coverage | incomplete | bounded completion-priority", rendered)
+        self.assertEqual(rendered.count("bounded completion-priority lookahead"), 1)
         self.assertIn("| Service objective | failed |", rendered)
 
     def test_legacy_suite_activation_failure_is_feature_coverage(self):

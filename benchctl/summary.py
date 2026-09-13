@@ -1077,7 +1077,7 @@ def _verdict_detail(verdict: dict) -> str:
         return verdict["detail"]
     checks = verdict.get("checks", [])
     if checks:
-        return "; ".join(check["detail"] for check in checks)
+        return "; ".join(dict.fromkeys(check["detail"] for check in checks))
     errors = verdict.get("errors", [])
     if errors:
         return "; ".join(str(error) for error in errors)
