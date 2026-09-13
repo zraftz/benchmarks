@@ -15,6 +15,12 @@ from benchctl.suite_plan import execution_plan, load_window_plan
 
 
 class PairedTests(unittest.TestCase):
+    def test_hosted_paired_run_binds_exact_workflow_sha(self):
+        workflow = (
+            Path(__file__).parents[1] / ".github/workflows/baseline.yml"
+        ).read_text()
+        self.assertIn('--benchmark-sha "$GITHUB_SHA"', workflow)
+
     def test_build_preparation_restores_selection_after_failure(self):
         args = SimpleNamespace(
             prior="a" * 40,
