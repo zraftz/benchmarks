@@ -8,7 +8,8 @@ from benchctl.paired import (archive_build, candidate_arms, combined_activation_
                              ordered_arms, mode_flags, qualify_machine)
 from benchctl.evidence import digest
 from benchctl.feature_coverage import verdict as feature_coverage_verdict
-from benchctl.results import _expected_durable_cases
+from benchctl.results import _execution_plan_errors, _expected_durable_cases
+from benchctl.suite_plan import execution_plan
 
 
 class PairedTests(unittest.TestCase):
@@ -20,6 +21,83 @@ class PairedTests(unittest.TestCase):
         self.assertTrue(all(sorted(order) == arms for order in orders))
         for arm in arms:
             self.assertEqual(sorted(order.index(arm) for order in orders), list(range(len(arms))))
+
+    def test_execution_plan_binds_full_position_balanced_case_options(self):
+        arms = [
+            ["prior", "rafter", 32, "prior", 1, False, 8],
+            ["openraft", "openraft", 1, "candidate", 1, False, 8],
+            ["candidate", "rafter", 32, "candidate", 4, False, 8],
+        ]
+        suite = {
+            "arms": arms,
+            "rates": [1000],
+            "runs": 3,
+            "network_delays_ms": [0],
+            "diagnostic_arms": ["candidate"],
+            "diagnostic_rates": [1000],
+            "prior_mode": "pipeline",
+            "candidate_mode": "pipeline",
+            "prior_durable_completion_priority": False,
+            "candidate_durable_completion_priority": True,
+        }
+        plan = execution_plan(suite)
+        timing = [item for item in plan if item["measurement_mode"] == "timing"]
+        self.assertEqual(len(timing), 9)
+        for arm in ("prior", "openraft", "candidate"):
+            positions = [item["arm_position"] for item in timing if item["arm"] == arm]
+            self.assertEqual(sorted(positions), [1, 2, 3])
+        candidate = next(item for item in timing if item["arm"] == "candidate")
+        self.assertEqual(candidate["options"]["rate"], 1000)
+        self.assertEqual(candidate["options"]["max_speculative_proposals"], 4)
+        self.assertTrue(candidate["options"]["durable_completion_priority"])
+        self.assertEqual(plan[-1]["measurement_mode"], "diagnostic")
+        self.assertEqual(plan[-1]["options"]["seed"], 1)
+
+    def test_execution_plan_replay_rejects_case_or_recorded_plan_drift(self):
+        suite = {
+            "schema": 3,
+            "arms": [["candidate", "rafter", 32, "candidate", 1, False, 8]],
+            "rates": [1000],
+            "runs": 3,
+            "network_delays_ms": [0],
+            "diagnostic_arms": ["candidate"],
+            "diagnostic_rates": [1000],
+            "prior_mode": "pipeline",
+            "candidate_mode": "pipeline",
+            "prior_durable_completion_priority": False,
+            "candidate_durable_completion_priority": True,
+        }
+        suite["execution_plan"] = execution_plan(suite)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for item in suite["execution_plan"]:
+                case = root / item["name"]
+                case.mkdir()
+                (case / "manifest.json").write_text(json.dumps({
+                    "implementation": item["implementation"],
+                    "scenario": "durable-kv",
+                    "smoke": False,
+                    "options": item["options"],
+                }))
+            self.assertEqual(_execution_plan_errors(root, suite), [])
+
+            changed = suite["execution_plan"][0]
+            manifest_path = root / changed["name"] / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["options"]["seed"] = 99
+            manifest_path.write_text(json.dumps(manifest))
+            self.assertIn(
+                f"case options differ from plan: {changed['name']}",
+                _execution_plan_errors(root, suite),
+            )
+
+            manifest["options"]["seed"] = changed["options"]["seed"]
+            manifest_path.write_text(json.dumps(manifest))
+            suite["execution_plan"][0]["arm_position"] = 99
+            self.assertIn(
+                "recorded execution plan differs from suite declaration",
+                _execution_plan_errors(root, suite),
+            )
 
     def test_archive_preserves_independent_receipt_and_rejects_changed_binary(self):
         with tempfile.TemporaryDirectory() as temp:

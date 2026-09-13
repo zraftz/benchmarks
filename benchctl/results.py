@@ -11,6 +11,7 @@ from typing import Any
 
 from .evidence import CONTRACT, digest, verify
 from .feature_coverage import verdict as feature_coverage_verdict
+from .suite_plan import execution_plan
 
 
 def _read(path: Path) -> Any:
@@ -198,6 +199,33 @@ def _expected_durable_cases(suite: dict) -> int:
     return len(suite["implementations"]) * len(suite["rates"]) * suite["runs"]
 
 
+def _execution_plan_errors(directory: Path, suite: dict) -> list[str]:
+    recorded = suite.get("execution_plan")
+    if suite.get("schema", 1) < 3:
+        return ["unexpected execution plan on legacy suite"] if recorded is not None else []
+    errors = []
+    try:
+        expected = execution_plan(suite)
+    except (KeyError, TypeError, ValueError) as error:
+        return [f"execution plan could not be derived: {error}"]
+    if recorded != expected:
+        errors.append("recorded execution plan differs from suite declaration")
+    manifests = {path.parent.name: path for path in directory.glob("*/manifest.json")}
+    expected_names = {item["name"] for item in expected}
+    if set(manifests) != expected_names:
+        errors.append("primary case inventory differs from execution plan")
+        return errors
+    for item in expected:
+        manifest = _read(manifests[item["name"]])
+        if manifest.get("implementation") != item["implementation"]:
+            errors.append(f"case implementation differs from plan: {item['name']}")
+        if manifest.get("scenario") != "durable-kv" or manifest.get("smoke") is not False:
+            errors.append(f"case classification differs from plan: {item['name']}")
+        if manifest.get("options") != item["options"]:
+            errors.append(f"case options differ from plan: {item['name']}")
+    return errors
+
+
 def _load_machine_qualification(directory: Path, suite: dict) -> tuple[dict | None, list[str]]:
     declared = suite.get("machine_qualification")
     receipt_path = directory / "machine-qualification.json"
@@ -250,6 +278,7 @@ def load_durable_suite(directory: Path) -> dict:
             runner_failures.append(item)
     integrity_reasons = [f"runner failure: {item}" for item in runner_failures]
     correctness_reasons = []
+    integrity_reasons.extend(_execution_plan_errors(directory, suite))
     machine_qualification, machine_errors = _load_machine_qualification(directory, suite)
     integrity_reasons.extend(machine_errors)
     expected = _expected_durable_cases(suite)

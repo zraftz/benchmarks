@@ -146,11 +146,15 @@ Both suites record the resolved Rafter commit, lockfile, binary hashes, workload
 compiler, host, and raw results. Repetitions use a deterministic cyclic engine
 rotation. The fixed-machine capacity and speculative-threshold commands set the
 repetition count equal to their arm count, so every arm occupies every execution
-position once at each rate. Generic paired runs record their repetition count
-and exact ordering but need not form a complete position-balanced block. Failed
-cases remain visible and fail the job. The durable report excludes failed cases
-from aggregates; always inspect errors, unknowns, and unsent work alongside
-speed. Checksums detect artifact changes; they are not signatures.
+position once at each rate. Current paired suites expand that declaration into
+an exact pre-timing execution plan containing every case name, arm position,
+seed, rate, mode, and workload option. Report generation independently derives
+the plan and compares every retained case manifest with it. Generic paired runs
+record their repetition count and exact ordering but need not form a complete
+position-balanced block. Failed cases remain visible and fail the job. The
+durable report excludes failed cases from aggregates; always inspect errors,
+unknowns, and unsent work alongside speed. Checksums detect artifact changes;
+they are not signatures.
 
 Durable cases also sample Linux PSI, CPU and cgroup throttling counters, load,
 per-process I/O, filesystem capacity, and raw `/proc/diskstats` block-device

@@ -16,9 +16,9 @@ from .report import render
 from .runner import run_case
 from .selection import select_rafter
 from .network import loopback_delay
+from .suite_plan import MODES, execution_plan, mode_flags, ordered_arms
 
 
-MODES = ("inline", "worker", "messages", "pipeline")
 OPENRAFT_CONTROLS = ("synchronous", "async")
 
 
@@ -44,14 +44,6 @@ def qualify_machine(data_root: Path, output: Path) -> dict:
             "fixed-machine idle objective did not pass; sealed evidence was retained"
         )
     return receipt
-
-
-def mode_flags(mode: str, engine: str = "rafter") -> dict[str, bool]:
-    if mode not in MODES:
-        raise ValueError("unsupported embedding mode")
-    return {"ordered_apply": mode != "inline" and engine == "rafter",
-            "peer_message_stream": mode in ("messages", "pipeline") and engine == "rafter",
-            "pipelined_durability": mode == "pipeline" and engine == "rafter"}
 
 
 def openraft_arms(controls: list[str]) -> list[tuple[str, str, int, str, int, bool, int]]:
@@ -89,10 +81,6 @@ def archive_build(destination: Path) -> dict:
         shutil.copy2(binary, destination / binary.name)
     write_json(destination / "build.json", receipt)
     return receipt
-
-
-def ordered_arms(arms: list, repeat: int) -> list:
-    return arms[repeat % len(arms):] + arms[:repeat % len(arms)]
 
 
 def combined_activation_failures(output: Path, arms: list[tuple]) -> list[dict]:
@@ -231,7 +219,7 @@ def main() -> None:
     diagnostic_arms = (arms if len(thresholds) > 1 or len(windows) > 1 else
                        [arms[0], *control_arms,
                         next((arm for arm in candidates if arm[2] == 32), candidates[-1])])
-    write_json(output / "suite.json", {"schema": 2, "arms": arms, "rates": rates, "runs": args.runs,
+    suite = {"schema": 3, "arms": arms, "rates": rates, "runs": args.runs,
         "order": "cyclic arm rotation by repetition; all cases sequential on one host",
         "diagnostics": "separate cases after timing runs; never pooled",
         "diagnostic_arms": [arm[0] for arm in diagnostic_arms], "diagnostic_rates": diagnostic_rates,
@@ -246,44 +234,36 @@ def main() -> None:
         "candidate_combine_peer_proposals": args.candidate_combine_peer_proposals,
         "prior_durable_completion_priority": args.prior_durable_completion_priority,
         "candidate_durable_completion_priority": args.candidate_durable_completion_priority,
-        "data_root": str(data), "machine_qualification": machine_qualification})
+        "data_root": str(data), "machine_qualification": machine_qualification}
+    plan = execution_plan(suite)
+    suite["execution_plan"] = plan
+    write_json(output / "suite.json", suite)
     failures = []
-    ordinal = 0
-    for delay in delays:
+    by_delay = {delay: [] for delay in delays}
+    for planned in plan:
+        by_delay[planned["options"]["network_delay_ms"]].append(planned)
+    for delay, delay_plan in by_delay.items():
         with loopback_delay(delay) as network:
             write_json(output / f"network-{delay}ms.json", network)
-            for diagnostic in (False, True):
-                for repeat in range(1 if diagnostic else args.runs):
-                    for rate in diagnostic_rates if diagnostic else rates:
-                        for arm_label, engine, cap, binary_set, threshold, combine, window in ordered_arms(diagnostic_arms if diagnostic else arms, repeat):
-                            ordinal += 1
-                            name = f"{ordinal:03d}-n{delay}-{arm_label}-r{repeat+1}-q{rate}-{'trace' if diagnostic else 'timing'}"
-                            options = SimpleNamespace(network_delay_ms=delay, scenario="durable-kv", smoke=False, batch_size=64,
-                                peer_batch_size=cap, diagnostics=diagnostic, duration=60, warmup=10,
-                                **mode_flags(args.prior_mode if binary_set == "prior" else args.candidate_mode, engine),
-                                openraft_async_flush=arm_label == "openraft-async",
-                                max_speculative_proposals=threshold,
-                                max_inflight_appends=window,
-                                combine_peer_proposals=combine,
-                                durable_completion_priority=(engine == "rafter" and (
-                                    args.prior_durable_completion_priority if binary_set == "prior"
-                                    else args.candidate_durable_completion_priority)),
-                                concurrency=64, payload=512, rate=rate, keyspace=10000, seed=repeat+1,
-                                read_percent=0, cas_percent=0, timeout=2, variant=arm_label)
-                            print(f"Running {name}", flush=True)
-                            try:
-                                run_case(engine, output / name, data / name, options,
-                                    command=[str(work / binary_set / f"raft-bench-{engine}")],
-                                    build_receipt=prior if binary_set == "prior" else candidate)
-                                checked = verify(output / name)
-                                if checked["status"] != "passed":
-                                    raise RuntimeError(f"evidence verification failed: {checked}")
-                                # Completed evidence retains configs/logs/checksums; only the generated
-                                # live node stores are reclaimed, so a long sweep fits runner storage.
-                                shutil.rmtree(data / name)
-                            except Exception as error:
-                                failures.append({"case": name, "error": str(error)})
-                                print(f"FAILED {name}: {error}", flush=True)
+            for planned in delay_plan:
+                name = planned["name"]
+                engine = planned["implementation"]
+                binary_set = planned["binary_set"]
+                options = SimpleNamespace(**planned["options"])
+                print(f"Running {name}", flush=True)
+                try:
+                    run_case(engine, output / name, data / name, options,
+                        command=[str(work / binary_set / f"raft-bench-{engine}")],
+                        build_receipt=prior if binary_set == "prior" else candidate)
+                    checked = verify(output / name)
+                    if checked["status"] != "passed":
+                        raise RuntimeError(f"evidence verification failed: {checked}")
+                    # Completed evidence retains configs/logs/checksums; only the generated
+                    # live node stores are reclaimed, so a long sweep fits runner storage.
+                    shutil.rmtree(data / name)
+                except Exception as error:
+                    failures.append({"case": name, "error": str(error)})
+                    print(f"FAILED {name}: {error}", flush=True)
     priority_variants = set()
     if args.prior_durable_completion_priority:
         priority_variants.add("prior")

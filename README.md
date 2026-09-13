@@ -89,9 +89,11 @@ zero added loopback delay:
 The default rates are `1000,2000,3000,4000,6000,8000,10000,12000`; only
 1,000/s gets the separate diagnostic pass. Four timing repetitions use a full
 cyclic arm rotation, so each of the four implementations occupies every
-execution position once at each rate. A failed machine profile is retained with
-the aborted suite and cannot be overridden by this command. Use a new output
-directory after correcting the host condition.
+execution position once at each rate. The suite records the exact case sequence,
+arm position, seed, rate, mode, and workload options before timing; report
+generation replays every case against that plan. A failed machine profile is
+retained with the aborted suite and cannot be overridden by this command. Use a
+new output directory after correcting the host condition.
 
 ```sh
 ./raft-bench microbench --runs 7
