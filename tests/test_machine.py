@@ -8,6 +8,7 @@ from benchctl.machine import (
     OBJECTIVE,
     STORAGE_PROBE_SAMPLES,
     assess_idle,
+    load_environment_receipt,
     storage_probe,
     storage_probe_errors,
     summarize_idle,
@@ -117,6 +118,29 @@ class MachineProfileTests(unittest.TestCase):
         verdict = assess_idle(summarize_idle(samples))
         self.assertEqual(verdict["status"], "not measured")
         self.assertTrue(verdict["missing"])
+
+    def test_measured_load_receipt_checks_coverage_without_ranking_pressure(self):
+        samples = quiet_samples()
+        samples[-1]["system"]["pressure"]["io"]["some"]["total"] = 12_000_000
+        receipt = load_environment_receipt(
+            samples,
+            expected_duration_seconds=15,
+            nominal_sample_interval_seconds=1,
+        )
+        self.assertEqual(receipt["coverage"]["status"], "passed")
+        self.assertGreater(
+            receipt["summary"]["pressure"]["io"]["some"]["percent_of_wall"],
+            50,
+        )
+        self.assertIn("never remove, accept, or rank", receipt["interpretation"])
+
+        receipt = load_environment_receipt(
+            samples[:10],
+            expected_duration_seconds=15,
+            nominal_sample_interval_seconds=1,
+        )
+        self.assertEqual(receipt["coverage"]["status"], "failed")
+        self.assertTrue(receipt["coverage"]["failures"])
 
     def test_storage_probe_exercises_and_cleans_publication_protocol(self):
         with tempfile.TemporaryDirectory() as tmp:

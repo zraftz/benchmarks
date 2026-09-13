@@ -147,7 +147,12 @@ latency/utilization counters during the measured load. These cumulative counters
 help distinguish storage saturation from other host pressure; they do not by
 themselves identify the workload responsible for a stall. The case manifest
 records the filesystem source so block-device deltas can be interpreted against
-the selected data path.
+the selected data path. Current cases derive a sealed summary from the raw
+samples and require at least 95% duration coverage with bounded sampling gaps.
+The verifier independently replays that receipt. The layered report surfaces
+the maximum observed pressure and throttling signals, but they remain diagnostic:
+workload and unrelated activity are inseparable, and no result is removed,
+accepted, or ranked from those counters.
 
 Before a fixed machine becomes an evidence source, `machine-profile` records a
 predeclared idle observation on the selected data volume. It requires at least
@@ -171,8 +176,8 @@ profile digest and selected data root into the suite manifest and refuses to
 run any timed case unless the profile passes. There is no record-only override
 on this path. Builds therefore cannot be mistaken for benchmark-time pressure,
 and an older profile cannot be substituted for the one associated with the
-suite. Per-case pressure and loss accounting remain authoritative during the
-curve.
+suite. Replayed per-case measured-load context and loss accounting remain
+authoritative during the curve.
 
 Keep default pins checked in. A requested Rafter ref is resolved once and written
 as an exact commit into both manifests, then Cargo updates their locks while

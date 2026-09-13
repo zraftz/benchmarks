@@ -132,6 +132,11 @@ def _normalize_case(case: Path, root: Path) -> dict:
         accounting = {key: measurement.get(key) for key in
                       ("offered", "attempted", "ok", "completed_in_window", "errors", "unknown", "not_issued")}
     receipt = manifest.get("build_receipt") or {}
+    load_environment = (
+        _read(case / "load-environment.json")
+        if (case / "load-environment.json").exists()
+        else None
+    )
     return {
         "layer": "complete_service",
         "source_case": case.relative_to(root).as_posix(),
@@ -172,6 +177,7 @@ def _normalize_case(case: Path, root: Path) -> dict:
         }),
         "metrics": metrics,
         "accounting": accounting,
+        "load_environment": load_environment,
         "recovery": _read(case / "recovery.json") if (case / "recovery.json").exists() else None,
         "history_check": _read(case / "qualification.json") if (case / "qualification.json").exists() else None,
     }

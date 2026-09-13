@@ -289,6 +289,45 @@ def runtime_configuration_errors(directory: Path, manifest: dict) -> list[str]:
     return [] if actual == recorded else ["replication window activation receipt differs from runtime status"]
 
 
+def load_environment_errors(directory: Path, manifest: dict) -> list[str]:
+    """Replay declared measured-load context while retaining old case compatibility."""
+    receipt_path = directory / "load-environment.json"
+    declared = manifest.get("load_environment_observation")
+    if declared is None:
+        return ["unexpected measured-load environment receipt"] if receipt_path.exists() else []
+    expected_keys = {
+        "schema",
+        "expected_duration_seconds",
+        "nominal_sample_interval_seconds",
+    }
+    if (
+        not isinstance(declared, dict)
+        or set(declared) != expected_keys
+        or declared.get("schema") != 1
+    ):
+        return ["unsupported measured-load environment declaration"]
+    if not receipt_path.exists():
+        return ["measured-load environment receipt is missing"]
+    from .machine import load_environment_receipt
+
+    samples = [
+        json.loads(line)
+        for line in (directory / "process-samples.jsonl").read_text().splitlines()
+    ]
+    observed = load_environment_receipt(
+        samples,
+        expected_duration_seconds=declared["expected_duration_seconds"],
+        nominal_sample_interval_seconds=declared["nominal_sample_interval_seconds"],
+    )
+    recorded = json.loads(receipt_path.read_text())
+    errors = []
+    if observed != recorded:
+        errors.append("measured-load environment receipt differs from raw samples")
+    if observed["coverage"]["status"] != "passed":
+        errors.append("measured-load environment sampling coverage did not pass")
+    return errors
+
+
 def verify(directory: Path) -> dict[str, Any]:
     integrity_errors = []
     correctness_errors = []
@@ -355,6 +394,7 @@ def verify(directory: Path) -> dict[str, Any]:
                 },
             }
         manifest = json.loads((directory / "manifest.json").read_text())
+        integrity_errors.extend(load_environment_errors(directory, manifest))
         integrity_errors.extend(runtime_configuration_errors(directory, manifest))
         if manifest.get("options", {}).get("diagnostics"):
             from .timelines import extract, recorded_extract_matches

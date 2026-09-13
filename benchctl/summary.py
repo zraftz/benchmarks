@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -441,6 +442,74 @@ def _capacity_summary(rows: list[dict], candidate: str, control: str) -> dict:
     }
 
 
+def _measured_load_context(durable: dict) -> dict:
+    timing_cases = [
+        case
+        for case in durable.get("cases", [])
+        if not case.get("smoke") and case.get("measurement_mode") == "timing"
+    ]
+    observed = [case for case in timing_cases if case.get("load_environment") is not None]
+    if not observed:
+        return {
+            "status": "not measured",
+            "observed_cases": 0,
+            "expected_cases": len(timing_cases),
+            "metrics": {},
+            "source_cases": [],
+            "scope": "no replayed measured-load environment receipts",
+        }
+
+    def values(path: tuple[str, ...]) -> list[float]:
+        result = []
+        for case in observed:
+            value = case["load_environment"].get("summary", {})
+            for name in path:
+                value = value.get(name) if isinstance(value, dict) else None
+            if type(value) in (int, float) and math.isfinite(value):
+                result.append(value)
+        return result
+
+    def maximum(path: tuple[str, ...]) -> float | None:
+        available = values(path)
+        return max(available) if available else None
+
+    available_bytes = values(("filesystem", "minimum_available_bytes"))
+    hardware = values(("hardware_throttling", "maximum_counter_delta"))
+    return {
+        "status": "observed" if len(observed) == len(timing_cases) else "partial",
+        "observed_cases": len(observed),
+        "expected_cases": len(timing_cases),
+        "metrics": {
+            "maximum_cpu_busy_percent": maximum(("cpu", "busy_percent")),
+            "maximum_cpu_iowait_percent": maximum(("cpu", "iowait_percent")),
+            "maximum_cpu_steal_percent": maximum(("cpu", "steal_percent")),
+            "maximum_cgroup_throttled_percent": maximum(
+                ("cgroup_cpu", "throttled_percent_of_wall")
+            ),
+            "maximum_io_pressure_some_percent": maximum(
+                ("pressure", "io", "some", "percent_of_wall")
+            ),
+            "maximum_io_pressure_full_percent": maximum(
+                ("pressure", "io", "full", "percent_of_wall")
+            ),
+            "maximum_memory_pressure_full_percent": maximum(
+                ("pressure", "memory", "full", "percent_of_wall")
+            ),
+            "maximum_hardware_throttle_counter_delta": max(hardware) if hardware else None,
+            "hardware_counter_cases": len(hardware),
+            "minimum_available_bytes": min(available_bytes) if available_bytes else None,
+            "maximum_sample_gap_seconds": maximum(("maximum_sample_gap_seconds",)),
+        },
+        "source_cases": _source_refs(
+            "durable_service", [case["source_case"] for case in observed]
+        ),
+        "scope": (
+            "workload and unrelated host activity are inseparable in these counters; "
+            "they never remove, accept, or rank a result"
+        ),
+    }
+
+
 def _service_section(durable: dict | None, headline_variant: str | None,
                      headline_control_variant: str | None) -> dict:
     not_measured_verdict = {"status": "not measured", "detail": "No durable-service evidence selected."}
@@ -456,6 +525,11 @@ def _service_section(durable: dict | None, headline_variant: str | None,
         "capacity": {"status": "not measured", "result": "No common fixed-rate capacity curve was selected.",
                      "objective": SERVICE_OBJECTIVE, "boundaries": [], "variant_boundaries": [],
                      "rows": [], "source_cases": []},
+        "measured_load_context": {
+            "status": "not measured", "observed_cases": 0, "expected_cases": 0,
+            "metrics": {}, "source_cases": [],
+            "scope": "no durable-service evidence selected",
+        },
         "source_cases": [],
         "comparison_kind": "competitor comparison",
         "verdicts": {
@@ -468,6 +542,7 @@ def _service_section(durable: dict | None, headline_variant: str | None,
     }
     if durable is None:
         return section
+    section["measured_load_context"] = _measured_load_context(durable)
     recorded_verdicts = durable.get("verdicts", {})
     for name in ("evidence_integrity", "correctness_checks", "feature_coverage",
                  "environment_qualification"):
@@ -870,6 +945,33 @@ def _fmt_capacity(value: float | None, reached_ceiling: bool) -> str:
     return f"{prefix}{_fmt_ops(value)}/s"
 
 
+def _measured_load_context_text(context: dict) -> str:
+    metrics = context["metrics"]
+
+    def percent(name: str) -> str:
+        value = metrics.get(name)
+        return "not exposed" if value is None else f"{value:.3f}%"
+
+    hardware = metrics.get("maximum_hardware_throttle_counter_delta")
+    hardware_text = (
+        "not exposed"
+        if hardware is None
+        else (
+            f"{hardware:,.0f} "
+            f"({metrics['hardware_counter_cases']}/{context['observed_cases']} cases exposed)"
+        )
+    )
+    return (
+        f"Measured-load host context ({context['observed_cases']}/{context['expected_cases']} "
+        f"timing cases): maximum CPU busy {percent('maximum_cpu_busy_percent')}, iowait "
+        f"{percent('maximum_cpu_iowait_percent')}, steal "
+        f"{percent('maximum_cpu_steal_percent')}, cgroup throttling "
+        f"{percent('maximum_cgroup_throttled_percent')}, I/O PSI some "
+        f"{percent('maximum_io_pressure_some_percent')}, and hardware-throttle counter "
+        f"delta {hardware_text}. {context['scope']}."
+    )
+
+
 def _verdict_detail(verdict: dict) -> str:
     if verdict.get("detail"):
         return verdict["detail"]
@@ -920,6 +1022,9 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                 verdict = section["verdicts"][name]
                 lines.append(f"| {label} | {verdict['status']} | {_verdict_detail(verdict)} |")
             lines.append("")
+            context = section["measured_load_context"]
+            if context["status"] != "not measured":
+                lines += [_measured_load_context_text(context), ""]
         if section_id == "consensus-in-memory" and section["rows"]:
             lines += ["| Workload | In flight | Rafter | raft-rs | OpenRaft | Rafter p99 | raft-rs p99 | OpenRaft p99 |",
                       "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
@@ -1087,6 +1192,11 @@ def render_html(summary: dict, evidence: dict) -> str:
             )
             content.append("<div class='table'><table><thead><tr><th>Verdict</th><th>Status</th><th>Detail</th>"
                            f"</tr></thead><tbody>{verdict_body}</tbody></table></div>")
+            context = section["measured_load_context"]
+            if context["status"] != "not measured":
+                content.append(
+                    f"<p class='conditions'>{html.escape(_measured_load_context_text(context))}</p>"
+                )
         if section_id == "consensus-in-memory" and section["rows"]:
             body = "".join(
                 f"<tr><td>{html.escape(row['workload'])}</td><td>{row['max_in_flight']}</td>"

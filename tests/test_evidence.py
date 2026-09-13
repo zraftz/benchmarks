@@ -3,9 +3,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from benchctl.evidence import (CONTRACT, runtime_configuration_errors, seal,
+from benchctl.evidence import (CONTRACT, load_environment_errors,
+                               runtime_configuration_errors, seal,
                                filesystem_space, system_sample, validate_result,
                                verify, write_json)
+from benchctl.machine import load_environment_receipt
 from benchctl.replication_windows import configuration_receipt
 from tests.test_timelines import add_runtime_windows, snapshot, timeline
 
@@ -65,6 +67,73 @@ class EvidenceTests(unittest.TestCase):
             self.assertGreater(space["total_bytes"], 0)
             self.assertGreater(space["free_bytes"], 0)
             self.assertGreater(space["available_bytes"], 0)
+
+    def test_measured_load_environment_receipt_replays_raw_samples(self):
+        samples = [
+            {
+                "controller_seconds": second,
+                "monotonic_ns": (second + 1) * 1_000_000_000,
+                "system": {"pressure": {}, "filesystem_space": None},
+            }
+            for second in range(3)
+        ]
+        declared = {
+            "schema": 1,
+            "expected_duration_seconds": 2,
+            "nominal_sample_interval_seconds": 1,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "process-samples.jsonl").write_text(
+                "".join(json.dumps(item) + "\n" for item in samples)
+            )
+            receipt = load_environment_receipt(
+                samples,
+                expected_duration_seconds=2,
+                nominal_sample_interval_seconds=1,
+            )
+            write_json(root / "load-environment.json", receipt)
+            self.assertEqual(
+                load_environment_errors(root, {"load_environment_observation": declared}),
+                [],
+            )
+
+            incomplete = dict(declared)
+            incomplete["expected_duration_seconds"] = 4
+            receipt = load_environment_receipt(
+                samples,
+                expected_duration_seconds=4,
+                nominal_sample_interval_seconds=1,
+            )
+            (root / "load-environment.json").write_text(json.dumps(receipt))
+            self.assertEqual(
+                load_environment_errors(
+                    root, {"load_environment_observation": incomplete}
+                ),
+                ["measured-load environment sampling coverage did not pass"],
+            )
+
+            receipt = load_environment_receipt(
+                samples,
+                expected_duration_seconds=2,
+                nominal_sample_interval_seconds=1,
+            )
+            receipt["summary"]["sample_count"] += 1
+            (root / "load-environment.json").write_text(json.dumps(receipt))
+            self.assertEqual(
+                load_environment_errors(root, {"load_environment_observation": declared}),
+                ["measured-load environment receipt differs from raw samples"],
+            )
+
+    def test_old_cases_reject_undeclared_measured_load_receipts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(load_environment_errors(root, {}), [])
+            write_json(root / "load-environment.json", {})
+            self.assertEqual(
+                load_environment_errors(root, {}),
+                ["unexpected measured-load environment receipt"],
+            )
 
     def test_fault_smoke_does_not_require_durable_kv_priority_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:

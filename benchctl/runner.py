@@ -16,6 +16,7 @@ from .checker import check_history, read_history
 from .cluster import Cluster
 from .evidence import (ROOT, capture, digest, host_info, proc_sample, seal, source_digest,
                        system_sample, validate_result, write_json)
+from .machine import LOAD_ENVIRONMENT_SCHEMA, load_environment_receipt
 
 
 def load_command(nodes: dict[int, str], directory: Path, name: str, *, duration: float,
@@ -71,9 +72,15 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
     if receipt and digest(Path(command[0])) != receipt["binaries"][implementation]:
         raise RuntimeError("case binary differs from the supplied build receipt")
     case_id = uuid.uuid4().hex
+    sample_interval_seconds = 0.1 if options.smoke else 1.0
     manifest = {"schema": 1, "implementation": implementation, "case_id": case_id,
         "scenario": options.scenario, "topology": "three processes on one host; real TCP, not three physical hosts",
         "smoke": options.smoke, "controller_start_unix_ns": time.time_ns(),
+        "load_environment_observation": {
+            "schema": LOAD_ENVIRONMENT_SCHEMA,
+            "expected_duration_seconds": options.duration,
+            "nominal_sample_interval_seconds": sample_interval_seconds,
+        },
         "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(options).items()},
         "host": host_info(data), "source_digest": source_digest(),
         "implementation_pins": receipt["implementations"] if receipt else json.loads((ROOT / "implementations.lock.json").read_text()),
@@ -153,14 +160,35 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                         action = "SIGCONT follower"
                     fault["events"].append({"unix_ns": time.time_ns(), "controller_seconds": elapsed, "node": fault_node, "action": action})
                     restored = True
-                samples.write(json.dumps({"controller_seconds": elapsed,
+                observed = {"controller_seconds": elapsed,
+                    "monotonic_ns": time.monotonic_ns(),
                     "nodes": {i: proc_sample(p.pid) for i, p in cluster.processes.items()},
                     "load_generator": proc_sample(load.pid),
-                    "system": system_sample(data_path=data)}) + "\n")
+                    "system": system_sample(data_path=data)}
+                samples.write(json.dumps(observed) + "\n")
                 samples.flush()
-                time.sleep(.1 if options.smoke else 1.0)
+                time.sleep(sample_interval_seconds)
+            elapsed = time.monotonic() - start
+            observed = {"controller_seconds": elapsed,
+                "monotonic_ns": time.monotonic_ns(),
+                "nodes": {i: proc_sample(p.pid) for i, p in cluster.processes.items()},
+                "load_generator": proc_sample(load.pid),
+                "system": system_sample(data_path=data)}
+            samples.write(json.dumps(observed) + "\n")
+            samples.flush()
             if load.returncode:
                 raise RuntimeError(f"load generator exited {load.returncode}; inspect load.log")
+        write_json(
+            directory / "load-environment.json",
+            load_environment_receipt(
+                [
+                    json.loads(line)
+                    for line in (directory / "process-samples.jsonl").read_text().splitlines()
+                ],
+                expected_duration_seconds=options.duration,
+                nominal_sample_interval_seconds=sample_interval_seconds,
+            ),
+        )
         if injected and not restored:
             if options.scenario == "leader-loss":
                 cluster.start_node(fault_node)

@@ -171,6 +171,9 @@ def run(options) -> None:
                 print(f"Running {name}", flush=True)
                 try:
                     run_case(implementation, suite / name, data_root / name, options)
+                    checked = verify(suite / name)
+                    if checked["status"] != "passed":
+                        raise RuntimeError(f"evidence verification failed: {checked}")
                 except Exception as exc:
                     failures.append({"case": name, "error": str(exc)})
                     print(f"FAILED {name}: {exc}", file=sys.stderr)

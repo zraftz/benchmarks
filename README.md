@@ -171,7 +171,9 @@ dispatch, start, durable completion, and client completion points. These are cal
 not kernel storage-commit timestamps. Diagnostics also retain owner persistence blocking,
 replication-ack queue delay, proposal-batch distribution, and owner-observed full replication-window
 time. Per-process samples retain host CPU, cgroup throttling, load, and Linux pressure counters when
-available; these explain anomalous runs but never silently exclude them. Paired CI can sweep
+available. Each new case derives and seals a measured-load summary from those raw samples;
+verification replays both its sampling coverage and counter deltas. The layered report surfaces the
+worst observed host signals without using them to remove, accept, or rank a result. Paired CI can sweep
 speculative limits and restrict timing and diagnostic rates independently.
 It can also retain synchronous and asynchronous OpenRaft storage controls as
 separately named arms.

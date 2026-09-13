@@ -213,6 +213,44 @@ def write_wal_reclamation(root):
 
 
 class SummaryTests(unittest.TestCase):
+    def test_measured_load_context_is_visible_but_not_a_qualification_filter(self):
+        data = durable_data()
+        for index, case in enumerate(data["cases"]):
+            case["load_environment"] = {
+                "coverage": {"status": "passed"},
+                "summary": {
+                    "maximum_sample_gap_seconds": 1.1,
+                    "cpu": {
+                        "busy_percent": 50 + index,
+                        "iowait_percent": 2 + index / 10,
+                        "steal_percent": 0,
+                    },
+                    "cgroup_cpu": {"throttled_percent_of_wall": 0},
+                    "pressure": {
+                        "io": {
+                            "some": {"percent_of_wall": 80 + index},
+                            "full": {"percent_of_wall": 20 + index},
+                        },
+                        "memory": {"full": {"percent_of_wall": 0}},
+                    },
+                    "hardware_throttling": {"maximum_counter_delta": 0},
+                    "filesystem": {"minimum_available_bytes": 30 * 1024**3},
+                },
+            }
+        summary = build_summary(
+            durable=data,
+            headline_variant="candidate-b32",
+            headline_control_variant="openraft",
+        )
+        section = summary["sections"][2]
+        context = section["measured_load_context"]
+        self.assertEqual(context["status"], "observed")
+        self.assertEqual(context["observed_cases"], len(data["cases"]))
+        self.assertGreater(context["metrics"]["maximum_io_pressure_some_percent"], 90)
+        self.assertEqual(section["status"], "measured lead")
+        self.assertIn("Measured-load host context", render_markdown(summary, {}))
+        self.assertIn("Measured-load host context", render_html(summary, {}))
+
     def test_wal_reclamation_loader_and_report_replay_component_bounds(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

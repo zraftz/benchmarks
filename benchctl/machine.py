@@ -29,6 +29,7 @@ OBJECTIVE = {
     "maximum_hardware_throttle_counter_delta": 0.0,
 }
 STORAGE_PROBE_SAMPLES = 16
+LOAD_ENVIRONMENT_SCHEMA = 1
 
 
 def _deltas(before: dict[str, Any] | None, after: dict[str, Any] | None) -> dict[str, int] | None:
@@ -259,6 +260,51 @@ def assess_idle(summary: dict[str, Any], objective: dict[str, float] = OBJECTIVE
         "failures": failures,
         "missing": missing,
         "scope": "predeclared idle-host observation only; benchmark load is assessed separately",
+    }
+
+
+def load_environment_receipt(
+    samples: list[dict[str, Any]],
+    *,
+    expected_duration_seconds: float,
+    nominal_sample_interval_seconds: float,
+) -> dict[str, Any]:
+    """Summarize measured-load context without turning resource use into a winner filter."""
+    for name, value in (
+        ("expected_duration_seconds", expected_duration_seconds),
+        ("nominal_sample_interval_seconds", nominal_sample_interval_seconds),
+    ):
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive")
+    summary = summarize_idle(samples, schema=2)
+    minimum_elapsed = expected_duration_seconds * 0.95
+    maximum_gap = max(0.5, nominal_sample_interval_seconds * 3)
+    failures = []
+    if summary["elapsed_seconds"] < minimum_elapsed:
+        failures.append(
+            f"elapsed_seconds {summary['elapsed_seconds']:.3f} is below {minimum_elapsed:.3f}"
+        )
+    if summary["maximum_sample_gap_seconds"] > maximum_gap:
+        failures.append(
+            "maximum_sample_gap_seconds "
+            f"{summary['maximum_sample_gap_seconds']:.3f} exceeds {maximum_gap:.3f}"
+        )
+    return {
+        "schema": LOAD_ENVIRONMENT_SCHEMA,
+        "kind": "measured-load-environment-observation",
+        "expected_duration_seconds": expected_duration_seconds,
+        "nominal_sample_interval_seconds": nominal_sample_interval_seconds,
+        "coverage": {
+            "status": "failed" if failures else "passed",
+            "minimum_elapsed_seconds": minimum_elapsed,
+            "maximum_sample_gap_seconds": maximum_gap,
+            "failures": failures,
+        },
+        "summary": summary,
+        "interpretation": (
+            "workload and unrelated host activity are both included; these diagnostics never "
+            "remove, accept, or rank a performance result"
+        ),
     }
 
 
