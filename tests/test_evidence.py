@@ -22,8 +22,12 @@ class EvidenceTests(unittest.TestCase):
             root = Path(tmp)
             proc = root / "proc"
             cgroup = root / "cgroup"
+            sysfs = root / "sys"
             (proc / "pressure").mkdir(parents=True)
             cgroup.mkdir()
+            throttle = sysfs / "devices/system/cpu/cpu0/thermal_throttle"
+            throttle.mkdir(parents=True)
+            (throttle / "core_throttle_count").write_text("7\n")
             (proc / "stat").write_text("cpu 1 2 3 4 5 6 7 8 9 10\n")
             (proc / "loadavg").write_text("0.10 0.20 0.30 2/100 4321\n")
             (proc / "diskstats").write_text(
@@ -35,7 +39,12 @@ class EvidenceTests(unittest.TestCase):
                     "some avg10=1.25 avg60=0.50 avg300=0.10 total=1234\n"
                     "full avg10=0.25 avg60=0.05 avg300=0.01 total=234\n"
                 )
-            sample = system_sample(proc_root=proc, cgroup_root=cgroup, data_path=root)
+            sample = system_sample(
+                proc_root=proc,
+                cgroup_root=cgroup,
+                sysfs_root=sysfs,
+                data_path=root,
+            )
             self.assertEqual(sample["cpu_ticks"]["steal"], 8)
             self.assertEqual(sample["cgroup_cpu"]["throttled_usec"], 40)
             self.assertEqual(sample["pressure"]["io"]["some"]["total"], 1234)
@@ -44,6 +53,10 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(sample["block_devices"]["nvme0n1"]["write_ms"], 60)
             self.assertEqual(sample["block_devices"]["nvme0n1"]["io_ms"], 70)
             self.assertEqual(sample["block_devices"]["nvme0n1"]["flush_ms"], 8)
+            self.assertEqual(
+                sample["hardware_throttle_counts"]["cpu0/thermal_throttle/core_throttle_count"],
+                7,
+            )
             self.assertGreater(sample["filesystem_space"]["available_bytes"], 0)
 
     def test_filesystem_space_records_capacity_for_data_path(self):

@@ -63,10 +63,14 @@ volume while the host is idle:
 ```
 
 The predeclared 15-second objective requires at least 20 GiB available and
-bounded idle CPU iowait, steal, cgroup throttling, and Linux I/O pressure. The
-receipt also exercises write/sync/rename/directory-sync/delete on the selected
-volume. Missing Linux counters do not pass. `--record-only` retains an
-incomplete or stressed-host observation without relabeling it as qualified.
+bounds idle CPU use, iowait, steal, cgroup throttling, CPU/I/O/memory pressure,
+and any exposed hardware-throttle counter. The receipt records CPU frequency
+policy, clock, NUMA, filesystem, and block topology, then measures 16 complete
+write/sync/rename/directory-sync/delete cycles on the selected volume. Storage
+latencies are diagnostic, not a gate. Missing required Linux counters do not
+pass; unavailable hardware-throttle counters remain explicit but optional.
+`--record-only` retains an incomplete or stressed-host observation without
+relabeling it as qualified.
 
 For the predeclared useful-capacity curve, use the exact 40-character Rafter
 commit. This command builds both same-code Rafter controls first, then captures

@@ -17,12 +17,18 @@ OBJECTIVE = {
     "duration_seconds": 15.0,
     "sample_interval_seconds": 1.0,
     "minimum_available_bytes": 20 * 1024**3,
+    "maximum_cpu_busy_percent": 5.0,
     "maximum_cpu_iowait_percent": 2.0,
     "maximum_cpu_steal_percent": 1.0,
     "maximum_cgroup_throttled_percent": 1.0,
+    "maximum_cpu_pressure_some_percent": 2.0,
     "maximum_io_pressure_some_percent": 2.0,
     "maximum_io_pressure_full_percent": 0.5,
+    "maximum_memory_pressure_some_percent": 0.5,
+    "maximum_memory_pressure_full_percent": 0.1,
+    "maximum_hardware_throttle_counter_delta": 0.0,
 }
+STORAGE_PROBE_SAMPLES = 16
 
 
 def _deltas(before: dict[str, Any] | None, after: dict[str, Any] | None) -> dict[str, int] | None:
@@ -42,7 +48,9 @@ def _percent(value: int, total: int) -> float | None:
     return 100.0 * value / total if total > 0 else None
 
 
-def summarize_idle(samples: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_idle(samples: list[dict[str, Any]], *, schema: int = 2) -> dict[str, Any]:
+    if schema not in (1, 2):
+        raise ValueError("unsupported machine profile schema")
     if len(samples) < 2:
         raise ValueError("machine profile requires at least two samples")
     elapsed_ns = samples[-1]["monotonic_ns"] - samples[0]["monotonic_ns"]
@@ -111,6 +119,16 @@ def summarize_idle(samples: list[dict[str, Any]]) -> dict[str, Any]:
     else:
         devices = None
 
+    hardware_throttles = _deltas(
+        before.get("hardware_throttle_counts"),
+        after.get("hardware_throttle_counts"),
+    )
+    hardware_throttling = None if hardware_throttles is None else {
+        "counters": hardware_throttles,
+        "changed_counters": sum(value > 0 for value in hardware_throttles.values()),
+        "maximum_counter_delta": max(hardware_throttles.values(), default=0),
+    }
+
     spaces = [sample["system"].get("filesystem_space") for sample in samples]
     available = [space["available_bytes"] for space in spaces if isinstance(space, dict)]
     filesystem = None if not available else {
@@ -124,8 +142,8 @@ def summarize_idle(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "block_devices": devices is not None,
         "filesystem_space": filesystem is not None,
     }
-    return {
-        "schema": 1,
+    result = {
+        "schema": schema,
         "sample_count": len(samples),
         "elapsed_seconds": elapsed_seconds,
         "maximum_sample_gap_seconds": max(gaps),
@@ -141,6 +159,13 @@ def summarize_idle(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "raw block-device counters are retained without guessing filesystem device ancestry",
         ],
     }
+    if schema >= 2:
+        supported["hardware_throttle_counters"] = hardware_throttling is not None
+        result["hardware_throttling"] = hardware_throttling
+        result["limitations"].append(
+            "hardware throttle counters are optional and may repeat one package event per CPU"
+        )
+    return result
 
 
 def assess_idle(summary: dict[str, Any], objective: dict[str, float] = OBJECTIVE) -> dict[str, Any]:
@@ -155,7 +180,9 @@ def assess_idle(summary: dict[str, Any], objective: dict[str, float] = OBJECTIVE
 
     cpu = summary.get("cpu") or {}
     cgroup = summary.get("cgroup_cpu") or {}
+    cpu_pressure = (summary.get("pressure") or {}).get("cpu") or {}
     io_pressure = (summary.get("pressure") or {}).get("io") or {}
+    memory_pressure = (summary.get("pressure") or {}).get("memory") or {}
     filesystem = summary.get("filesystem") or {}
     elapsed = summary.get("elapsed_seconds")
     if not isinstance(elapsed, (int, float)) or not math.isfinite(elapsed):
@@ -172,6 +199,34 @@ def assess_idle(summary: dict[str, Any], objective: dict[str, float] = OBJECTIVE
         failures.append(
             f"maximum_sample_gap_seconds {maximum_gap:.3f} exceeds {allowed_gap:.3f}"
         )
+    if summary.get("schema", 1) >= 2:
+        check(
+            "cpu.busy_percent",
+            cpu.get("busy_percent"),
+            objective["maximum_cpu_busy_percent"],
+        )
+        check(
+            "pressure.cpu.some.percent_of_wall",
+            (cpu_pressure.get("some") or {}).get("percent_of_wall"),
+            objective["maximum_cpu_pressure_some_percent"],
+        )
+        check(
+            "pressure.memory.some.percent_of_wall",
+            (memory_pressure.get("some") or {}).get("percent_of_wall"),
+            objective["maximum_memory_pressure_some_percent"],
+        )
+        check(
+            "pressure.memory.full.percent_of_wall",
+            (memory_pressure.get("full") or {}).get("percent_of_wall"),
+            objective["maximum_memory_pressure_full_percent"],
+        )
+        hardware = summary.get("hardware_throttling")
+        if isinstance(hardware, dict):
+            check(
+                "hardware_throttling.maximum_counter_delta",
+                hardware.get("maximum_counter_delta"),
+                objective["maximum_hardware_throttle_counter_delta"],
+            )
     check("cpu.iowait_percent", cpu.get("iowait_percent"), objective["maximum_cpu_iowait_percent"])
     check("cpu.steal_percent", cpu.get("steal_percent"), objective["maximum_cpu_steal_percent"])
     check(
@@ -207,11 +262,53 @@ def assess_idle(summary: dict[str, Any], objective: dict[str, float] = OBJECTIVE
     }
 
 
-def storage_probe(data_root: Path) -> dict[str, Any]:
-    token = uuid.uuid4().hex
+def _storage_timing_summary(samples: list[dict[str, int]]) -> dict[str, dict[str, int]]:
+    fields = ("write_sync_ns", "rename_directory_sync_ns", "delete_directory_sync_ns")
+    summary = {}
+    for field in fields:
+        values = sorted(sample[field] for sample in samples)
+        summary[field] = {
+            "minimum_ns": values[0],
+            "median_ns": values[(len(values) - 1) // 2],
+            "p99_ns": values[math.ceil(len(values) * 0.99) - 1],
+            "maximum_ns": values[-1],
+        }
+    return summary
+
+
+def storage_probe_errors(receipt: dict[str, Any]) -> list[str]:
+    if receipt.get("status") != "passed":
+        return ["machine-profile storage publication probe did not pass"]
+    if receipt.get("schema", 1) == 1:
+        return []
+    if receipt.get("schema") != 2:
+        return ["machine-profile storage publication probe has unsupported schema"]
+    samples = receipt.get("samples")
+    if (
+        not isinstance(samples, list)
+        or receipt.get("sample_count") != STORAGE_PROBE_SAMPLES
+        or len(samples) != STORAGE_PROBE_SAMPLES
+    ):
+        return ["machine-profile storage publication sample accounting differs"]
+    if receipt.get("bytes") != 4096:
+        return ["machine-profile storage publication payload size differs"]
+    required = ("write_sync_ns", "rename_directory_sync_ns", "delete_directory_sync_ns")
+    if not samples or any(
+        type(sample) is not dict
+        or any(type(sample.get(field)) is not int or sample[field] < 0 for field in required)
+        for sample in samples
+    ):
+        return ["machine-profile storage publication timings are invalid"]
+    if receipt.get("summary") != _storage_timing_summary(samples):
+        return ["machine-profile storage publication summary differs from raw samples"]
+    if receipt.get("timings") != samples[-1]:
+        return ["machine-profile storage publication compatibility timing differs"]
+    return []
+
+
+def _storage_probe_once(data_root: Path, token: str, payload: bytes) -> dict[str, int]:
     temporary = data_root / f".raft-bench-probe-{token}.tmp"
     published = data_root / f".raft-bench-probe-{token}.published"
-    payload = bytes(range(256)) * 16
     timings = {}
     try:
         started = time.monotonic_ns()
@@ -238,10 +335,28 @@ def storage_probe(data_root: Path) -> dict[str, Any]:
         finally:
             os.close(directory)
         timings["delete_directory_sync_ns"] = time.monotonic_ns() - started
-        return {"status": "passed", "bytes": len(payload), "timings": timings}
+        return timings
     finally:
         temporary.unlink(missing_ok=True)
         published.unlink(missing_ok=True)
+
+
+def storage_probe(data_root: Path) -> dict[str, Any]:
+    token = uuid.uuid4().hex
+    payload = bytes(range(256)) * 16
+    samples = [
+        _storage_probe_once(data_root, f"{token}-{index}", payload)
+        for index in range(STORAGE_PROBE_SAMPLES)
+    ]
+    return {
+        "schema": 2,
+        "status": "passed",
+        "bytes": len(payload),
+        "sample_count": len(samples),
+        "timings": samples[-1],
+        "samples": samples,
+        "summary": _storage_timing_summary(samples),
+    }
 
 
 def capture_profile(
@@ -258,7 +373,7 @@ def capture_profile(
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "machine-profile.json", {
-        "schema": 1,
+        "schema": 2,
         "kind": "fixed-machine-idle",
         "data_root": str(data_root),
         "observation": {
@@ -287,7 +402,7 @@ def capture_profile(
                 break
             time.sleep(min(interval_seconds, remaining))
         os.fsync(stream.fileno())
-    summary = summarize_idle(samples)
+    summary = summarize_idle(samples, schema=2)
     verdict = assess_idle(summary)
     write_json(output / "summary.json", summary)
     write_json(output / "verdict.json", verdict)

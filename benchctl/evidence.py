@@ -37,6 +37,52 @@ def capture(command: list[str], *, cwd: Path = ROOT) -> dict[str, Any]:
         return {"command": command, "unavailable": str(exc)}
 
 
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def _cpu_frequency_policies(sysfs_root: Path = Path("/sys")) -> dict[str, Any] | None:
+    fields = (
+        "scaling_driver",
+        "scaling_governor",
+        "energy_performance_preference",
+        "scaling_min_freq",
+        "scaling_max_freq",
+    )
+    policies = {}
+    for policy in sorted((sysfs_root / "devices/system/cpu/cpufreq").glob("policy*")):
+        values = {field: _read_text(policy / field) for field in fields}
+        if any(value is not None for value in values.values()):
+            policies[policy.name] = values
+    return policies or None
+
+
+def _cpu_controls(sysfs_root: Path = Path("/sys")) -> dict[str, str | None]:
+    paths = {
+        "clocksource": "devices/system/clocksource/clocksource0/current_clocksource",
+        "available_clocksources": "devices/system/clocksource/clocksource0/available_clocksource",
+        "cpufreq_boost": "devices/system/cpu/cpufreq/boost",
+        "intel_pstate_no_turbo": "devices/system/cpu/intel_pstate/no_turbo",
+        "numa_online": "devices/system/node/online",
+        "transparent_hugepages": "kernel/mm/transparent_hugepage/enabled",
+    }
+    return {name: _read_text(sysfs_root / relative) for name, relative in paths.items()}
+
+
+def _hardware_throttle_counts(sysfs_root: Path) -> dict[str, int] | None:
+    root = sysfs_root / "devices/system/cpu"
+    counters = {}
+    for path in sorted(root.glob("cpu[0-9]*/thermal_throttle/*_throttle_count")):
+        try:
+            counters[path.relative_to(root).as_posix()] = int(path.read_text().strip())
+        except (OSError, ValueError):
+            continue
+    return counters or None
+
+
 def source_digest() -> str:
     """Hash code/manifests, not build outputs or results. Git need not be installed."""
     h = hashlib.sha256()
@@ -67,9 +113,15 @@ def host_info(data_dir: Path) -> dict[str, Any]:
     result = {"platform": platform.platform(), "machine": platform.machine(), "python": sys.version,
               "logical_cpus": os.cpu_count(), "data_path": str(data_dir.resolve()),
               "uname": capture(["uname", "-a"]), "cpu": capture(["lscpu"]),
-              "filesystem": capture(["findmnt", "-T", str(data_dir), "-J", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"]),
+              "filesystem": capture(["findmnt", "-T", str(data_dir), "-J", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS,MAJ:MIN"]),
               "filesystem_space": filesystem_space(data_dir),
               "storage": capture(["lsblk", "-J", "-o", "NAME,TYPE,SIZE,ROTA,MODEL"]),
+              "storage_topology": capture(["lsblk", "-J", "-b", "-o",
+                                           "NAME,KNAME,PKNAME,MAJ:MIN,TYPE,SIZE,ROTA,MODEL,TRAN,SCHED,MOUNTPOINTS"]),
+              "cpu_frequency_policies": _cpu_frequency_policies(),
+              "cpu_controls": _cpu_controls(),
+              "kernel_command_line": _read_text(Path("/proc/cmdline")),
+              "swaps": _read_text(Path("/proc/swaps")),
               "git": capture(["git", "rev-parse", "HEAD"]), "git_status": capture(["git", "status", "--porcelain"])}
     for name, file in (("cpu_max", "/sys/fs/cgroup/cpu.max"), ("memory_max", "/sys/fs/cgroup/memory.max")):
         try:
@@ -95,6 +147,7 @@ def proc_sample(pid: int) -> dict[str, Any]:
 
 def system_sample(*, proc_root: Path = Path("/proc"),
                   cgroup_root: Path = Path("/sys/fs/cgroup"),
+                  sysfs_root: Path = Path("/sys"),
                   data_path: Path | None = None) -> dict[str, Any]:
     """Linux host-pressure counters; cumulative fields are compared between samples."""
     result: dict[str, Any] = {}
@@ -173,6 +226,7 @@ def system_sample(*, proc_root: Path = Path("/proc"),
         result["block_devices"] = devices
     except (OSError, ValueError):
         result["block_devices"] = None
+    result["hardware_throttle_counts"] = _hardware_throttle_counts(sysfs_root)
     result["filesystem_space"] = filesystem_space(data_path) if data_path is not None else None
     return result
 
@@ -251,13 +305,16 @@ def verify(directory: Path) -> dict[str, Any]:
             elif digest(p) != sha:
                 integrity_errors.append(f"checksum mismatch: {relative}")
         if (directory / "machine-profile.json").exists():
-            from .machine import assess_idle, summarize_idle
+            from .machine import assess_idle, storage_probe_errors, summarize_idle
             manifest = json.loads((directory / "machine-profile.json").read_text())
-            if manifest.get("schema") != 1 or manifest.get("kind") != "fixed-machine-idle":
+            profile_schema = manifest.get("schema")
+            if profile_schema not in (1, 2) or manifest.get("kind") != "fixed-machine-idle":
                 integrity_errors.append("unsupported machine-profile manifest")
             samples = [json.loads(line) for line in
                        (directory / "idle-samples.jsonl").read_text().splitlines()]
-            observed_summary = summarize_idle(samples)
+            observed_summary = summarize_idle(
+                samples, schema=profile_schema if profile_schema in (1, 2) else 2
+            )
             recorded_summary = json.loads((directory / "summary.json").read_text())
             if observed_summary != recorded_summary:
                 integrity_errors.append("machine-profile summary differs from raw samples")
@@ -268,8 +325,7 @@ def verify(directory: Path) -> dict[str, Any]:
             if observed_verdict != recorded_verdict:
                 integrity_errors.append("machine-profile verdict differs from objective")
             storage = json.loads((directory / "storage-probe.json").read_text())
-            if storage.get("status") != "passed":
-                integrity_errors.append("machine-profile storage publication probe did not pass")
+            integrity_errors.extend(storage_probe_errors(storage))
             environment_status = recorded_verdict.get("status", "failed")
             failed = bool(integrity_errors) or environment_status != "passed"
             return {

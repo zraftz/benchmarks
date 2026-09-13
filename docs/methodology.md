@@ -151,13 +151,19 @@ the selected data path.
 
 Before a fixed machine becomes an evidence source, `machine-profile` records a
 predeclared idle observation on the selected data volume. It requires at least
-20 GiB available, CPU iowait no greater than 2%, steal no greater than 1%,
-cgroup throttling no greater than 1% of wall time, I/O PSI `some` no greater
-than 2%, and I/O PSI `full` no greater than 0.5%. It also verifies the file
-write/sync/rename/directory-sync/delete sequence used by the durable adapters.
-Missing counters produce `not measured`, never a silent pass. Passing this
-idle check does not qualify pressure during the benchmark; the per-case samples
-remain the authority for the measured interval.
+20 GiB available; CPU busy time no greater than 5%; CPU iowait no greater than
+2%; steal and cgroup throttling no greater than 1%; CPU and I/O PSI `some` no
+greater than 2%; I/O PSI `full` and memory PSI `some` no greater than 0.5%; and
+memory PSI `full` no greater than 0.1%. An exposed hardware-throttle counter
+must not advance. It also verifies 16 complete file write/sync/rename/directory-
+sync/delete sequences used by the durable adapters and records their latency
+distribution without applying a storage-speed threshold. CPU frequency policy,
+clocksource, NUMA shape, filesystem identity, and block topology are retained
+as interpretation context. Missing required counters produce `not measured`,
+never a silent pass; hardware counters remain explicitly optional because many
+Linux hosts do not expose them. Passing this idle check does not qualify
+pressure during the benchmark; the per-case samples remain the authority for
+the measured interval.
 
 The `capacity` command captures this profile after both exact same-SHA Rafter
 arms and the controls are built, immediately before timing. It binds the sealed
