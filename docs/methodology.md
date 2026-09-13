@@ -141,6 +141,16 @@ themselves identify the workload responsible for a stall. The case manifest
 records the filesystem source so block-device deltas can be interpreted against
 the selected data path.
 
+Before a fixed machine becomes an evidence source, `machine-profile` records a
+predeclared idle observation on the selected data volume. It requires at least
+20 GiB available, CPU iowait no greater than 2%, steal no greater than 1%,
+cgroup throttling no greater than 1% of wall time, I/O PSI `some` no greater
+than 2%, and I/O PSI `full` no greater than 0.5%. It also verifies the file
+write/sync/rename/directory-sync/delete sequence used by the durable adapters.
+Missing counters produce `not measured`, never a silent pass. Passing this
+idle check does not qualify pressure during the benchmark; the per-case samples
+remain the authority for the measured interval.
+
 Keep default pins checked in. A requested Rafter ref is resolved once and written
 as an exact commit into both manifests, then Cargo updates their locks while
 retaining existing compatible dependencies. Builds use `--locked`. The selected

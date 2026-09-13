@@ -250,6 +250,40 @@ def verify(directory: Path) -> dict[str, Any]:
                 integrity_errors.append(f"invalid artifact path: {relative}")
             elif digest(p) != sha:
                 integrity_errors.append(f"checksum mismatch: {relative}")
+        if (directory / "machine-profile.json").exists():
+            from .machine import assess_idle, summarize_idle
+            manifest = json.loads((directory / "machine-profile.json").read_text())
+            if manifest.get("schema") != 1 or manifest.get("kind") != "fixed-machine-idle":
+                integrity_errors.append("unsupported machine-profile manifest")
+            samples = [json.loads(line) for line in
+                       (directory / "idle-samples.jsonl").read_text().splitlines()]
+            observed_summary = summarize_idle(samples)
+            recorded_summary = json.loads((directory / "summary.json").read_text())
+            if observed_summary != recorded_summary:
+                integrity_errors.append("machine-profile summary differs from raw samples")
+            observed_verdict = assess_idle(
+                observed_summary, manifest.get("qualification_objective", {})
+            )
+            recorded_verdict = json.loads((directory / "verdict.json").read_text())
+            if observed_verdict != recorded_verdict:
+                integrity_errors.append("machine-profile verdict differs from objective")
+            storage = json.loads((directory / "storage-probe.json").read_text())
+            if storage.get("status") != "passed":
+                integrity_errors.append("machine-profile storage publication probe did not pass")
+            environment_status = recorded_verdict.get("status", "failed")
+            failed = bool(integrity_errors) or environment_status != "passed"
+            return {
+                "status": "failed" if failed else "passed",
+                "errors": integrity_errors + recorded_verdict.get("failures", [])
+                + [f"missing: {name}" for name in recorded_verdict.get("missing", [])],
+                "verdicts": {
+                    "evidence_integrity": {
+                        "status": "failed" if integrity_errors else "passed",
+                        "errors": integrity_errors,
+                    },
+                    "environment_qualification": recorded_verdict,
+                },
+            }
         if (directory / "provenance.json").exists():
             from .micro_report import verify_report
             verify_report(directory)

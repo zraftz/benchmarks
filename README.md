@@ -53,6 +53,21 @@ repetitions, with 60 seconds measured per case. Allow about 40–60 minutes.
 Needs Rust 1.88.0, Python 3.11+, Go 1.22+, Git, `protoc`, and a C compiler.
 Linux is recommended. Data storage must support file and directory syncs.
 
+Before using a new fixed machine for evidence, characterize the exact data
+volume while the host is idle:
+
+```sh
+./raft-bench machine-profile \
+  --data-root /path/to/benchmark-disk \
+  --output results/machine-profile
+```
+
+The predeclared 15-second objective requires at least 20 GiB available and
+bounded idle CPU iowait, steal, cgroup throttling, and Linux I/O pressure. The
+receipt also exercises write/sync/rename/directory-sync/delete on the selected
+volume. Missing Linux counters do not pass. `--record-only` retains an
+incomplete or stressed-host observation without relabeling it as qualified.
+
 ```sh
 ./raft-bench microbench --runs 7
 

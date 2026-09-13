@@ -126,6 +126,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="raft-bench: protocol diagnostics and durable networked embedding baselines")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="show required tools; makes no installations")
+    p = sub.add_parser("machine-profile", help="record and assess the fixed benchmark host while idle")
+    p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--duration", type=float, default=15)
+    p.add_argument("--interval", type=float, default=1)
+    p.add_argument("--record-only", action="store_true",
+                   help="retain a failed or incomplete observation without returning a failing status")
     p = sub.add_parser("build", help="test and build all durable adapters with locked dependencies")
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
     p.add_argument("--rafter-hard-state", choices=("replace", "journal", "wal"), default="replace", help="journal and wal require a Rafter revision supporting that backend")
@@ -199,6 +206,16 @@ def main() -> None:
     try:
         if args.command == "doctor":
             print(json.dumps({t: shutil.which(t) for t in ("cargo", "rustc", "go", "protoc", "git", "python3")}, indent=2))
+        elif args.command == "machine-profile":
+            from .machine import capture_profile
+            verdict = capture_profile(args.data_root, args.output,
+                                      duration_seconds=args.duration,
+                                      interval_seconds=args.interval)
+            print(json.dumps(verdict, indent=2))
+            if verdict["status"] != "passed" and not args.record_only:
+                raise RuntimeError(
+                    "fixed-machine idle objective did not pass; evidence was retained"
+                )
         elif args.command == "select-rafter":
             from .selection import select_rafter
             select_rafter(args.ref)
