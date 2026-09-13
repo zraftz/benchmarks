@@ -29,8 +29,11 @@ class IntegrationTests(unittest.TestCase):
                 command=[sys.executable,str(ROOT/"tests/fake_node.py")],
                 build_receipt={"binaries": {"test-fixture": digest(Path(sys.executable))},
                     "implementations": {"test-fixture": {"purpose": "tooling test only"}}})
+            load_environment=json.loads((root/"case/load-environment.json").read_text())
+            self.assertEqual(load_environment["nominal_sample_interval_seconds"],1.0)
             check=verify(root/"case")
-            self.assertEqual(check["status"],"passed",check)
+            self.assertEqual(check["status"],"passed",{
+                "verification":check,"load_environment":load_environment})
             r=json.loads((root/"case/measurement.json").read_text())
             self.assertGreater(r["ok"],0)
             self.assertEqual(r["schema"],3)
@@ -43,7 +46,6 @@ class IntegrationTests(unittest.TestCase):
             m=json.loads((root/"case/manifest.json").read_text())
             self.assertEqual(m["implementation"],"test-fixture")
             self.assertTrue(m["smoke"])
-            load_environment=json.loads((root/"case/load-environment.json").read_text())
             self.assertEqual(load_environment["coverage"]["status"],"passed")
             self.assertGreater(load_environment["summary"]["sample_count"],1)
             fault=json.loads((root/"case/fault.json").read_text())

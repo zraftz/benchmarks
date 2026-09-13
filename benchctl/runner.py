@@ -83,7 +83,10 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
     if receipt and digest(Path(command[0])) != receipt["binaries"][implementation]:
         raise RuntimeError("case binary differs from the supplied build receipt")
     case_id = uuid.uuid4().hex
-    sample_interval_seconds = 0.1 if options.smoke else 1.0
+    # Smoke cases are functional evidence, not higher-resolution performance
+    # measurements. Use the normal cadence so a slow host-counter probe does
+    # not turn its own collection cost into a spurious coverage gap.
+    sample_interval_seconds = 1.0
     observe_storage_footprint = bool(
         implementation == "rafter"
         and receipt
