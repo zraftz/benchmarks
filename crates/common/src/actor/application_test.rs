@@ -121,8 +121,9 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
     worker.try_submit(vec![entry.clone()]).unwrap();
     waiting.recv_timeout(Duration::from_secs(1)).unwrap();
     let (reply, mut response) = oneshot::channel();
+    let (retry_reply, mut retry_response) = oneshot::channel();
     let mut pending = BTreeMap::new();
-    pending.insert(c.identity(), (c, vec![reply]));
+    pending.insert(c.identity(), (c, vec![reply, retry_reply]));
     let (peer_seen, observed) = mpsc::channel();
     let config = Config {
         id: 1,
@@ -158,7 +159,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         transport_generation: 0,
         dropped: Arc::new(AtomicU64::new(0)),
         pending,
-        pending_count: 1,
+        pending_count: 2,
         peer_batches: 0,
         peer_events: 0,
         peer_batch_sizes: BTreeMap::new(),
@@ -192,6 +193,18 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
     };
     assert_eq!(result.status, "ok");
     assert_eq!(result.result.unwrap().value.as_deref(), Some("durable"));
+    let retry_result = loop {
+        if let Ok(result) = retry_response.try_recv() {
+            break result;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(retry_result.status, "ok");
+    assert_eq!(
+        retry_result.result.unwrap().value.as_deref(),
+        Some("durable")
+    );
     drop(tx);
     owner.join().unwrap().unwrap();
     let reopened = DurableModel::open(&path).unwrap();

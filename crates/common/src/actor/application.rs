@@ -203,9 +203,21 @@ impl<E: Engine> State<E> {
                 if let Some((submitted, replies)) = self.pending.remove(&c.identity()) {
                     self.pending_count -= replies.len();
                     let mut completed = false;
-                    for reply in replies {
-                        let response = if submitted == c {
-                            result.clone()
+                    let matching = submitted == c;
+                    let mut matching_result = Some(result);
+                    let mut replies = replies.into_iter().peekable();
+                    while let Some(reply) = replies.next() {
+                        let response = if matching {
+                            if replies.peek().is_none() {
+                                matching_result
+                                    .take()
+                                    .expect("matching result is consumed by the final reply")
+                            } else {
+                                matching_result
+                                    .as_ref()
+                                    .expect("matching result remains before the final reply")
+                                    .clone()
+                            }
                         } else {
                             Outcome {
                                 error: Some("identity_conflict".into()),
