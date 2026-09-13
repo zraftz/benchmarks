@@ -200,6 +200,64 @@ fn combining_state(
     }
 }
 
+#[test]
+fn pending_admission_uses_one_entry_for_retries_and_rejects_conflicts() {
+    let path = std::env::temp_dir().join(format!("pending-admission-{}", std::process::id()));
+    let (combined, _) = mpsc::channel();
+    let mut state = combining_state(&path, combined);
+    let command = Command {
+        client: "client".into(),
+        sequence: 1,
+        kind: "put".into(),
+        key: "key".into(),
+        value: "value".into(),
+        expected: None,
+    };
+    let request = |command| Request {
+        op: "execute".into(),
+        command: Some(command),
+    };
+    let mut proposed = Vec::new();
+
+    let (first_reply, _first_response) = oneshot::channel();
+    state
+        .client(request(command.clone()), first_reply, None, &mut proposed)
+        .unwrap();
+    let (retry_reply, _retry_response) = oneshot::channel();
+    state
+        .client(request(command.clone()), retry_reply, None, &mut proposed)
+        .unwrap();
+
+    assert_eq!(state.pending.len(), 1);
+    assert_eq!(state.pending.values().next().unwrap().1.len(), 2);
+    assert_eq!(state.pending_count, 2);
+    assert_eq!(proposed, vec![command.clone(), command.clone()]);
+
+    let mut conflict = command;
+    conflict.value = "different".into();
+    let (conflict_reply, mut conflict_response) = oneshot::channel();
+    state
+        .client(request(conflict), conflict_reply, None, &mut proposed)
+        .unwrap();
+    assert_eq!(
+        conflict_response
+            .try_recv()
+            .unwrap()
+            .result
+            .unwrap()
+            .error
+            .as_deref(),
+        Some("identity_conflict")
+    );
+    assert_eq!(state.pending.len(), 1);
+    assert_eq!(state.pending.values().next().unwrap().1.len(), 2);
+    assert_eq!(state.pending_count, 2);
+    assert_eq!(proposed.len(), 2);
+
+    drop(state);
+    std::fs::remove_file(path).unwrap();
+}
+
 fn write(key: &str) -> Input {
     sequenced_write(key, 1)
 }

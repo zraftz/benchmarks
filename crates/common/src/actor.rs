@@ -9,7 +9,7 @@ use crate::{
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{btree_map::Entry, BTreeMap, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc, Arc,
@@ -653,23 +653,22 @@ impl<E: Engine> State<E> {
                     return Ok(());
                 }
                 let identity = c.identity();
-                if let Some((prior, _)) = self.pending.get(&identity) {
-                    if prior != &c {
-                        let _ = reply.send(Reply::applied(crate::model::Outcome {
-                            error: Some("identity_conflict".into()),
-                            ..Default::default()
-                        }));
-                        return Ok(());
+                match self.pending.entry(identity) {
+                    Entry::Occupied(mut pending) => {
+                        if pending.get().0 != c {
+                            let _ = reply.send(Reply::applied(crate::model::Outcome {
+                                error: Some("identity_conflict".into()),
+                                ..Default::default()
+                            }));
+                            return Ok(());
+                        }
+                        pending.get_mut().1.push(reply);
+                    }
+                    Entry::Vacant(pending) => {
+                        self.diagnostics.admit_operation(&c, queued);
+                        pending.insert((c.clone(), vec![reply]));
                     }
                 }
-                if !self.pending.contains_key(&identity) {
-                    self.diagnostics.admit_operation(&c, queued);
-                }
-                self.pending
-                    .entry(identity)
-                    .or_insert_with(|| (c.clone(), Vec::new()))
-                    .1
-                    .push(reply);
                 self.pending_count += 1;
                 commands.push(c);
             }
