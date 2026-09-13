@@ -14,8 +14,9 @@ import uuid
 from . import protocol
 from .checker import check_history, read_history
 from .cluster import Cluster
-from .evidence import (ROOT, capture, digest, host_info, proc_sample, seal, source_digest,
-                       system_sample, validate_result, write_json)
+from .evidence import (ROOT, capture, digest, host_info, seal, source_digest,
+                       validate_result, write_json)
+from .load_sampling import LoadSampler
 from .machine import LOAD_ENVIRONMENT_SCHEMA, load_environment_receipt
 
 
@@ -86,7 +87,10 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         "implementation_pins": receipt["implementations"] if receipt else json.loads((ROOT / "implementations.lock.json").read_text()),
         "binary_sha256": digest(Path(command[0])), "loadgen_sha256": digest(ROOT / "dist/raft-bench-load"),
         "build_receipt": receipt,
-        "limitations": ["plaintext transport", "logged reads", "static three-voter group", "retained logs; no snapshots",
+        "limitations": ["plaintext transport", "logged reads", "static three-voter group",
+                        ("application journal remains append-only; Raft snapshots and WAL reclamation active"
+                         if getattr(options, "snapshot_interval_entries", 0)
+                         else "retained logs; no snapshots"),
                         "adapter storage/codec costs differ and are disclosed", "not upstream-reviewed tuning"]}
     write_json(directory / "manifest.json", manifest)
     cluster = Cluster(implementation, command, directory / "cluster", data, case_id, options.batch_size,
@@ -97,7 +101,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         getattr(options, "combine_peer_proposals", False),
         getattr(options, "max_inflight_appends", 8),
         getattr(options, "durable_completion_priority", False),
-        getattr(options, "openraft_async_flush", False))
+        getattr(options, "openraft_async_flush", False),
+        getattr(options, "snapshot_interval_entries", 0))
     load = None
     try:
         cluster.start()
@@ -121,7 +126,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 keyspace=options.keyspace, seed=options.seed, reads=options.read_percent,
                 cas=options.cas_percent, namespace="bench", timeout=options.timeout)
             checked_load(args, directory / "warmup.log", options.warmup + options.timeout * 3 + 30)
-        before = protocol.statuses(cluster.nodes)
+        before = protocol.complete_statuses(cluster.nodes)
         write_json(directory / "before.json", before)
         args = load_command(cluster.nodes, directory, "measurement", duration=options.duration,
             concurrency=options.concurrency, payload=options.payload, rate=options.rate,
@@ -131,53 +136,59 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         with (directory / "load.log").open("xb") as output, (directory / "process-samples.jsonl").open("x") as samples:
             start = time.monotonic()
             load = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            sampler = LoadSampler(
+                samples,
+                start=start,
+                interval_seconds=sample_interval_seconds,
+                processes=cluster.process_snapshot,
+                load_pid=load.pid,
+                data_path=data,
+            )
+            sampler.start()
             fault_node = None
+            stopped_application_index = None
             injected = False
             restored = False
             fault = {"scenario": options.scenario, "events": [], "timing_resolution": "controller timestamps; generator timeline is 1-second buckets"}
-            while load.poll() is None:
-                elapsed = time.monotonic() - start
-                if elapsed > options.duration + options.timeout * 4 + 30:
-                    raise TimeoutError("load generator exceeded run deadline")
-                if not injected and elapsed >= options.duration / 3 and options.scenario != "durable-kv":
-                    current = protocol.leader(cluster.nodes)
-                    if options.scenario == "leader-loss":
-                        fault_node = current
-                        cluster.stop_node(fault_node)
-                        action = "SIGKILL leader"
-                    else:
-                        fault_node = next(i for i in cluster.nodes if i != current)
-                        cluster.pause(fault_node)
-                        action = "SIGSTOP follower"
-                    fault["events"].append({"unix_ns": time.time_ns(), "controller_seconds": elapsed, "node": fault_node, "action": action})
-                    injected = True
-                if injected and not restored and elapsed >= 2 * options.duration / 3:
-                    if options.scenario == "leader-loss":
-                        cluster.start_node(fault_node)
-                        action = "restart same data directory"
-                    else:
-                        cluster.resume(fault_node)
-                        action = "SIGCONT follower"
-                    fault["events"].append({"unix_ns": time.time_ns(), "controller_seconds": elapsed, "node": fault_node, "action": action})
-                    restored = True
-                observed = {"controller_seconds": elapsed,
-                    "monotonic_ns": time.monotonic_ns(),
-                    "nodes": {i: proc_sample(p.pid) for i, p in cluster.processes.items()},
-                    "load_generator": proc_sample(load.pid),
-                    "system": system_sample(data_path=data)}
-                samples.write(json.dumps(observed) + "\n")
-                samples.flush()
-                time.sleep(sample_interval_seconds)
-            elapsed = time.monotonic() - start
-            observed = {"controller_seconds": elapsed,
-                "monotonic_ns": time.monotonic_ns(),
-                "nodes": {i: proc_sample(p.pid) for i, p in cluster.processes.items()},
-                "load_generator": proc_sample(load.pid),
-                "system": system_sample(data_path=data)}
-            samples.write(json.dumps(observed) + "\n")
-            samples.flush()
-            if load.returncode:
-                raise RuntimeError(f"load generator exited {load.returncode}; inspect load.log")
+            try:
+                while load.poll() is None:
+                    elapsed = time.monotonic() - start
+                    if elapsed > options.duration + options.timeout * 4 + 30:
+                        raise TimeoutError("load generator exceeded run deadline")
+                    inject_at = 0 if options.scenario == "snapshot-catchup" else options.duration / 3
+                    if not injected and elapsed >= inject_at and options.scenario != "durable-kv":
+                        current = protocol.leader(cluster.nodes)
+                        if options.scenario == "leader-loss":
+                            fault_node = current
+                            cluster.stop_node(fault_node)
+                            action = "SIGKILL leader"
+                        elif options.scenario == "snapshot-catchup":
+                            fault_node = next(i for i in cluster.nodes if i != current)
+                            stopped = protocol.request(cluster.nodes[fault_node], {"op": "status"})
+                            stopped_application_index = stopped["info"]["application"]["applied_index"]
+                            cluster.stop_node(fault_node)
+                            action = "SIGKILL follower"
+                        else:
+                            fault_node = next(i for i in cluster.nodes if i != current)
+                            cluster.pause(fault_node)
+                            action = "SIGSTOP follower"
+                        fault["events"].append({"unix_ns": time.time_ns(), "controller_seconds": elapsed, "node": fault_node, "action": action})
+                        injected = True
+                    if (injected and not restored and options.scenario != "snapshot-catchup"
+                            and elapsed >= 2 * options.duration / 3):
+                        if options.scenario in ("leader-loss", "snapshot-catchup"):
+                            cluster.start_node(fault_node)
+                            action = "restart same data directory"
+                        else:
+                            cluster.resume(fault_node)
+                            action = "SIGCONT follower"
+                        fault["events"].append({"unix_ns": time.time_ns(), "controller_seconds": elapsed, "node": fault_node, "action": action})
+                        restored = True
+                    time.sleep(min(sample_interval_seconds, 0.1))
+                if load.returncode:
+                    raise RuntimeError(f"load generator exited {load.returncode}; inspect load.log")
+            finally:
+                sampler.stop()
         write_json(
             directory / "load-environment.json",
             load_environment_receipt(
@@ -189,8 +200,44 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 nominal_sample_interval_seconds=sample_interval_seconds,
             ),
         )
+        if options.scenario == "snapshot-catchup" and injected and not restored:
+            current = protocol.leader(cluster.nodes)
+            leader_status = protocol.request(cluster.nodes[current], {"op": "status"})
+            required_snapshot_index = leader_status["info"]["snapshot_compaction"]["current_index"]
+            if required_snapshot_index <= stopped_application_index:
+                raise RuntimeError(
+                    "leader did not publish a snapshot beyond the stopped follower floor"
+                )
+            cluster.start_node(fault_node)
+            action = "restart same data directory"
+            fault["events"].append({"unix_ns": time.time_ns(),
+                "controller_seconds": time.monotonic() - start,
+                "node": fault_node, "action": action})
+            fault["snapshot_catchup"] = {
+                "stopped_application_index": stopped_application_index,
+                "required_snapshot_index": required_snapshot_index,
+            }
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    follower = protocol.request(
+                        cluster.nodes[fault_node], {"op": "status"}, timeout=1
+                    )
+                except OSError:
+                    follower = {}
+                info = follower.get("info", {})
+                snapshot = info.get("snapshot_compaction", {})
+                application = info.get("application", {})
+                if (snapshot.get("application_installs", 0) > 0
+                        and snapshot.get("current_index", 0) >= required_snapshot_index
+                        and application.get("applied_index", 0) >= required_snapshot_index):
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("restarted follower did not install the required snapshot")
+                time.sleep(.05)
+            restored = True
         if injected and not restored:
-            if options.scenario == "leader-loss":
+            if options.scenario in ("leader-loss", "snapshot-catchup"):
                 cluster.start_node(fault_node)
             else:
                 cluster.resume(fault_node)
@@ -204,9 +251,11 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         cluster.wait_ready()
         protocol.leader(cluster.nodes)
         after_load = None
-        if getattr(options, "diagnostics", False) or (
-                getattr(options, "pipelined_durability", False) and options.scenario == "durable-kv"):
-            after_load = protocol.statuses(cluster.nodes)
+        if (getattr(options, "diagnostics", False)
+                or (getattr(options, "pipelined_durability", False)
+                    and options.scenario == "durable-kv")
+                or getattr(options, "snapshot_interval_entries", 0)):
+            after_load = protocol.complete_statuses(cluster.nodes)
         if getattr(options, "diagnostics", False):
             from .timelines import extract
             write_json(directory / "diagnostics-after-load.json", after_load)
@@ -225,8 +274,26 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 from .completion_priority import activity as completion_priority_activity
                 write_json(directory / "completion-priority-activity.json",
                            completion_priority_activity(before, after_load))
+        if getattr(options, "snapshot_interval_entries", 0):
+            from .reclamation_service import activity as reclamation_activity
+            write_json(directory / "snapshot-after-scenario.json", after_load)
+            reclamation = reclamation_activity(
+                before, after_load, options.snapshot_interval_entries, options.scenario,
+                restarted_node=fault_node if options.scenario == "snapshot-catchup" else None,
+                stopped_application_index=(
+                    fault.get("snapshot_catchup", {}).get("stopped_application_index")
+                ),
+                required_snapshot_index=(
+                    fault.get("snapshot_catchup", {}).get("required_snapshot_index")
+                ),
+            )
+            write_json(directory / "snapshot-compaction-activity.json", reclamation)
+            if reclamation["status"] != "passed":
+                raise RuntimeError(
+                    f"live snapshot/reclamation activity did not pass: {reclamation['failures']}"
+                )
         post = canaries(cluster.nodes, case_id + "post")
-        write_json(directory / "after.json", protocol.statuses(cluster.nodes))
+        write_json(directory / "after.json", protocol.complete_statuses(cluster.nodes))
         cluster.stop_all()
         cluster.start(initialize=False)
         recovery = confirm_canaries(cluster.nodes, pre + post, case_id + "final")

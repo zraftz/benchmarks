@@ -6,6 +6,7 @@ import os
 import signal
 import socket
 import subprocess
+import threading
 import time
 from typing import Any
 from . import protocol
@@ -19,10 +20,11 @@ class Cluster:
                  peer_message_stream: bool = False, pipelined_durability: bool = False,
                  max_speculative_proposals: int = 1, combine_peer_proposals: bool = False,
                  max_inflight_appends: int = 8, durable_completion_priority: bool = False,
-                 openraft_async_flush: bool = False):
+                 openraft_async_flush: bool = False, snapshot_interval_entries: int = 0):
         self.implementation, self.command = implementation, command
         self.directory, self.data = directory, data
         self.processes: dict[int, subprocess.Popen] = {}
+        self._processes_lock = threading.Lock()
         self.logs: list[Any] = []
         self.paused: set[int] = set()
         self.configs: dict[int, Path] = {}
@@ -50,7 +52,8 @@ class Cluster:
                     "combine_peer_proposals": combine_peer_proposals,
                     "max_inflight_appends": max_inflight_appends,
                     "durable_completion_priority": durable_completion_priority,
-                    "openraft_async_flush": openraft_async_flush})
+                    "openraft_async_flush": openraft_async_flush,
+                    "snapshot_interval_entries": snapshot_interval_entries})
         finally:
             for sock in reserved:
                 sock.close()
@@ -58,13 +61,21 @@ class Cluster:
         # can still win this small race; startup fails rather than attaching to it.
 
     def start_node(self, node: int) -> None:
-        if node in self.processes and self.processes[node].poll() is None:
+        with self._processes_lock:
+            current = self.processes.get(node)
+        if current is not None and current.poll() is None:
             raise RuntimeError("node already running")
         generation = len(list(self.directory.glob(f"node-{node}-*.log")))
         log = (self.directory / f"node-{node}-{generation}.log").open("xb")
         self.logs.append(log)
-        self.processes[node] = subprocess.Popen(self.command + ["--config", str(self.configs[node])],
+        process = subprocess.Popen(self.command + ["--config", str(self.configs[node])],
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        with self._processes_lock:
+            self.processes[node] = process
+
+    def process_snapshot(self) -> dict[int, subprocess.Popen]:
+        with self._processes_lock:
+            return dict(self.processes)
 
     def start(self, *, initialize: bool = True) -> None:
         for node in self.nodes:

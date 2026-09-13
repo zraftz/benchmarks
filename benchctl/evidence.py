@@ -419,6 +419,64 @@ def load_environment_errors(directory: Path, manifest: dict) -> list[str]:
     return errors
 
 
+def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
+    """Replay optional live snapshot/reclamation evidence from sealed status files."""
+    options = manifest.get("options", {})
+    interval = options.get("snapshot_interval_entries", 0)
+    receipt_path = directory / "snapshot-compaction-activity.json"
+    after_path = directory / "snapshot-after-scenario.json"
+    if not interval:
+        unexpected = [path.name for path in (receipt_path, after_path) if path.exists()]
+        return [f"unexpected live snapshot/reclamation evidence: {name}" for name in unexpected]
+    if type(interval) is not int or interval < 1 or interval > 1_000_000_000:
+        return ["invalid declared snapshot interval"]
+    missing = [path.name for path in (receipt_path, after_path) if not path.exists()]
+    if missing:
+        return [f"missing live snapshot/reclamation evidence: {name}" for name in missing]
+    from .reclamation_service import activity
+
+    errors = []
+    restarted_node = None
+    stopped_application_index = None
+    required_snapshot_index = None
+    if manifest.get("scenario") == "snapshot-catchup":
+        fault = json.loads((directory / "fault.json").read_text())
+        events = fault.get("events", [])
+        if not isinstance(events, list) or len(events) != 2:
+            errors.append("snapshot catch-up requires exactly one follower kill and restart")
+        elif not all(isinstance(event, dict) for event in events):
+            errors.append("snapshot catch-up fault events are invalid")
+        else:
+            restarted_node = events[0].get("node")
+            if (
+                type(restarted_node) is not int
+                or restarted_node not in (1, 2, 3)
+                or events[0].get("action") != "SIGKILL follower"
+                or events[1].get("node") != restarted_node
+                or events[1].get("action") != "restart same data directory"
+            ):
+                errors.append("snapshot catch-up fault actions differ from the declared scenario")
+        catchup = fault.get("snapshot_catchup", {})
+        stopped_application_index = catchup.get("stopped_application_index")
+        required_snapshot_index = catchup.get("required_snapshot_index")
+
+    actual = activity(
+        json.loads((directory / "before.json").read_text()),
+        json.loads(after_path.read_text()),
+        interval,
+        manifest.get("scenario"),
+        restarted_node=restarted_node,
+        stopped_application_index=stopped_application_index,
+        required_snapshot_index=required_snapshot_index,
+    )
+    recorded = json.loads(receipt_path.read_text())
+    if actual != recorded:
+        errors.append("live snapshot/reclamation receipt differs from runtime status")
+    if actual["status"] != "passed":
+        errors.append("live snapshot/reclamation activity did not pass")
+    return errors
+
+
 def verify(directory: Path) -> dict[str, Any]:
     integrity_errors = []
     correctness_errors = []
@@ -487,6 +545,7 @@ def verify(directory: Path) -> dict[str, Any]:
         manifest = json.loads((directory / "manifest.json").read_text())
         integrity_errors.extend(load_environment_errors(directory, manifest))
         integrity_errors.extend(runtime_configuration_errors(directory, manifest))
+        integrity_errors.extend(snapshot_reclamation_errors(directory, manifest))
         if manifest.get("options", {}).get("diagnostics"):
             from .timelines import extract, recorded_extract_matches
             actual_timelines = extract(

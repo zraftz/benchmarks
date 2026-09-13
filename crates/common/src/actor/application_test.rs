@@ -29,6 +29,17 @@ struct EngineProbe {
     peer_seen: mpsc::Sender<()>,
     entry: Applied,
 }
+
+#[test]
+fn first_snapshot_boundaries_are_log_staggered_without_time_delay() {
+    assert!(snapshot_due(96, 0, 96, 1));
+    assert!(!snapshot_due(96, 0, 96, 2));
+    assert!(snapshot_due(128, 0, 96, 2));
+    assert!(!snapshot_due(159, 0, 96, 3));
+    assert!(snapshot_due(160, 0, 96, 3));
+    assert!(!snapshot_due(255, 160, 96, 3));
+    assert!(snapshot_due(256, 160, 96, 3));
+}
 impl Engine for EngineProbe {
     type Peer = ();
     type Gate = ();
@@ -133,6 +144,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         combine_peer_proposals: false,
         durable_completion_priority: false,
         openraft_async_flush: false,
+        snapshot_interval_entries: 0,
     };
     let mut state = State {
         diagnostics: Diagnostics::default(),
@@ -154,6 +166,11 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         prioritized_peer_events: 0,
         prioritized_client_inputs_bypassed: 0,
         pre_persistence_client_completions: 0,
+        snapshot_compactions: 0,
+        snapshot_compaction_total_ns: 0,
+        snapshot_compaction_max_ns: 0,
+        snapshot_payload_bytes: 0,
+        application_snapshots_installed: 0,
     };
     let owner = std::thread::spawn(move || state.run(rx));
     tx.send(Input::Peer(2, vec![], None)).unwrap();

@@ -54,6 +54,8 @@ pub struct Config {
     pub durable_completion_priority: bool,
     #[serde(default)]
     pub openraft_async_flush: bool,
+    #[serde(default)]
+    pub snapshot_interval_entries: u64,
 }
 fn peer_batch_size() -> usize {
     1
@@ -99,8 +101,11 @@ impl Config {
             || (c.combine_peer_proposals && !c.pipelined_durability)
             || (c.durable_completion_priority && !c.pipelined_durability)
             || (c.durable_completion_priority && c.combine_peer_proposals)
+            || (c.snapshot_interval_entries > 0
+                && (!c.ordered_apply || !c.peer_message_stream || !c.pipelined_durability))
+            || c.snapshot_interval_entries > 1_000_000_000
         {
-            bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, batch and inflight limits in 1..64, pipeline-only scheduling options, and one mixed-input policy");
+            bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, batch and inflight limits in 1..64, pipeline-only scheduling options, one mixed-input policy, and full pipeline mode for snapshot compaction");
         }
         if c.peers.get(&c.id) != Some(&c.peer) {
             bail!("own peer address does not match peers map");

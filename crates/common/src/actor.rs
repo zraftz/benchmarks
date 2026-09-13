@@ -2,7 +2,7 @@
 //! Durable engine effects precede application fsync and client acknowledgment.
 use crate::{
     diagnostics::Diagnostics,
-    model::{Applied, Command, DurableModel},
+    model::{ApplicationSnapshot, Applied, Command, DurableModel},
     net::{outbound::Outbound, Handler},
     Config, Reply, Request, CONTRACT,
 };
@@ -26,6 +26,9 @@ pub enum Effect {
     Apply {
         index: u64,
         command: Option<Command>,
+    },
+    InstallSnapshot {
+        snapshot: ApplicationSnapshot,
     },
 }
 pub trait Engine: Send + 'static {
@@ -51,6 +54,15 @@ pub trait Engine: Send + 'static {
     }
     fn last_index(&self) -> u64 {
         0
+    }
+    fn snapshot_compaction_supported(&self) -> bool {
+        false
+    }
+    fn snapshot_index(&self) -> u64 {
+        0
+    }
+    fn compact_snapshot(&mut self, _applied_index: u64, _payload: Vec<u8>) -> Result<()> {
+        bail!("snapshot compaction is unsupported by this engine")
     }
     fn committed_entries(&self, _after: u64, _count: usize, _bytes: usize) -> Result<Vec<Applied>> {
         bail!("ordered application is unsupported by this build")
@@ -206,9 +218,23 @@ impl Actor {
                 prioritized_peer_events: 0,
                 prioritized_client_inputs_bypassed: 0,
                 pre_persistence_client_completions: 0,
+                snapshot_compactions: 0,
+                snapshot_compaction_total_ns: 0,
+                snapshot_compaction_max_ns: 0,
+                snapshot_payload_bytes: 0,
+                application_snapshots_installed: 0,
             };
             state.engine.start(state.config.diagnostics);
-            if let Err(e) = state.effects(recovered).and_then(|_| state.run(rx)) {
+            let supported = state.config.snapshot_interval_entries == 0
+                || state.engine.snapshot_compaction_supported();
+            let result = if supported {
+                state.effects(recovered).and_then(|_| state.run(rx))
+            } else {
+                Err(anyhow::anyhow!(
+                    "snapshot compaction was configured for an unsupported engine"
+                ))
+            };
+            if let Err(e) = result {
                 eprintln!("fatal benchmark node error: {e:#}");
                 std::process::exit(1);
             }
@@ -249,6 +275,11 @@ struct State<E> {
     prioritized_peer_events: u64,
     prioritized_client_inputs_bypassed: u64,
     pre_persistence_client_completions: u64,
+    snapshot_compactions: u64,
+    snapshot_compaction_total_ns: u64,
+    snapshot_compaction_max_ns: u64,
+    snapshot_payload_bytes: u64,
+    application_snapshots_installed: u64,
 }
 impl<E: Engine> State<E> {
     fn run(&mut self, rx: mpsc::Receiver<Input>) -> Result<()> {
@@ -265,6 +296,7 @@ impl<E: Engine> State<E> {
             }
             self.complete_persistence()?;
             self.complete_applies()?;
+            self.maybe_compact_snapshot()?;
             self.dispatch_applies()?;
             if Instant::now() >= next {
                 let e = self.engine.tick()?;
@@ -565,6 +597,13 @@ impl<E: Engine> State<E> {
                         "prioritized_peer_events":self.prioritized_peer_events,
                         "prioritized_client_inputs_bypassed":self.prioritized_client_inputs_bypassed,
                         "pre_persistence_client_completions":self.pre_persistence_client_completions},
+                    "snapshot_compaction":{"interval_entries":self.config.snapshot_interval_entries,
+                        "completed":self.snapshot_compactions,
+                        "current_index":self.engine.snapshot_index(),
+                        "total_ns":self.snapshot_compaction_total_ns,
+                        "max_ns":self.snapshot_compaction_max_ns,
+                        "latest_payload_bytes":self.snapshot_payload_bytes,
+                        "application_installs":self.application_snapshots_installed},
                     "transport":self.outbound.iter().map(|(id,peer)|(id.to_string(),peer.stats())).collect::<BTreeMap<_,_>>(),
                     "peer_drops":self.dropped.load(Ordering::Relaxed)});
                 self.application.query(crate::apply_worker::Query {
@@ -639,9 +678,12 @@ impl<E: Engine> State<E> {
     }
     fn effects(&mut self, effects: Vec<Effect>) -> Result<()> {
         if self.engine.persistence_pending()
-            && effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::Apply { .. }))
+            && effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::Apply { .. } | Effect::InstallSnapshot { .. }
+                )
+            })
         {
             bail!("application effect escaped pending Raft persistence")
         }
@@ -673,9 +715,22 @@ impl<E: Engine> State<E> {
                         metadata: None,
                     });
                 }
+                Effect::InstallSnapshot { snapshot } => {
+                    if !applies.is_empty() {
+                        bail!("application entries preceded a snapshot install in one Raft output batch")
+                    }
+                    self.install_application_snapshot(snapshot)?;
+                }
             }
         }
         if self.engine.persistence_pending() {
+            return Ok(());
+        }
+        self.apply_effect_entries(applies)
+    }
+
+    fn apply_effect_entries(&mut self, applies: Vec<Applied>) -> Result<()> {
+        if applies.is_empty() {
             return Ok(());
         }
         match &mut self.application {

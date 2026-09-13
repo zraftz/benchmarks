@@ -109,6 +109,13 @@ def run(options) -> None:
         raise ValueError("OpenRaft uses actual request/reply RPCs; select message engines explicitly")
     if options.openraft_async_flush and implementations != ["openraft"]:
         raise ValueError("the async OpenRaft control requires --implementations openraft")
+    if options.snapshot_interval_entries:
+        if implementations != ["rafter"] or not options.pipelined_durability:
+            raise ValueError("snapshot compaction requires one Rafter pipeline implementation")
+        if not 1 <= options.snapshot_interval_entries <= 1_000_000_000:
+            raise ValueError("snapshot interval entries must be 1..1000000000")
+    if options.scenario == "snapshot-catchup" and not options.snapshot_interval_entries:
+        raise ValueError("snapshot-catchup requires a nonzero snapshot interval")
     rates = [float(r) for r in options.rates.split(",")]
     if not rates or any(not math.isfinite(r) or r < 0 or r > 1e7 for r in rates):
         raise ValueError("rates must be finite numbers from 0 to 10000000")
@@ -146,6 +153,9 @@ def run(options) -> None:
         raise RuntimeError("ordered application build does not identify Rafter's public application worker")
     if options.pipelined_durability and not receipt.get("pipelined_durability"):
         raise RuntimeError("pipelined durability requires a build with --pipelined-durability")
+    if (options.snapshot_interval_entries
+            and receipt.get("rafter_hard_state_backend") != "wal"):
+        raise RuntimeError("snapshot reclamation qualification requires a WAL build receipt")
     if receipt.get("source_digest") != source_digest():
         raise RuntimeError("sources changed since build receipt; rebuild")
     for implementation in implementations:
@@ -246,7 +256,7 @@ def main() -> None:
     p.add_argument("--output", type=Path)
     p = sub.add_parser("run")
     p.add_argument("--implementations", default=",".join(IMPLEMENTATIONS))
-    p.add_argument("--scenario", choices=("durable-kv", "leader-loss", "follower-catchup"), default="durable-kv")
+    p.add_argument("--scenario", choices=("durable-kv", "leader-loss", "follower-catchup", "snapshot-catchup"), default="durable-kv")
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--duration", type=float, default=60)
     p.add_argument("--warmup", type=float, default=10)
@@ -272,6 +282,8 @@ def main() -> None:
                    help="Rafter pipeline only; prioritize safe acknowledgments and ready durable application completions")
     p.add_argument("--openraft-async-flush", action="store_true",
                    help="OpenRaft only; return append after staging and complete durability through its callback")
+    p.add_argument("--snapshot-interval-entries", type=int, default=0,
+                   help="Rafter pipeline only; durably snapshot and reclaim the Raft WAL after this many applied entries")
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
     p.add_argument("--seed-base", type=int, default=1)

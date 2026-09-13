@@ -638,6 +638,36 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(section["status"], "mixed result")
         self.assertEqual(section["checks"][0]["passed_cases"], len(data["cases"]) - 1)
 
+    def test_snapshot_catchup_smoke_is_reported_as_functional_not_performance_evidence(self):
+        data = durable_data()
+        snapshot = service_case(
+            "candidate-b32", "rafter", 0, 0, 100, 1.0
+        )
+        snapshot["source_case"] = "worker-smoke-snapshot-catchup/001-rafter-r1-q0"
+        snapshot["workload"]["scenario"] = "snapshot-catchup"
+        snapshot["smoke"] = True
+        snapshot["snapshot_reclamation"] = {"status": "passed"}
+        data["cases"].append(snapshot)
+        data["smokes"].append({
+            "scenario": "snapshot-catchup",
+            "status": "passed",
+            "source_cases": [snapshot["source_case"]],
+            "failures": [],
+        })
+
+        section = build_summary(durable=data)["sections"][3]
+        check = next(
+            item for item in section["checks"]
+            if item["name"] == "complete-service snapshot catch-up smoke"
+        )
+        self.assertEqual(check["passed_cases"], 1)
+        self.assertIn("functional smoke only, not performance", check["scope"])
+        self.assertIn("snapshot catch-up smoke passed", section["result"])
+        self.assertIn(
+            "complete-service snapshot/compaction and WAL-reclamation soak performance",
+            section["not_measured"],
+        )
+
     def test_candidate_accounting_loss_labels_result_mixed(self):
         data = durable_data()
         candidate = next(case for case in data["cases"]

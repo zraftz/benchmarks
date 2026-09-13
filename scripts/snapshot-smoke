@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Qualify live Rafter WAL reclamation and lagging-follower snapshot installation.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+output="${1:-results/runs/snapshot-smoke-$(date -u +%Y%m%dT%H%M%SZ)}"
+./raft-bench run --smoke --implementations rafter --rates 0 \
+  --pipelined-durability --peer-batch-size 32 \
+  --snapshot-interval-entries 8 --scenario snapshot-catchup \
+  --output "$output"

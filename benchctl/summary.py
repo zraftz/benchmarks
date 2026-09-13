@@ -841,6 +841,10 @@ def _failure_section(durable: dict | None, anomalies: list[dict],
                      if (case.get("history_check") or {}).get("status") == "passed"]
         smokes = [{"scenario": smoke["scenario"], "status": smoke["status"]}
                   for smoke in durable["smokes"]]
+        snapshot_smokes = [
+            smoke for smoke in durable["smokes"]
+            if smoke["scenario"] == "snapshot-catchup" and smoke["status"] == "passed"
+        ]
         checks += [
             {"name": "restart and acknowledged-canary checks", "passed_cases": len(recovered),
              "scope": "finite histories and canaries, not every measured write or power loss"},
@@ -849,6 +853,22 @@ def _failure_section(durable: dict | None, anomalies: list[dict],
             {"name": "Rafter recovery smoke", "scenarios": smokes,
              "scope": "smoke correctness only; not comparative performance"},
         ]
+        if snapshot_smokes:
+            snapshot_cases = [
+                case for case in durable["cases"]
+                if case.get("smoke")
+                and case["workload"].get("scenario") == "snapshot-catchup"
+                and (case.get("snapshot_reclamation") or {}).get("status") == "passed"
+            ]
+            checks.append({
+                "name": "complete-service snapshot catch-up smoke",
+                "passed_cases": len(snapshot_cases),
+                "scope": (
+                    "live writes, Raft snapshot and WAL reclamation, lagging-follower snapshot "
+                    "installation, and restart canaries; functional smoke only, not performance"
+                ),
+            })
+            result_parts.append("Complete-service snapshot catch-up smoke passed")
         source_cases = (_source_refs("durable_service",
                                     [case["source_case"] for case in durable["cases"]])
                         + source_cases)

@@ -71,6 +71,15 @@ def candidate_arms(caps: list[int], thresholds: list[int], windows: list[int],
             for cap in caps for threshold in thresholds for window in windows]
 
 
+def worker_smoke_scenarios(candidate_mode: str, hard_state: str) -> list[str]:
+    scenarios = (["durable-kv", "leader-loss", "follower-catchup"]
+                 if candidate_mode in ("messages", "pipeline")
+                 else ["durable-kv"])
+    if candidate_mode == "pipeline" and hard_state == "wal":
+        scenarios.append("snapshot-catchup")
+    return scenarios
+
+
 def archive_build(destination: Path) -> dict:
     receipt = json.loads((ROOT / "dist/build.json").read_text())
     destination.mkdir(parents=True, exist_ok=False)
@@ -184,7 +193,9 @@ def main() -> None:
     candidate = archive_build(work / "candidate")
     write_json(output / "candidate-build.json", candidate)
     if args.candidate_mode != "inline":
-        scenarios = ("durable-kv", "leader-loss", "follower-catchup") if args.candidate_mode in ("messages", "pipeline") else ("durable-kv",)
+        scenarios = worker_smoke_scenarios(
+            args.candidate_mode, args.candidate_hard_state
+        )
         for scenario in scenarios:
             flags = ["--peer-message-stream"] if args.candidate_mode in ("messages", "pipeline") else []
             engines = "rafter,raft-rs"
@@ -195,6 +206,8 @@ def main() -> None:
                     flags.append("--combine-peer-proposals")
                 if args.candidate_durable_completion_priority:
                     flags.append("--durable-completion-priority")
+                if scenario == "snapshot-catchup":
+                    flags.extend(["--snapshot-interval-entries", "8"])
                 engines = "rafter"
             subprocess.run([sys.executable, str(ROOT / "raft-bench"), "run", "--smoke",
                 "--implementations", engines, "--ordered-apply", "--peer-batch-size", "32",

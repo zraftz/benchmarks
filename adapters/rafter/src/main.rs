@@ -5,18 +5,29 @@ mod driver;
 use anyhow::Result;
 use bench_common::{
     actor::{Actor, Effect, Engine},
-    model::{Applied, Command, DurableModel},
+    model::{ApplicationSnapshot, Applied, Command, DurableModel},
     net, Config,
 };
-use rafter::{Input, LogIndex, Message, NodeConfig, NodeId, Output, Role};
+use rafter::{
+    ApplicationSnapshotKind, ApplicationSnapshotMetadata, ApplicationSnapshotVersion, Input,
+    LogIndex, Message, NodeConfig, NodeId, Output, RaftSnapshot, RaftSnapshotMetadata, Role,
+    SnapshotChunkRequest, SnapshotChunkSource, SnapshotGroupId,
+};
+use rafter_storage::PersistedRaftSnapshot;
 mod storage;
 use storage::{Node, NodeStores, HARD_STATE_BACKEND};
 struct Rafter {
     node: driver::Driver,
+    node_id: NodeId,
+    snapshot_group: SnapshotGroupId,
     ordered_apply: bool,
     empty_appends: diagnostics::EmptyAppends,
     replication_windows: diagnostics::ReplicationWindows,
 }
+const APPLICATION_SNAPSHOT_KIND: &str = "raft-bench-durable-model";
+const APPLICATION_SNAPSHOT_VERSION: u16 = 1;
+const SNAPSHOT_CHUNK_BYTES: u64 = 64 * 1024;
+const MAX_APPLICATION_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 fn can_batch_same_term_append_responses(
     role: Role,
     term: rafter::Term,
@@ -27,7 +38,35 @@ fn can_batch_same_term_append_responses(
             matches!(message, Message::AppendEntriesResponse(response) if response.term == term)
         })
 }
-fn effects(outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
+fn read_snapshot_payload(node: &Node, snapshot: &RaftSnapshot) -> Result<Vec<u8>> {
+    if snapshot.application_payload_len > MAX_APPLICATION_SNAPSHOT_BYTES {
+        anyhow::bail!("application snapshot exceeds benchmark adapter bound")
+    }
+    let mut payload = Vec::with_capacity(snapshot.application_payload_len as usize);
+    let mut offset = 0_u64;
+    while offset < snapshot.application_payload_len {
+        let len = (snapshot.application_payload_len - offset).min(SNAPSHOT_CHUNK_BYTES) as u32;
+        let chunk = node
+            .snapshot_store()
+            .snapshot_chunk(SnapshotChunkRequest {
+                transfer_id: snapshot.transfer_id(),
+                metadata: &snapshot.metadata,
+                total_payload_len: snapshot.application_payload_len,
+                application_payload_crc32: snapshot.application_payload_crc32,
+                offset,
+                len,
+            })
+            .ok_or_else(|| anyhow::anyhow!("promoted snapshot payload is unavailable"))?;
+        if chunk.len() != len as usize {
+            anyhow::bail!("snapshot source returned a short chunk")
+        }
+        payload.extend_from_slice(&chunk);
+        offset += u64::from(len);
+    }
+    Ok(payload)
+}
+
+fn effects(node: Option<&Node>, outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
     let mut result = Vec::new();
     for output in outputs {
         match output {
@@ -43,6 +82,24 @@ fn effects(outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
                     Some(serde_json::from_slice(payload.as_ref())?)
                 },
             }),
+            Output::ApplySnapshot { snapshot } => {
+                if snapshot.metadata.application.kind.as_str() != APPLICATION_SNAPSHOT_KIND
+                    || snapshot.metadata.application.version.get() != APPLICATION_SNAPSHOT_VERSION
+                {
+                    anyhow::bail!("unsupported application snapshot format")
+                }
+                let node = node.ok_or_else(|| {
+                    anyhow::anyhow!("snapshot application output escaped pending persistence")
+                })?;
+                let application =
+                    ApplicationSnapshot::decode(&read_snapshot_payload(node, &snapshot)?)?;
+                if application.applied_index != snapshot.metadata.last_included_index.0 {
+                    anyhow::bail!("application snapshot boundary differs from Raft metadata")
+                }
+                result.push(Effect::InstallSnapshot {
+                    snapshot: application,
+                });
+            }
             _ => {} // Static membership, no reads outside the log, no snapshot/compaction triggers.
         }
     }
@@ -77,7 +134,8 @@ impl Rafter {
         if !self.node.pending() {
             self.observe_replication_windows();
         }
-        effects(outputs, self.ordered_apply)
+        let ready = (!self.node.pending()).then(|| self.node.ready());
+        effects(ready, outputs, self.ordered_apply)
     }
 }
 impl Engine for Rafter {
@@ -88,7 +146,7 @@ impl Engine for Rafter {
         let completed = self
             .node
             .complete()?
-            .map(|outputs| effects(outputs, self.ordered_apply))
+            .map(|outputs| effects(Some(self.node.ready()), outputs, self.ordered_apply))
             .transpose()?;
         if completed.is_some() {
             self.observe_replication_windows();
@@ -143,6 +201,42 @@ impl Engine for Rafter {
     }
     fn last_index(&self) -> u64 {
         self.node.ready().last_log_index().0
+    }
+    fn snapshot_compaction_supported(&self) -> bool {
+        true
+    }
+    fn snapshot_index(&self) -> u64 {
+        self.node.ready().snapshot_index().0
+    }
+    fn compact_snapshot(&mut self, applied_index: u64, payload: Vec<u8>) -> Result<()> {
+        if self.node.pending() {
+            anyhow::bail!("cannot compact while persistence owns the Raft node")
+        }
+        if payload.len() as u64 > MAX_APPLICATION_SNAPSHOT_BYTES {
+            anyhow::bail!("application snapshot exceeds benchmark adapter bound")
+        }
+        let node = self.node.ready_mut();
+        let applied = LogIndex(applied_index);
+        let term = node
+            .term_at_index(applied)
+            .ok_or_else(|| anyhow::anyhow!("snapshot boundary term is unavailable"))?;
+        let metadata = RaftSnapshotMetadata::new(
+            self.snapshot_group.clone(),
+            self.node_id,
+            applied,
+            term,
+            node.current_term(),
+            ApplicationSnapshotMetadata::new(
+                ApplicationSnapshotKind::new(APPLICATION_SNAPSHOT_KIND)?,
+                ApplicationSnapshotVersion::new(APPLICATION_SNAPSHOT_VERSION)?,
+            ),
+        )?;
+        node.compact_log_with_snapshot(PersistedRaftSnapshot {
+            metadata,
+            application_payload: payload,
+        })?;
+        self.observe_replication_windows();
+        Ok(())
     }
     fn committed_entries(&self, after: u64, count: usize, bytes: usize) -> Result<Vec<Applied>> {
         #[cfg(feature = "ordered-apply")]
@@ -326,22 +420,27 @@ async fn main() -> Result<()> {
         LogIndex(model.index),
     )?;
     let (node, outputs) = recovered.into_parts();
+    let snapshot_group = SnapshotGroupId::new(config.cluster.clone())?;
+    let driver = driver::Driver::new(
+        node,
+        config.pipelined_durability,
+        config.diagnostics,
+        config.max_speculative_proposals,
+    )?;
+    let recovered_effects = effects(Some(driver.ready()), outputs, config.ordered_apply)?;
     let handler = Actor::start(
         config.clone(),
         "rafter",
         Rafter {
-            node: driver::Driver::new(
-                node,
-                config.pipelined_durability,
-                config.diagnostics,
-                config.max_speculative_proposals,
-            )?,
+            node: driver,
+            node_id: NodeId(config.id),
+            snapshot_group,
             ordered_apply: config.ordered_apply,
             empty_appends: diagnostics::EmptyAppends::new(config.diagnostics),
             replication_windows: diagnostics::ReplicationWindows::new(config.diagnostics),
         },
         model,
-        effects(outputs, config.ordered_apply)?,
+        recovered_effects,
     );
     net::serve(config, handler).await
 }

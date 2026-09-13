@@ -3,7 +3,7 @@
 //! The Raft owner never blocks submitting work or receiving a completion.
 use crate::{
     diagnostics::Diagnostics,
-    model::{Applied, DurableModel, Outcome},
+    model::{ApplicationSnapshot, Applied, DurableModel, Outcome},
     Reply,
 };
 use anyhow::{bail, Result};
@@ -35,6 +35,12 @@ pub trait ApplicationStore: Send + 'static {
     fn index(&self) -> u64;
     fn stats(&self) -> serde_json::Value;
     fn dump(&self) -> serde_json::Value;
+    fn snapshot(&self) -> Result<ApplicationSnapshot> {
+        bail!("application snapshots are unsupported by this store")
+    }
+    fn install_snapshot(&mut self, _snapshot: ApplicationSnapshot) -> Result<()> {
+        bail!("application snapshots are unsupported by this store")
+    }
 }
 impl ApplicationStore for DurableModel {
     fn apply(&mut self, entries: &[Applied]) -> Result<Vec<Option<Outcome>>> {
@@ -48,6 +54,12 @@ impl ApplicationStore for DurableModel {
     }
     fn dump(&self) -> serde_json::Value {
         serde_json::json!({"values":self.model.values,"applied_index":self.index})
+    }
+    fn snapshot(&self) -> Result<ApplicationSnapshot> {
+        Ok(self.snapshot())
+    }
+    fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
+        self.install_snapshot(snapshot)
     }
 }
 
@@ -166,20 +178,21 @@ struct PendingQuery {
 }
 
 pub struct ApplyWorker {
-    worker: RafterApplicationWorker<Applied, WorkerStore>,
+    worker: Option<RafterApplicationWorker<Applied, WorkerStore>>,
     store: SharedStore,
     queued: Option<Queued>,
     queries: Mutex<VecDeque<PendingQuery>>,
     query_count: AtomicUsize,
     accepted_through: AtomicU64,
     diagnostics: Diagnostics,
+    wake: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl ApplyWorker {
     pub fn start(
         store: impl ApplicationStore,
         diagnostics: Diagnostics,
-        wake: impl Fn() + Send + 'static,
+        wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         let applied = store.index();
         let store: SharedStore = Arc::new(Mutex::new(Box::new(store)));
@@ -197,29 +210,38 @@ impl ApplyWorker {
             BATCH_ENTRIES,
             BATCH_BYTES,
         );
-        let worker = RafterApplicationWorker::start(worker_store, options, wake)
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
+        let worker_wake = Arc::clone(&wake);
+        let worker = RafterApplicationWorker::start(worker_store, options, move || worker_wake())
             .expect("failed to start Rafter application worker");
         Self {
-            worker,
+            worker: Some(worker),
             store,
             queued,
             queries: Mutex::new(VecDeque::new()),
             query_count: AtomicUsize::new(0),
             accepted_through: AtomicU64::new(applied),
             diagnostics,
+            wake,
         }
     }
 
+    fn worker(&self) -> &RafterApplicationWorker<Applied, WorkerStore> {
+        self.worker
+            .as_ref()
+            .expect("application worker is present while the actor is live")
+    }
+
     pub fn applied_index(&self) -> u64 {
-        self.worker.durable_through().0
+        self.worker().durable_through().0
     }
 
     pub fn applying_index(&self) -> u64 {
-        self.worker.applying_through().0
+        self.worker().applying_through().0
     }
 
     pub fn available(&self) -> (usize, usize) {
-        self.worker.available()
+        self.worker().available()
     }
 
     pub fn has_capacity(&self) -> bool {
@@ -249,7 +271,7 @@ impl ApplyWorker {
         let retained = entries.iter().try_fold(0usize, |total, entry| {
             total.checked_add(retained_bytes(entry))
         });
-        let (available_entries, available_bytes) = self.worker.available();
+        let (available_entries, available_bytes) = self.worker().available();
         let Some(retained) = retained else {
             return Ok(false);
         };
@@ -302,19 +324,34 @@ impl ApplyWorker {
     }
 
     fn submit_chunk(&self, entries: Vec<Applied>) -> Result<()> {
-        self.worker.try_submit(entries).map_err(|error| {
+        self.worker().try_submit(entries).map_err(|error| {
             let rejection = error.rejection();
             anyhow::anyhow!("Rafter application worker refused prepared work: {rejection:?}")
         })
     }
 
     pub fn poll(&self) -> Result<Option<Completion>> {
-        let event = self.worker.try_complete().map_err(|error| {
+        let event = self.worker().try_complete().map_err(|error| {
             self.fail_queries(error.to_string());
             anyhow::anyhow!(error)
         })?;
+        event.map(|event| self.handle_event(event)).transpose()
+    }
+
+    pub fn complete(&self) -> Result<Completion> {
+        let event = self.worker().complete().map_err(|error| {
+            self.fail_queries(error.to_string());
+            anyhow::anyhow!(error)
+        })?;
+        self.handle_event(event)
+    }
+
+    fn handle_event(
+        &self,
+        event: ApplicationEvent<Applied, Option<Outcome>, StoreError>,
+    ) -> Result<Completion> {
         match event {
-            Some(ApplicationEvent::Applied(completion)) => {
+            ApplicationEvent::Applied(completion) => {
                 let (entries, outcomes) = completion.into_parts();
                 let starts = if let Some(queued) = &self.queued {
                     let mut queued = queued.lock().unwrap_or_else(PoisonError::into_inner);
@@ -326,13 +363,13 @@ impl ApplyWorker {
                     vec![None; entries.len()]
                 };
                 self.complete_queries()?;
-                Ok(Some(Completion {
+                Ok(Completion {
                     entries,
                     outcomes,
                     queued: starts,
-                }))
+                })
             }
-            Some(ApplicationEvent::Failed(failure)) => {
+            ApplicationEvent::Failed(failure) => {
                 let detail = match failure.kind() {
                     ApplicationFailureKind::Store(error) => error.to_string(),
                     other => format!("{other:?}"),
@@ -340,19 +377,77 @@ impl ApplyWorker {
                 self.fail_queries(&detail);
                 bail!("application worker failed: {detail}")
             }
-            Some(_) => {
+            _ => {
                 self.fail_queries("unsupported application worker event");
                 bail!("unsupported application worker event")
-            }
-            None => {
-                self.complete_queries()?;
-                Ok(None)
             }
         }
     }
 
+    pub fn is_busy(&self) -> bool {
+        self.worker().is_busy()
+    }
+
+    pub fn snapshot(&self) -> Result<Option<ApplicationSnapshot>> {
+        if self.is_busy() {
+            return Ok(None);
+        }
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("application store lock poisoned"))?;
+        store.snapshot().map(Some)
+    }
+
+    pub fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
+        if self.is_busy() {
+            bail!("cannot install an application snapshot while work is in flight")
+        }
+        self.complete_queries()?;
+        if self.query_count.load(Ordering::Acquire) != 0 {
+            bail!("cannot install an application snapshot with pending queries")
+        }
+        let worker_store = self
+            .worker
+            .as_mut()
+            .expect("application worker is present while the actor is live")
+            .shutdown_into_store()
+            .map_err(|error| anyhow::anyhow!(error))?;
+        {
+            let mut store = worker_store
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("application store lock poisoned"))?;
+            store.install_snapshot(snapshot)?;
+        }
+        let applied = worker_store
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("application store lock poisoned"))?
+            .index();
+        let options = ApplicationWorkerOptions::new().with_limits(
+            QUEUE_ENTRIES,
+            QUEUE_BYTES,
+            BATCH_ENTRIES,
+            BATCH_BYTES,
+        );
+        let wake = Arc::clone(&self.wake);
+        self.worker = Some(
+            RafterApplicationWorker::start(worker_store, options, move || wake())
+                .map_err(|error| anyhow::anyhow!(error))?,
+        );
+        self.accepted_through.store(applied, Ordering::Release);
+        if let Some(queued) = &self.queued {
+            queued
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear();
+        }
+        Ok(())
+    }
+
     pub fn query(&self, query: Query) -> Result<()> {
-        if !self.worker.is_accepting() {
+        if !self.worker().is_accepting() {
             let _ = query.reply.send(Reply::error("application worker stopped"));
             bail!("application worker stopped")
         }

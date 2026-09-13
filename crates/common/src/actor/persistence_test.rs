@@ -111,6 +111,7 @@ fn state(engine: PendingEngine, outbound: OutboundPeers) -> State<PendingEngine>
             combine_peer_proposals: false,
             durable_completion_priority: false,
             openraft_async_flush: false,
+            snapshot_interval_entries: 0,
         },
         name: "test",
         engine,
@@ -129,6 +130,11 @@ fn state(engine: PendingEngine, outbound: OutboundPeers) -> State<PendingEngine>
         prioritized_peer_events: 0,
         prioritized_client_inputs_bypassed: 0,
         pre_persistence_client_completions: 0,
+        snapshot_compactions: 0,
+        snapshot_compaction_total_ns: 0,
+        snapshot_compaction_max_ns: 0,
+        snapshot_payload_bytes: 0,
+        application_snapshots_installed: 0,
     }
 }
 fn engine() -> (PendingEngine, mpsc::Receiver<()>, mpsc::Sender<()>) {

@@ -2,8 +2,21 @@
 use super::*;
 use crate::{
     apply_worker::{ApplyWorker, Query, BATCH_BYTES, BATCH_ENTRIES, QUEUE_ENTRIES},
-    model::Outcome,
+    model::{ApplicationSnapshot, Outcome},
 };
+
+fn snapshot_due(applied: u64, current: u64, interval: u64, node_id: u64) -> bool {
+    if applied == 0 || interval == 0 {
+        return false;
+    }
+    if current != 0 {
+        return applied.saturating_sub(current) >= interval;
+    }
+    // Spread the first maintenance boundary across the fixed three-voter
+    // benchmark group by log position, without adding a time delay.
+    let phase = interval.saturating_mul(node_id.saturating_sub(1).min(2)) / 3;
+    applied >= interval.saturating_add(phase)
+}
 
 pub(super) enum Application {
     Inline(DurableModel),
@@ -36,8 +49,104 @@ impl Application {
             }
         }
     }
+
+    pub fn snapshot_if_idle(&self) -> Result<Option<ApplicationSnapshot>> {
+        match self {
+            Self::Inline(model) => Ok(Some(model.snapshot())),
+            Self::Worker(worker) => worker.snapshot(),
+        }
+    }
+
+    pub fn snapshot_index_if_idle(&self) -> Option<u64> {
+        match self {
+            Self::Inline(model) => Some(model.index),
+            Self::Worker(worker) if !worker.is_busy() => Some(worker.applied_index()),
+            Self::Worker(_) => None,
+        }
+    }
+
+    pub fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
+        match self {
+            Self::Inline(model) => model.install_snapshot(snapshot),
+            Self::Worker(worker) => worker.install_snapshot(snapshot),
+        }
+    }
 }
 impl<E: Engine> State<E> {
+    pub(super) fn maybe_compact_snapshot(&mut self) -> Result<()> {
+        let interval = self.config.snapshot_interval_entries;
+        if interval == 0 || self.engine.persistence_pending() {
+            return Ok(());
+        }
+        let current = self.engine.snapshot_index();
+        let Some(applied) = self.application.snapshot_index_if_idle() else {
+            return Ok(());
+        };
+        if !snapshot_due(applied, current, interval, self.config.id) {
+            return Ok(());
+        }
+        let Some(snapshot) = self.application.snapshot_if_idle()? else {
+            return Ok(());
+        };
+        if snapshot.applied_index != applied {
+            bail!("application snapshot boundary changed while preparing snapshot")
+        }
+        if snapshot.applied_index > self.engine.committed_through()
+            || snapshot.applied_index > self.dispatched
+        {
+            bail!("application snapshot boundary is ahead of committed or dispatched state")
+        }
+        let payload = snapshot.encode()?;
+        let payload_bytes = payload.len() as u64;
+        let started = Instant::now();
+        self.engine
+            .compact_snapshot(snapshot.applied_index, payload)?;
+        let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.snapshot_compactions = self.snapshot_compactions.saturating_add(1);
+        self.snapshot_compaction_total_ns =
+            self.snapshot_compaction_total_ns.saturating_add(elapsed);
+        self.snapshot_compaction_max_ns = self.snapshot_compaction_max_ns.max(elapsed);
+        self.snapshot_payload_bytes = payload_bytes;
+        Ok(())
+    }
+
+    pub(super) fn drain_application(&mut self) -> Result<()> {
+        loop {
+            let completion = match &self.application {
+                Application::Inline(_) => return Ok(()),
+                Application::Worker(worker) if !worker.is_busy() => return Ok(()),
+                Application::Worker(worker) => worker.complete()?,
+            };
+            if let Some(last) = completion.entries.last() {
+                self.engine.applied(last.index);
+            }
+            self.resolve_applies(completion.entries, completion.outcomes, completion.queued);
+        }
+    }
+
+    pub(super) fn install_application_snapshot(
+        &mut self,
+        snapshot: ApplicationSnapshot,
+    ) -> Result<()> {
+        self.drain_application()?;
+        let applied = snapshot.applied_index;
+        self.application.install_snapshot(snapshot)?;
+        self.dispatched = applied;
+        self.engine.applied(applied);
+        self.application_snapshots_installed =
+            self.application_snapshots_installed.saturating_add(1);
+
+        let pending = std::mem::take(&mut self.pending);
+        self.pending_count = 0;
+        for (_, (command, replies)) in pending {
+            self.diagnostics.abandon_operation(&command);
+            for reply in replies {
+                let _ = reply.send(Reply::status("unknown"));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn dispatch_applies(&mut self) -> Result<()> {
         if self.engine.persistence_pending() {
             return Ok(());

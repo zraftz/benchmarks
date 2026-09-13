@@ -172,6 +172,7 @@ fn combining_state(
             combine_peer_proposals: true,
             durable_completion_priority: false,
             openraft_async_flush: false,
+            snapshot_interval_entries: 0,
         },
         name: "test",
         engine: CombiningEngine { combined },
@@ -190,6 +191,11 @@ fn combining_state(
         prioritized_peer_events: 0,
         prioritized_client_inputs_bypassed: 0,
         pre_persistence_client_completions: 0,
+        snapshot_compactions: 0,
+        snapshot_compaction_total_ns: 0,
+        snapshot_compaction_max_ns: 0,
+        snapshot_payload_bytes: 0,
+        application_snapshots_installed: 0,
     }
 }
 
@@ -323,6 +329,7 @@ fn priority_state(
             combine_peer_proposals: false,
             durable_completion_priority: true,
             openraft_async_flush: false,
+            snapshot_interval_entries: 0,
         },
         name: "test",
         engine: PriorityEngine { observed },
@@ -341,6 +348,11 @@ fn priority_state(
         prioritized_peer_events: 0,
         prioritized_client_inputs_bypassed: 0,
         pre_persistence_client_completions: 0,
+        snapshot_compactions: 0,
+        snapshot_compaction_total_ns: 0,
+        snapshot_compaction_max_ns: 0,
+        snapshot_payload_bytes: 0,
+        application_snapshots_installed: 0,
     }
 }
 

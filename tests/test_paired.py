@@ -5,7 +5,8 @@ import unittest
 from unittest.mock import patch
 from benchctl.paired import (archive_build, candidate_arms, combined_activation_failures,
                              completion_priority_activation_failures, openraft_arms,
-                             ordered_arms, mode_flags, qualify_machine)
+                             ordered_arms, mode_flags, qualify_machine,
+                             worker_smoke_scenarios)
 from benchctl.evidence import digest
 from benchctl.feature_coverage import verdict as feature_coverage_verdict
 from benchctl.results import _execution_plan_errors, _expected_durable_cases
@@ -13,6 +14,15 @@ from benchctl.suite_plan import execution_plan
 
 
 class PairedTests(unittest.TestCase):
+    def test_only_the_wal_pipeline_adds_snapshot_catchup_smoke(self):
+        base = ["durable-kv", "leader-loss", "follower-catchup"]
+        self.assertEqual(worker_smoke_scenarios("messages", "wal"), base)
+        self.assertEqual(worker_smoke_scenarios("pipeline", "journal"), base)
+        self.assertEqual(
+            worker_smoke_scenarios("pipeline", "wal"),
+            [*base, "snapshot-catchup"],
+        )
+
     def test_order_is_balanced_and_each_arm_runs_once(self):
         arms = list("abcdef")
         orders = [ordered_arms(arms, repeat) for repeat in range(len(arms))]

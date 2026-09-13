@@ -41,6 +41,16 @@ impl Driver {
                 .expect("actor completed persistence before consensus access"),
         }
     }
+    pub fn ready_mut(&mut self) -> &mut Node {
+        match self {
+            Self::Direct(node) => node,
+            #[cfg(feature = "pipelined-durability")]
+            Self::Pipeline(state) => state
+                .node
+                .ready_node_mut()
+                .expect("actor completed persistence before consensus access"),
+        }
+    }
     pub fn current_term(&self) -> Term {
         match self {
             Self::Direct(node) => node.current_term(),

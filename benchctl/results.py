@@ -107,6 +107,7 @@ def _workload(manifest: dict, measurement: dict | None) -> dict:
         "duration_seconds": config.get("duration_seconds", options.get("duration")),
         "warmup_seconds": options.get("warmup"),
         "network_delay_ms": options.get("network_delay_ms", 0),
+        "snapshot_interval_entries": options.get("snapshot_interval_entries", 0),
     }
 
 
@@ -156,6 +157,7 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "combine_peer_proposals": bool(options.get("combine_peer_proposals", False)),
             "durable_completion_priority": bool(options.get("durable_completion_priority", False)),
             "openraft_async_flush": bool(options.get("openraft_async_flush", False)),
+            "snapshot_interval_entries": options.get("snapshot_interval_entries", 0),
         },
         "workload": _workload(manifest, measurement),
         "completion_boundary": (measurement or {}).get("contract", CONTRACT),
@@ -185,6 +187,11 @@ def _normalize_case(case: Path, root: Path) -> dict:
         "load_environment": load_environment,
         "recovery": _read(case / "recovery.json") if (case / "recovery.json").exists() else None,
         "history_check": _read(case / "qualification.json") if (case / "qualification.json").exists() else None,
+        "snapshot_reclamation": (
+            _read(case / "snapshot-compaction-activity.json")
+            if (case / "snapshot-compaction-activity.json").exists()
+            else None
+        ),
     }
 
 

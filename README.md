@@ -108,6 +108,19 @@ manifests and lockfiles; omitted refs use the current selection. Use
 Rafter source is fetched as a dependency; its checkout is never edited.
 Pipeline experiments may vary the bounded per-follower replication window with
 `--max-inflight-appends`; the default remains Rafter's eight append batches.
+The WAL pipeline can also run the finite live-reclamation smoke directly:
+
+```sh
+./raft-bench build --rafter-hard-state wal --pipelined-durability
+./raft-bench run --smoke --implementations rafter --rates 0 \
+  --pipelined-durability --peer-batch-size 32 \
+  --snapshot-interval-entries 8 --scenario snapshot-catchup
+```
+
+That scenario kills a follower before load, requires a newer leader snapshot,
+then proves snapshot installation and acknowledged canaries after restart. It
+does not qualify reclamation latency. The Raft WAL is reclaimed; the benchmark
+application journal remains append-only.
 
 Results live under `results/`. Verify a case or an in-memory suite with:
 

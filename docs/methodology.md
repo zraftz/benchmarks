@@ -139,8 +139,15 @@ Every case checks a complete 64-operation Put/Get/CAS history and acknowledged
 canaries across simultaneous process restarts, before and after load. These
 checks are finite; they do not prove every measured write survived a power cut.
 Leader-loss kills and restarts the leader. Follower-catchup pauses and resumes a
-follower with its retained log. No snapshots, compaction, dynamic membership,
-or TLS are exercised. Use trusted networks and finite runs; storage grows.
+follower with its retained log. The optional `snapshot-catchup` smoke kills one
+follower before measured traffic, requires the leader to publish a newer Raft
+snapshot while serving writes, restarts the same follower data directory, and
+requires an application-snapshot install at that exact or a later boundary.
+Its receipt replays the kill/restart actions, local compaction counters, snapshot
+boundary, application boundary, and restart canaries. This is functional smoke
+evidence, not fault-performance or power-loss evidence. Default timing cases do
+not enable snapshots. The application journal remains append-only even when the
+Raft WAL is reclaimed. Dynamic membership and TLS are not exercised.
 
 ## Reproduction
 

@@ -92,6 +92,41 @@ fn timing_mode_retains_no_per_entry_diagnostic_queue_state() {
     drop(worker);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn idle_worker_installs_snapshot_and_accepts_the_contiguous_suffix() {
+    let source_path = std::env::temp_dir().join(format!(
+        "apply-worker-snapshot-source-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let target_path = std::env::temp_dir().join(format!(
+        "apply-worker-snapshot-target-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut source = DurableModel::open(&source_path).unwrap();
+    source.apply(&[entry(1)]).unwrap();
+    let snapshot = source.snapshot();
+
+    let mut worker = ApplyWorker::start(
+        DurableModel::open(&target_path).unwrap(),
+        Diagnostics::default(),
+        || {},
+    );
+    worker.install_snapshot(snapshot.clone()).unwrap();
+    assert_eq!(worker.applied_index(), 1);
+    assert_eq!(worker.snapshot().unwrap(), Some(snapshot));
+    assert!(worker.try_submit(vec![entry(2)]).unwrap());
+    assert_eq!(worker.complete().unwrap().entries[0].index, 2);
+    drop(worker);
+
+    let reopened = DurableModel::open(&target_path).unwrap();
+    assert_eq!(reopened.index, 2);
+    assert_eq!(reopened.model.values["k"], "2");
+    std::fs::remove_file(source_path).unwrap();
+    std::fs::remove_file(target_path).unwrap();
+}
 #[test]
 fn delayed_sync_keeps_completions_and_durable_position_behind() {
     let (path, worker, waiting, release) = paused(false);

@@ -44,6 +44,27 @@ def statuses(nodes: dict[int, str]) -> dict[int, dict[str, Any]]:
             continue
     return result
 
+def complete_statuses(nodes: dict[int, str], timeout: float = 20.0) -> dict[int, dict[str, Any]]:
+    """Wait for one status pass that identifies every configured node."""
+    deadline = time.monotonic() + timeout
+    observed: dict[int, dict[str, Any]] = {}
+    while time.monotonic() < deadline:
+        observed = statuses(nodes)
+        if set(observed) == set(nodes) and all(
+            response.get("status") == "ok"
+            and response.get("info", {}).get("node_id") == node
+            for node, response in observed.items()
+        ):
+            return observed
+        time.sleep(.05)
+    missing = sorted(
+        node for node in nodes
+        if node not in observed
+        or observed[node].get("status") != "ok"
+        or observed[node].get("info", {}).get("node_id") != node
+    )
+    raise TimeoutError(f"valid status observation did not include nodes {missing}")
+
 def leader(nodes: dict[int, str], timeout: float = 20.0) -> int:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
