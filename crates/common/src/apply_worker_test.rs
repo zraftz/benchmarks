@@ -74,6 +74,25 @@ fn completion(worker: &ApplyWorker) -> Result<Completion> {
     }
 }
 #[test]
+fn timing_mode_retains_no_per_entry_diagnostic_queue_state() {
+    let path = std::env::temp_dir().join(format!(
+        "apply-worker-timing-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let worker = ApplyWorker::start(
+        DurableModel::open(&path).unwrap(),
+        Diagnostics::default(),
+        || {},
+    );
+    assert!(worker.queued.is_none());
+    assert!(worker.try_submit(vec![entry(1)]).unwrap());
+    assert_eq!(completion(&worker).unwrap().entries[0].index, 1);
+    assert!(worker.queued.is_none());
+    drop(worker);
+    std::fs::remove_file(path).unwrap();
+}
+#[test]
 fn delayed_sync_keeps_completions_and_durable_position_behind() {
     let (path, worker, waiting, release) = paused(false);
     assert!(worker.try_submit(vec![entry(1)]).unwrap());
@@ -139,6 +158,14 @@ fn worker_failure_returns_no_success_or_later_apply() {
     release.send(()).unwrap();
     assert!(completion(&worker).is_err());
     assert_eq!(worker.applied_index(), 0);
+    let (reply, _) = oneshot::channel();
+    assert!(worker
+        .query(Query {
+            reply,
+            dump: false,
+            response: Reply::status("ok"),
+        })
+        .is_err());
     drop(worker);
     let recovered = DurableModel::open(&path).unwrap();
     assert_eq!(recovered.index, 0);

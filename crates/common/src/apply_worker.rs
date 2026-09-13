@@ -17,7 +17,7 @@ use std::{
     error::Error,
     fmt,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, PoisonError, TryLockError,
     },
     time::Instant,
@@ -93,11 +93,11 @@ impl fmt::Display for StoreError {
 impl Error for StoreError {}
 
 type SharedStore = Arc<Mutex<Box<dyn ApplicationStore>>>;
-type Queued = Arc<Mutex<BTreeMap<u64, Option<Instant>>>>;
+type Queued = Arc<Mutex<BTreeMap<u64, Instant>>>;
 
 struct WorkerStore {
     store: SharedStore,
-    queued: Queued,
+    queued: Option<Queued>,
     diagnostics: Diagnostics,
 }
 
@@ -114,13 +114,11 @@ impl DurableApplication<Applied> for WorkerStore {
         &mut self,
         entries: &[Applied],
     ) -> std::result::Result<Vec<Self::Outcome>, Self::Error> {
-        {
-            let queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(queued) = &self.queued {
+            let queued = queued.lock().unwrap_or_else(PoisonError::into_inner);
             for entry in entries {
-                self.diagnostics.elapsed(
-                    "application_queue_ns",
-                    queued.get(&entry.index).copied().flatten(),
-                );
+                self.diagnostics
+                    .elapsed("application_queue_ns", queued.get(&entry.index).copied());
             }
         }
         self.diagnostics
@@ -170,8 +168,9 @@ struct PendingQuery {
 pub struct ApplyWorker {
     worker: RafterApplicationWorker<Applied, WorkerStore>,
     store: SharedStore,
-    queued: Queued,
+    queued: Option<Queued>,
     queries: Mutex<VecDeque<PendingQuery>>,
+    query_count: AtomicUsize,
     accepted_through: AtomicU64,
     diagnostics: Diagnostics,
 }
@@ -184,10 +183,12 @@ impl ApplyWorker {
     ) -> Self {
         let applied = store.index();
         let store: SharedStore = Arc::new(Mutex::new(Box::new(store)));
-        let queued = Arc::new(Mutex::new(BTreeMap::new()));
+        let queued = diagnostics
+            .enabled()
+            .then(|| Arc::new(Mutex::new(BTreeMap::new())));
         let worker_store = WorkerStore {
             store: Arc::clone(&store),
-            queued: Arc::clone(&queued),
+            queued: queued.clone(),
             diagnostics: diagnostics.clone(),
         };
         let options = ApplicationWorkerOptions::new().with_limits(
@@ -203,6 +204,7 @@ impl ApplyWorker {
             store,
             queued,
             queries: Mutex::new(VecDeque::new()),
+            query_count: AtomicUsize::new(0),
             accepted_through: AtomicU64::new(applied),
             diagnostics,
         }
@@ -256,15 +258,25 @@ impl ApplyWorker {
         }
 
         let final_index = entries.last().expect("nonempty submission").index;
-        let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
-        if entries
-            .iter()
-            .any(|entry| queued.contains_key(&entry.index))
-        {
-            bail!("application submission reused an in-flight log index")
-        }
-        for entry in &entries {
-            queued.insert(entry.index, self.diagnostics.start());
+        let mut queued = self
+            .queued
+            .as_ref()
+            .map(|queued| queued.lock().unwrap_or_else(PoisonError::into_inner));
+        if let Some(queued) = &mut queued {
+            if entries
+                .iter()
+                .any(|entry| queued.contains_key(&entry.index))
+            {
+                bail!("application submission reused an in-flight log index")
+            }
+            for entry in &entries {
+                queued.insert(
+                    entry.index,
+                    self.diagnostics
+                        .start()
+                        .expect("diagnostic queue exists only when diagnostics are enabled"),
+                );
+            }
         }
         self.diagnostics.application_dispatched(&entries);
 
@@ -304,12 +316,15 @@ impl ApplyWorker {
         match event {
             Some(ApplicationEvent::Applied(completion)) => {
                 let (entries, outcomes) = completion.into_parts();
-                let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
-                let starts = entries
-                    .iter()
-                    .map(|entry| queued.remove(&entry.index).flatten())
-                    .collect();
-                drop(queued);
+                let starts = if let Some(queued) = &self.queued {
+                    let mut queued = queued.lock().unwrap_or_else(PoisonError::into_inner);
+                    entries
+                        .iter()
+                        .map(|entry| queued.remove(&entry.index))
+                        .collect()
+                } else {
+                    vec![None; entries.len()]
+                };
                 self.complete_queries()?;
                 Ok(Some(Completion {
                     entries,
@@ -337,6 +352,10 @@ impl ApplyWorker {
     }
 
     pub fn query(&self, query: Query) -> Result<()> {
+        if !self.worker.is_accepting() {
+            let _ = query.reply.send(Reply::error("application worker stopped"));
+            bail!("application worker stopped")
+        }
         let durable_fence = self.accepted_through.load(Ordering::Acquire);
         {
             let mut queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
@@ -348,11 +367,15 @@ impl ApplyWorker {
                 durable_fence,
                 query,
             });
+            self.query_count.store(queries.len(), Ordering::Release);
         }
         self.complete_queries()
     }
 
     fn complete_queries(&self) -> Result<()> {
+        if self.query_count.load(Ordering::Acquire) == 0 {
+            return Ok(());
+        }
         let durable = self.applied_index();
         {
             let queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
@@ -378,6 +401,7 @@ impl ApplyWorker {
             {
                 ready.push(queries.pop_front().expect("front was present").query);
             }
+            self.query_count.store(queries.len(), Ordering::Release);
         }
         for mut query in ready {
             if query.dump {
@@ -394,7 +418,9 @@ impl ApplyWorker {
     fn fail_queries(&self, detail: impl fmt::Display) {
         let pending = {
             let mut queries = self.queries.lock().unwrap_or_else(PoisonError::into_inner);
-            queries.drain(..).collect::<Vec<_>>()
+            let pending = queries.drain(..).collect::<Vec<_>>();
+            self.query_count.store(0, Ordering::Release);
+            pending
         };
         for query in pending {
             let _ = query.query.reply.send(Reply::error(&detail));
