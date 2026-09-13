@@ -38,6 +38,7 @@ impl Journal {
         let length = f.metadata()?.len();
         let mut valid = 0u64;
         let mut records = Vec::new();
+        let mut bytes = Vec::new();
         while valid < length {
             if length - valid < 8 {
                 break;
@@ -62,12 +63,13 @@ impl Journal {
             if length - valid - 8 < size as u64 {
                 break;
             }
-            let mut bytes = vec![0; size];
+            bytes.resize(size, 0);
             f.read_exact(&mut bytes)?;
             if crc32(&bytes) != checksum {
                 bail!("journal checksum mismatch at {valid}");
             }
             records.push(serde_json::from_slice(&bytes)?);
+            clear_frame(&mut bytes);
             valid += 8 + size as u64;
         }
         if valid < length {
