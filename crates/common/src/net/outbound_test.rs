@@ -63,6 +63,7 @@ async fn failed_partial_write_reconnects_with_a_complete_fresh_frame() {
         address: listener.local_addr().unwrap().to_string(),
         from: 1,
         stream: None,
+        frame: Vec::new(),
     };
     let receiver = tokio::spawn(async move {
         let (mut first, _) = listener.accept().await.unwrap();
@@ -74,8 +75,39 @@ async fn failed_partial_write_reconnects_with_a_complete_fresh_frame() {
     });
     assert!(connection.send(&vec![0; FRAME_LIMIT - 8]).await.is_err());
     assert!(connection.stream.is_none());
+    assert!(connection.frame.capacity() <= RETAINED_FRAME_BYTES);
     connection.send(b"fresh").await.unwrap();
     assert_eq!(&receiver.await.unwrap()[8..], b"fresh");
+    assert!(connection.frame.capacity() <= RETAINED_FRAME_BYTES);
+}
+
+#[tokio::test]
+async fn message_connection_reuses_one_bounded_wire_frame() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut connection = MessageConnection {
+        address: listener.local_addr().unwrap().to_string(),
+        from: 7,
+        stream: None,
+        frame: Vec::new(),
+    };
+    let receiver = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let first = read_frame(&mut stream).await.unwrap();
+        let second = read_frame(&mut stream).await.unwrap();
+        (first, second)
+    });
+
+    connection.send(b"first").await.unwrap();
+    let capacity = connection.frame.capacity();
+    connection.send(b"next").await.unwrap();
+    assert_eq!(connection.frame.capacity(), capacity);
+    assert!(capacity <= RETAINED_FRAME_BYTES);
+
+    let (first, second) = receiver.await.unwrap();
+    assert_eq!(&first[..8], &7u64.to_be_bytes());
+    assert_eq!(&first[8..], b"first");
+    assert_eq!(&second[..8], &7u64.to_be_bytes());
+    assert_eq!(&second[8..], b"next");
 }
 #[tokio::test]
 async fn stalled_reader_times_out_and_releases_queued_credits() {

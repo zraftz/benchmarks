@@ -1,5 +1,5 @@
 //! Independent bounded peer writers. Socket delivery is never Raft durability.
-use super::{write_frame, Rpc};
+use super::Rpc;
 use crate::{diagnostics::Diagnostics, FRAME_LIMIT};
 use anyhow::{bail, Result};
 use std::{
@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
+    io::AsyncWriteExt,
     net::TcpStream,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
     time::timeout,
@@ -18,6 +19,8 @@ use tokio::{
 const QUEUE_EVENTS: usize = 256;
 const QUEUE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_AGE: Duration = Duration::from_secs(2);
+// One buffer per remote peer; ordinary frames reuse it and large frames release it.
+const RETAINED_FRAME_BYTES: usize = 256 * 1024;
 
 struct Packet {
     data: Vec<u8>,
@@ -115,6 +118,7 @@ async fn run(
         address,
         from,
         stream: None,
+        frame: Vec::new(),
     };
     let mut connection_generation = 0;
     while let Some(packet) = rx.recv().await {
@@ -156,26 +160,37 @@ struct MessageConnection {
     address: String,
     from: u64,
     stream: Option<TcpStream>,
+    frame: Vec<u8>,
 }
 impl MessageConnection {
     async fn send(&mut self, bytes: &[u8]) -> Result<()> {
+        let body_len = 8usize
+            .checked_add(bytes.len())
+            .filter(|body_len| *body_len <= FRAME_LIMIT)
+            .ok_or_else(|| anyhow::anyhow!("peer frame exceeds transport budget"))?;
+        self.frame.clear();
+        self.frame.reserve_exact(4 + body_len);
+        self.frame
+            .extend_from_slice(&(body_len as u32).to_be_bytes());
+        self.frame.extend_from_slice(&self.from.to_be_bytes());
+        self.frame.extend_from_slice(bytes);
         let result = timeout(MAX_AGE, async {
             if self.stream.is_none() {
                 let stream = TcpStream::connect(&self.address).await?;
                 stream.set_nodelay(true)?;
                 self.stream = Some(stream);
             }
-            let mut packet = Vec::with_capacity(8 + bytes.len());
-            packet.extend_from_slice(&self.from.to_be_bytes());
-            packet.extend_from_slice(bytes);
-            write_frame(self.stream.as_mut().unwrap(), &packet).await
+            self.stream.as_mut().unwrap().write_all(&self.frame).await
         })
         .await;
+        if self.frame.capacity() > RETAINED_FRAME_BYTES {
+            self.frame = Vec::new();
+        }
         match result {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => {
                 self.stream = None;
-                Err(error)
+                Err(error.into())
             }
             Err(error) => {
                 self.stream = None;
