@@ -13,7 +13,7 @@ use rafter::{
     LogIndex, Message, NodeConfig, NodeId, Output, RaftSnapshot, RaftSnapshotMetadata, Role,
     SnapshotChunkRequest, SnapshotChunkSource, SnapshotGroupId,
 };
-use rafter_storage::{PersistedRaftSnapshot, SnapshotRetention};
+use rafter_storage::SnapshotRetention;
 mod storage;
 use storage::{Node, NodeStores, HARD_STATE_BACKEND};
 struct Rafter {
@@ -28,6 +28,26 @@ const APPLICATION_SNAPSHOT_KIND: &str = "raft-bench-durable-model";
 const APPLICATION_SNAPSHOT_VERSION: u16 = 1;
 const SNAPSHOT_CHUNK_BYTES: u64 = 64 * 1024;
 const MAX_APPLICATION_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
+
+struct BorrowedSnapshotPayload<'a> {
+    snapshot: &'a RaftSnapshot,
+    payload: &'a [u8],
+}
+
+impl SnapshotChunkSource for BorrowedSnapshotPayload<'_> {
+    fn snapshot_chunk(&self, request: SnapshotChunkRequest<'_>) -> Option<Vec<u8>> {
+        if request.transfer_id != self.snapshot.transfer_id()
+            || request.metadata != &self.snapshot.metadata
+            || request.total_payload_len != self.snapshot.application_payload_len
+            || request.application_payload_crc32 != self.snapshot.application_payload_crc32
+        {
+            return None;
+        }
+        let start = usize::try_from(request.offset).ok()?;
+        let end = start.checked_add(request.len as usize)?;
+        self.payload.get(start..end).map(Vec::from)
+    }
+}
 fn can_batch_same_term_append_responses(
     role: Role,
     term: rafter::Term,
@@ -244,10 +264,12 @@ impl Engine for Rafter {
                 ApplicationSnapshotVersion::new(APPLICATION_SNAPSHOT_VERSION)?,
             ),
         )?;
-        node.compact_log_with_snapshot(PersistedRaftSnapshot {
-            metadata,
-            application_payload: payload.to_vec(),
-        })?;
+        let snapshot = RaftSnapshot::from_payload(metadata, payload);
+        let source = BorrowedSnapshotPayload {
+            snapshot: &snapshot,
+            payload,
+        };
+        node.compact_log_with_streamed_snapshot(snapshot.clone(), &source)?;
         node.prune_snapshot_files(SnapshotRetention::CurrentOnly)?;
         self.observe_replication_windows();
         Ok(())
