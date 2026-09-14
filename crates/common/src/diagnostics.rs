@@ -164,6 +164,16 @@ impl Diagnostics {
         metric.buckets_log2.resize(64, 0);
         metric.buckets_log2[63 - value.max(1).leading_zeros() as usize] += 1;
     }
+    /// Declares a metric before its optional path first executes.
+    pub fn declare(&self, name: &str) {
+        if self.enabled {
+            self.metrics
+                .lock()
+                .unwrap()
+                .entry(name.to_owned())
+                .or_default();
+        }
+    }
     pub fn admit_operation(&self, command: &Command, ingress: Option<Instant>) {
         if !self.enabled {
             return;

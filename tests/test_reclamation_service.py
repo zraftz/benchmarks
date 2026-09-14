@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 
 from benchctl.evidence import snapshot_reclamation_errors
-from benchctl.reclamation_service import NATIVE_SNAPSHOT_STAGES, activity
+from benchctl.reclamation_service import (
+    APPLICATION_CHECKPOINT_STAGES,
+    NATIVE_SNAPSHOT_STAGES,
+    activity,
+)
 
 
 def statuses(*, completed: int, installs: tuple[int, int, int], index: int) -> dict:
@@ -43,6 +47,23 @@ def add_native_snapshot_metrics(value: dict, bucket_counts: dict[int, int]) -> N
                 "buckets_ns_log2": buckets,
             }
         status["info"]["engine"]["persistence_diagnostics"] = metrics
+
+
+def add_application_checkpoint_metrics(value: dict, bucket_counts: dict[int, int]) -> None:
+    samples = sum(bucket_counts.values())
+    for status in value.values():
+        metrics = {}
+        for stage in APPLICATION_CHECKPOINT_STAGES:
+            buckets = [0] * 64 if samples else []
+            for bucket, count in bucket_counts.items():
+                buckets[bucket] = count
+            metrics[stage] = {
+                "samples": samples,
+                "total": samples * 100,
+                "max": 100 if samples else 0,
+                "buckets_log2": buckets,
+            }
+        status["info"]["application"]["diagnostics"] = {"metrics": metrics}
 
 
 class ReclamationServiceTests(unittest.TestCase):
@@ -92,9 +113,16 @@ class ReclamationServiceTests(unittest.TestCase):
             status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
         add_native_snapshot_metrics(before, {6: 1})
         add_native_snapshot_metrics(after, {6: 1, 7: 1})
+        add_application_checkpoint_metrics(before, {6: 1})
+        add_application_checkpoint_metrics(after, {6: 1, 7: 1})
         manifest = {
             "scenario": "snapshot-catchup",
             "options": {"snapshot_interval_entries": 64},
+            "native_snapshot_stage_observation": {"schema": 1, "required": True},
+            "application_checkpoint_stage_observation": {
+                "schema": 1,
+                "required": True,
+            },
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -119,6 +147,9 @@ class ReclamationServiceTests(unittest.TestCase):
                 stopped_application_index=100,
                 required_snapshot_index=128,
                 native_snapshot_stages=True,
+                require_native_snapshot_stage_activity=True,
+                application_checkpoint_stages=True,
+                require_application_checkpoint_stage_activity=True,
             )
             (root / "snapshot-compaction-activity.json").write_text(json.dumps(receipt))
             self.assertEqual(snapshot_reclamation_errors(root, manifest), [])
@@ -237,6 +268,8 @@ class ReclamationServiceTests(unittest.TestCase):
             status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
         add_native_snapshot_metrics(before, {6: 1})
         add_native_snapshot_metrics(after, {6: 1, 7: 2})
+        add_application_checkpoint_metrics(before, {6: 1})
+        add_application_checkpoint_metrics(after, {6: 1, 7: 2})
 
         receipt = activity(
             before,
@@ -245,9 +278,11 @@ class ReclamationServiceTests(unittest.TestCase):
             "durable-kv",
             native_snapshot_stages=True,
             require_native_snapshot_stage_activity=True,
+            application_checkpoint_stages=True,
+            require_application_checkpoint_stage_activity=True,
         )
 
-        self.assertEqual(receipt["schema"], 3)
+        self.assertEqual(receipt["schema"], 4)
         publication = receipt["totals"]["native_snapshot_stages"][
             "snapshot_publication"
         ]
@@ -256,6 +291,13 @@ class ReclamationServiceTests(unittest.TestCase):
         self.assertEqual(publication["mean_ns"], 100.0)
         self.assertEqual(publication["max_upper_bound_ns"], 255)
         self.assertEqual(publication["buckets_ns_log2"], [0] * 7 + [6] + [0] * 56)
+        application_sync = receipt["totals"]["application_checkpoint_stages"][
+            "journal_checkpoint_sync_ns"
+        ]
+        self.assertEqual(application_sync["samples"], 6)
+        self.assertEqual(application_sync["total_ns"], 600)
+        self.assertEqual(application_sync["mean_ns"], 100.0)
+        self.assertEqual(application_sync["max_upper_bound_ns"], 255)
 
     def test_native_snapshot_stage_availability_cannot_change_mid_case(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)

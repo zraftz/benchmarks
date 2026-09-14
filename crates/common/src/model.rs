@@ -314,6 +314,13 @@ impl DurableModel {
         self.restore_snapshot(snapshot)
     }
     pub fn set_diagnostics(&mut self, diagnostics: crate::diagnostics::Diagnostics) {
+        for metric in [
+            "journal_checkpoint_write_ns",
+            "journal_checkpoint_sync_ns",
+            "journal_checkpoint_publish_ns",
+        ] {
+            diagnostics.declare(metric);
+        }
         self.journal.diagnostics = diagnostics;
     }
     pub fn stats(&self) -> serde_json::Value {

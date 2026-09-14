@@ -2,7 +2,7 @@ import copy
 import unittest
 
 from benchctl.reclamation_load import assess, markdown
-from benchctl.reclamation_service import NATIVE_SNAPSHOT_STAGES
+from benchctl.reclamation_service import APPLICATION_CHECKPOINT_STAGES, NATIVE_SNAPSHOT_STAGES
 
 
 def footprint(
@@ -141,8 +141,17 @@ class ReclamationLoadTests(unittest.TestCase):
                         "max_upper_bound_ns": 127,
                     }
                     for stage in NATIVE_SNAPSHOT_STAGES
-                }
+                },
+                "application_checkpoint_stages": {
+                    stage: {
+                        "samples": 1,
+                        "total_ns": 200,
+                        "max_upper_bound_ns": 255,
+                    }
+                    for stage in APPLICATION_CHECKPOINT_STAGES
+                },
             }
+            item["snapshot_reclamation"]["schema"] = 4
             data["cases"].append(item)
 
         value = assess(data)
@@ -156,6 +165,12 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertEqual(publication["total_ns"], 100)
         self.assertEqual(publication["max_upper_bound_ns"], 127)
         self.assertIn("Native snapshot stage maxima", markdown(value))
+        application_sync = saturated["application_checkpoint_stages"][
+            "journal_checkpoint_sync_ns"
+        ]
+        self.assertEqual(application_sync["samples"], 1)
+        self.assertEqual(application_sync["max_upper_bound_ns"], 255)
+        self.assertIn("Application checkpoint stage maxima", markdown(value))
 
     def test_tail_regression_and_missing_compaction_fail_separate_verdicts(self):
         data = copy.deepcopy(suite())

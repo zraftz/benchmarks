@@ -5,7 +5,7 @@ from collections import defaultdict
 from statistics import median
 from typing import Any
 
-from .reclamation_service import NATIVE_SNAPSHOT_STAGES
+from .reclamation_service import APPLICATION_CHECKPOINT_STAGES, NATIVE_SNAPSHOT_STAGES
 from .storage_footprint import MANAGED_RAFT_CATEGORIES
 
 
@@ -223,6 +223,47 @@ def _native_snapshot_stages(case: dict) -> dict[str, dict[str, int | float | Non
         raise ValueError("native snapshot stage set changed")
     result = {}
     for stage in NATIVE_SNAPSHOT_STAGES:
+        metric = raw[stage]
+        if not isinstance(metric, dict):
+            raise ValueError(f"invalid {stage} metric")
+        samples = metric.get("samples")
+        total_ns = metric.get("total_ns")
+        maximum = metric.get("max_upper_bound_ns")
+        if type(samples) is not int or samples < 0:
+            raise ValueError(f"invalid {stage} sample count")
+        if type(total_ns) is not int or total_ns < 0:
+            raise ValueError(f"invalid {stage} total")
+        if maximum is not None and (type(maximum) is not int or maximum <= 0):
+            raise ValueError(f"invalid {stage} maximum upper bound")
+        if (samples == 0) != (maximum is None):
+            raise ValueError(f"incoherent {stage} samples and maximum")
+        result[stage] = {
+            "samples": samples,
+            "total_ns": total_ns,
+            "mean_ns": total_ns / samples if samples else None,
+            "max_upper_bound_ns": maximum,
+        }
+    return result
+
+
+def _application_checkpoint_stages(
+    case: dict,
+) -> dict[str, dict[str, int | float | None]]:
+    receipt = case.get("snapshot_reclamation")
+    if not isinstance(receipt, dict):
+        raise ValueError("missing live reclamation activity")
+    totals = receipt.get("totals")
+    if not isinstance(totals, dict):
+        raise ValueError("live reclamation totals are invalid")
+    raw = totals.get("application_checkpoint_stages")
+    if raw is None:
+        if receipt.get("schema") == 4:
+            raise ValueError("application checkpoint stages are missing from schema 4 receipt")
+        return {}
+    if not isinstance(raw, dict) or set(raw) != set(APPLICATION_CHECKPOINT_STAGES):
+        raise ValueError("application checkpoint stage set changed")
+    result = {}
+    for stage in APPLICATION_CHECKPOINT_STAGES:
         metric = raw[stage]
         if not isinstance(metric, dict):
             raise ValueError(f"invalid {stage} metric")
@@ -567,6 +608,7 @@ def assess(data: dict) -> dict[str, Any]:
                 })
             if paired:
                 native_snapshot_stages = {}
+                application_checkpoint_stages = {}
                 diagnostic_cases = diagnostic_grouped.get((variant, rate), [])
                 if diagnostic_grouped and len(diagnostic_cases) != 1:
                     failures["reclamation_activity"].append(
@@ -575,6 +617,9 @@ def assess(data: dict) -> dict[str, Any]:
                 elif diagnostic_cases:
                     try:
                         native_snapshot_stages = _native_snapshot_stages(diagnostic_cases[0])
+                        application_checkpoint_stages = _application_checkpoint_stages(
+                            diagnostic_cases[0]
+                        )
                     except ValueError as error:
                         failures["reclamation_activity"].append(
                             f"{variant} at {rate}/s diagnostic: {error}"
@@ -643,6 +688,8 @@ def assess(data: dict) -> dict[str, Any]:
                 }
                 if native_snapshot_stages:
                     row["native_snapshot_stages"] = native_snapshot_stages
+                if application_checkpoint_stages:
+                    row["application_checkpoint_stages"] = application_checkpoint_stages
                 rows.append(row)
 
     verdicts = {
@@ -733,6 +780,39 @@ def markdown(value: dict) -> str:
                 f"{maximum('snapshot_file_publish')} | "
                 f"{maximum('snapshot_manifest_publish')} | "
                 f"{maximum('snapshot_prune')} |"
+            )
+    application_staged = [
+        row for row in value["comparisons"] if row.get("application_checkpoint_stages")
+    ]
+    if application_staged:
+        lines += [
+            "",
+            "## Application checkpoint stage maxima",
+            "",
+            "Log2 upper bounds across all three nodes in the separate diagnostic case; "
+            "not timing-run percentiles.",
+            "",
+            "| Snapshot interval | Offered/s | Write | Sync | Publish |",
+            "| ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for row in application_staged:
+            rate = (
+                "saturation"
+                if row["offered_per_second"] == 0
+                else f"{row['offered_per_second']:,}"
+            )
+
+            def application_maximum(stage: str) -> str:
+                value_ns = row["application_checkpoint_stages"][stage][
+                    "max_upper_bound_ns"
+                ]
+                return "not observed" if value_ns is None else f"{value_ns / 1e6:.3f} ms"
+
+            lines.append(
+                f"| {row['snapshot_interval_entries']:,} | {rate} | "
+                f"{application_maximum('journal_checkpoint_write_ns')} | "
+                f"{application_maximum('journal_checkpoint_sync_ns')} | "
+                f"{application_maximum('journal_checkpoint_publish_ns')} |"
             )
     lines += [
         "",

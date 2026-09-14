@@ -110,6 +110,13 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             and getattr(options, "snapshot_interval_entries", 0)
             else None
         ),
+        "application_checkpoint_stage_observation": (
+            {"schema": 1, "required": True}
+            if implementation == "rafter"
+            and getattr(options, "diagnostics", False)
+            and getattr(options, "snapshot_interval_entries", 0)
+            else None
+        ),
         "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(options).items()},
         "host": host_info(data),
         "source_digest": receipt.get("source_digest") if receipt else source_digest(),
@@ -117,7 +124,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         "binary_sha256": digest(Path(command[0])), "loadgen_sha256": digest(ROOT / "dist/raft-bench-load"),
         "build_receipt": receipt,
         "limitations": ["plaintext transport", "logged reads", "static three-voter group",
-                        ("application journal remains append-only; Raft snapshots and WAL reclamation active"
+                        ("application journal checkpoints with durable Raft snapshots; physical bounds require qualification"
                          if getattr(options, "snapshot_interval_entries", 0)
                          else "retained logs; no snapshots"),
                         "adapter storage/codec costs differ and are disclosed", "not upstream-reviewed tuning"]}
@@ -337,6 +344,10 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 ),
                 native_snapshot_stages=getattr(options, "diagnostics", False),
                 require_native_snapshot_stage_activity=getattr(
+                    options, "diagnostics", False
+                ),
+                application_checkpoint_stages=getattr(options, "diagnostics", False),
+                require_application_checkpoint_stage_activity=getattr(
                     options, "diagnostics", False
                 ),
             )

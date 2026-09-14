@@ -492,7 +492,20 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         recorded.get("requirements", {}).get("native_snapshot_stage_activity") is True
     )
     require_native_stages = declared_stages == expected_stages or recorded_stage_requirement
-    observe_native_stages = recorded.get("schema") == 3 or require_native_stages
+    observe_native_stages = recorded.get("schema") in (3, 4) or require_native_stages
+    declared_application_stages = manifest.get("application_checkpoint_stage_observation")
+    if (
+        declared_application_stages is not None
+        and declared_application_stages != expected_stages
+    ):
+        errors.append("unsupported application checkpoint stage observation declaration")
+    recorded_application_requirement = (
+        recorded.get("requirements", {}).get("application_checkpoint_stage_activity") is True
+    )
+    require_application_stages = (
+        declared_application_stages == expected_stages or recorded_application_requirement
+    )
+    observe_application_stages = recorded.get("schema") == 4 or require_application_stages
     actual = activity(
         json.loads((directory / "before.json").read_text()),
         json.loads(after_path.read_text()),
@@ -503,6 +516,8 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         required_snapshot_index=required_snapshot_index,
         native_snapshot_stages=observe_native_stages,
         require_native_snapshot_stage_activity=require_native_stages,
+        application_checkpoint_stages=observe_application_stages,
+        require_application_checkpoint_stage_activity=require_application_stages,
     )
     if actual != recorded:
         errors.append("live snapshot/reclamation receipt differs from runtime status")
