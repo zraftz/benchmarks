@@ -19,6 +19,22 @@ def _read(path: Path) -> Any:
     return json.loads(path.read_text())
 
 
+def _final_snapshot_indexes(case: Path) -> Any:
+    path = case / "after-final-restart.json"
+    if not path.exists():
+        return None
+    statuses = _read(path)
+    if not isinstance(statuses, dict):
+        return statuses
+    result = {}
+    for node, status in statuses.items():
+        try:
+            result[node] = status["info"]["snapshot_compaction"]["current_index"]
+        except (KeyError, TypeError):
+            result[node] = None
+    return result
+
+
 def _is_feature_coverage_failure(item: dict) -> bool:
     error = item.get("error", "")
     return item.get("case", "").startswith("suite:") and (
@@ -193,6 +209,7 @@ def _normalize_case(case: Path, root: Path) -> dict:
         "accounting": accounting,
         "load_environment": load_environment,
         "recovery": _read(case / "recovery.json") if (case / "recovery.json").exists() else None,
+        "final_snapshot_indexes": _final_snapshot_indexes(case),
         "history_check": _read(case / "qualification.json") if (case / "qualification.json").exists() else None,
         "snapshot_reclamation": (
             _read(case / "snapshot-compaction-activity.json")

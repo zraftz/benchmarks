@@ -83,6 +83,9 @@ def case(variant: str, rate: int, repetition: int, *, candidate: bool) -> dict:
             100 if candidate else 1000, 200 if candidate else 2000, candidate=candidate
         ),
         "recovery": {"timing": {"process_restart_ns": 250_000_000}},
+        "final_snapshot_indexes": (
+            {str(node): 10_000 for node in (1, 2, 3)} if candidate else None
+        ),
         "snapshot_reclamation": ({
             "nodes": {
                 str(node): {
@@ -128,6 +131,7 @@ class ReclamationLoadTests(unittest.TestCase):
                 continue
             node = item["snapshot_reclamation"]["nodes"]["3"]
             node["current_snapshot_index"] = 0
+            item["final_snapshot_indexes"]["3"] = 0
             node["measurement_compaction"] = {
                 "samples": 0,
                 "max_upper_bound_ns": None,

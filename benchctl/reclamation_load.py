@@ -184,20 +184,16 @@ def _final_snapshot_artifacts(case: dict) -> dict[str, dict[str, int]]:
     return result
 
 
-def _durable_snapshot_indexes(case: dict) -> dict[str, int]:
-    receipt = case.get("snapshot_reclamation")
-    if not isinstance(receipt, dict):
-        raise ValueError("missing live reclamation activity")
-    nodes = receipt.get("nodes")
+def _final_durable_snapshot_indexes(case: dict) -> dict[str, int]:
+    nodes = case.get("final_snapshot_indexes")
     if not isinstance(nodes, dict) or set(nodes) != {"1", "2", "3"}:
-        raise ValueError("invalid live reclamation node inventory")
+        raise ValueError("invalid after_final_restart snapshot-index inventory")
     result = {}
-    for node, observed in nodes.items():
-        if not isinstance(observed, dict):
-            raise ValueError(f"invalid live reclamation receipt for node {node}")
-        index = observed.get("current_snapshot_index")
+    for node, index in nodes.items():
         if type(index) is not int or index < 0:
-            raise ValueError(f"invalid durable snapshot index for node {node}")
+            raise ValueError(
+                f"invalid after_final_restart durable snapshot index for node {node}"
+            )
         result[node] = index
     return result
 
@@ -543,7 +539,7 @@ def assess(data: dict, *, schema: int = 2) -> dict[str, Any]:
                     )
                     snapshot_artifacts_by_node = _final_snapshot_artifacts(candidate)
                     snapshot_indexes_by_node = (
-                        _durable_snapshot_indexes(candidate) if schema >= 2 else None
+                        _final_durable_snapshot_indexes(candidate) if schema >= 2 else None
                     )
                     application_artifacts_by_node = _final_application_artifacts(candidate)
                     snapshot_data_files = sum(
