@@ -483,6 +483,8 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         stopped_application_index = catchup.get("stopped_application_index")
         required_snapshot_index = catchup.get("required_snapshot_index")
 
+    recorded = json.loads(receipt_path.read_text())
+    diagnostics = bool(options.get("diagnostics", False))
     actual = activity(
         json.loads((directory / "before.json").read_text()),
         json.loads(after_path.read_text()),
@@ -491,8 +493,9 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         restarted_node=restarted_node,
         stopped_application_index=stopped_application_index,
         required_snapshot_index=required_snapshot_index,
+        native_snapshot_stages=diagnostics or recorded.get("schema") == 3,
+        require_native_snapshot_stage_activity=diagnostics,
     )
-    recorded = json.loads(receipt_path.read_text())
     if actual != recorded:
         errors.append("live snapshot/reclamation receipt differs from runtime status")
     if actual["status"] != "passed":

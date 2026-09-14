@@ -81,6 +81,17 @@ class ReclamationServiceTests(unittest.TestCase):
     def test_verifier_replays_declared_receipt_and_rejects_tampering(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)
         after = statuses(completed=2, installs=(0, 0, 1), index=128)
+        for status in before.values():
+            buckets = [0] * 64
+            buckets[6] = 1
+            status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
+        for status in after.values():
+            buckets = [0] * 64
+            buckets[6] = 1
+            buckets[7] = 1
+            status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
+        add_native_snapshot_metrics(before, {6: 1})
+        add_native_snapshot_metrics(after, {6: 1, 7: 1})
         manifest = {
             "scenario": "snapshot-catchup",
             "options": {"snapshot_interval_entries": 64},
@@ -107,6 +118,7 @@ class ReclamationServiceTests(unittest.TestCase):
                 restarted_node=3,
                 stopped_application_index=100,
                 required_snapshot_index=128,
+                native_snapshot_stages=True,
             )
             (root / "snapshot-compaction-activity.json").write_text(json.dumps(receipt))
             self.assertEqual(snapshot_reclamation_errors(root, manifest), [])
@@ -194,7 +206,14 @@ class ReclamationServiceTests(unittest.TestCase):
         add_native_snapshot_metrics(before, {6: 1})
         add_native_snapshot_metrics(after, {6: 1, 7: 2})
 
-        receipt = activity(before, after, 64, "durable-kv")
+        receipt = activity(
+            before,
+            after,
+            64,
+            "durable-kv",
+            native_snapshot_stages=True,
+            require_native_snapshot_stage_activity=True,
+        )
 
         self.assertEqual(receipt["schema"], 3)
         publication = receipt["totals"]["native_snapshot_stages"][
@@ -211,13 +230,42 @@ class ReclamationServiceTests(unittest.TestCase):
         after = statuses(completed=2, installs=(0, 0, 0), index=128)
         add_native_snapshot_metrics(after, {7: 1})
 
-        receipt = activity(before, after, 64, "durable-kv")
+        receipt = activity(
+            before,
+            after,
+            64,
+            "durable-kv",
+            native_snapshot_stages=True,
+            require_native_snapshot_stage_activity=True,
+        )
 
         self.assertEqual(receipt["status"], "failed")
         self.assertTrue(any(
             "native snapshot stage availability changed" in failure
             for failure in receipt["failures"]
         ))
+
+    def test_diagnostic_native_snapshot_stages_must_execute(self):
+        before = statuses(completed=1, installs=(0, 0, 0), index=64)
+        after = statuses(completed=2, installs=(0, 0, 0), index=128)
+        add_native_snapshot_metrics(before, {})
+        add_native_snapshot_metrics(after, {})
+
+        receipt = activity(
+            before,
+            after,
+            64,
+            "durable-kv",
+            native_snapshot_stages=True,
+            require_native_snapshot_stage_activity=True,
+        )
+
+        self.assertEqual(receipt["status"], "failed")
+        self.assertIn(
+            "no native snapshot stage activity observed: "
+            + ", ".join(NATIVE_SNAPSHOT_STAGES),
+            receipt["failures"],
+        )
 
 
 if __name__ == "__main__":

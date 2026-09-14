@@ -6,4 +6,5 @@ output="${1:-results/runs/snapshot-smoke-$(date -u +%Y%m%dT%H%M%SZ)}"
 ./raft-bench run --smoke --implementations rafter --rates 0 \
   --pipelined-durability --peer-batch-size 32 \
   --snapshot-interval-entries 8 --scenario snapshot-catchup \
+  --diagnostics \
   --output "$output"

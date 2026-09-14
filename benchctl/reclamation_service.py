@@ -136,6 +136,8 @@ def activity(
     restarted_node: int | None = None,
     stopped_application_index: int | None = None,
     required_snapshot_index: int | None = None,
+    native_snapshot_stages: bool = False,
+    require_native_snapshot_stage_activity: bool = False,
 ) -> dict[str, Any]:
     failures = []
     before_nodes = _nodes(before)
@@ -226,16 +228,19 @@ def activity(
             }
             if measurement is not None:
                 nodes[node]["measurement_compaction"] = measurement
-            native_stages = _native_snapshot_delta(before_info, after_info, restarted, node)
-            if native_stages is not None:
-                native_stage_nodes += 1
-                nodes[node]["native_snapshot_stages"] = native_stages
+            if native_snapshot_stages:
+                native_stages = _native_snapshot_delta(before_info, after_info, restarted, node)
+                if native_stages is not None:
+                    native_stage_nodes += 1
+                    nodes[node]["native_snapshot_stages"] = native_stages
         except (KeyError, TypeError, ValueError) as error:
             failures.append(f"node {node} snapshot activity is invalid: {error}")
 
     if histogram_nodes not in (0, 3):
         failures.append("snapshot compaction histograms are not available on all three nodes")
-    if native_stage_nodes not in (0, 3):
+    if require_native_snapshot_stage_activity and not native_snapshot_stages:
+        failures.append("required native snapshot stages were not selected")
+    if native_snapshot_stages and native_stage_nodes != 3:
         failures.append("native snapshot stages are not available on all three nodes")
 
     compactions = sum(node["compactions_since_before_status"] for node in nodes.values())
@@ -262,10 +267,20 @@ def activity(
         "application_installs_since_before_status": installs,
     }
     if native_stage_nodes == 3:
-        totals["native_snapshot_stages"] = _aggregate_native_stages(nodes)
+        native_totals = _aggregate_native_stages(nodes)
+        totals["native_snapshot_stages"] = native_totals
+        missing = [
+            stage for stage, metric in native_totals.items() if metric["samples"] == 0
+        ]
+        if require_native_snapshot_stage_activity and missing:
+            failures.append(
+                "no native snapshot stage activity observed: " + ", ".join(missing)
+            )
     return {
-        "schema": 3 if histogram_nodes == native_stage_nodes == 3 else (
-            2 if histogram_nodes == 3 else 1
+        "schema": (
+            3
+            if native_snapshot_stages and histogram_nodes == native_stage_nodes == 3
+            else (2 if histogram_nodes == 3 else 1)
         ),
         "status": "passed" if not failures else "failed",
         "interval_entries": interval,
@@ -276,6 +291,11 @@ def activity(
         "requirements": {
             "live_compaction": True,
             "snapshot_transfer_and_application_install": require_transfer,
+            **(
+                {"native_snapshot_stage_activity": True}
+                if require_native_snapshot_stage_activity
+                else {}
+            ),
         },
         "totals": totals,
         "nodes": nodes,

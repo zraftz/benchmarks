@@ -314,6 +314,10 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 required_snapshot_index=(
                     fault.get("snapshot_catchup", {}).get("required_snapshot_index")
                 ),
+                native_snapshot_stages=getattr(options, "diagnostics", False),
+                require_native_snapshot_stage_activity=getattr(
+                    options, "diagnostics", False
+                ),
             )
             write_json(directory / "snapshot-compaction-activity.json", reclamation)
             if reclamation["status"] != "passed":
