@@ -182,9 +182,10 @@ request accounting, stays within the predeclared throughput/tail budgets, and
 uses fewer allocated managed Raft bytes than its same-seed no-snapshot control
 both after load and after the mandatory restart. Managed Raft bytes include WAL
 and snapshot data and metadata. After final restart, the receipt must also show
-exactly one selected snapshot envelope and manifest on each node and no
-temporary snapshot artifacts. These values are checkpoint intervals, not
-retained-suffix sizes.
+exactly one selected snapshot envelope and manifest for each node with a
+positive durable snapshot index, none before that node's staggered first
+snapshot boundary, and no temporary snapshot artifacts. These values are
+checkpoint intervals, not retained-suffix sizes.
 
 Every current Rafter WAL case records controller-observed logical and allocated
 bytes before measurement, after measurement, and after final restart. Raft WAL,

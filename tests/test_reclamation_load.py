@@ -143,8 +143,14 @@ class ReclamationLoadTests(unittest.TestCase):
 
         self.assertEqual(current["schema"], 2)
         self.assertEqual(current["verdicts"]["physical_reclamation"]["status"], "passed")
+        self.assertIn("staggered first snapshot boundary", current["scope"])
         self.assertEqual(legacy["schema"], 1)
         self.assertEqual(legacy["verdicts"]["physical_reclamation"]["status"], "failed")
+        self.assertNotIn("staggered first snapshot boundary", legacy["scope"])
+        self.assertTrue(any(
+            "retained 0 snapshot data files on node 3 after final restart" in error
+            for error in legacy["verdicts"]["physical_reclamation"]["errors"]
+        ))
 
     def test_schema_six_requires_application_snapshot_encode_timing(self):
         item = case("snap10k", 0, 1, candidate=True)

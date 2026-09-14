@@ -46,6 +46,23 @@ _LEGACY_OBJECTIVE = {
     ),
 }
 
+_SCOPE = (
+    "same exact Rafter revision and durable service configuration; only the "
+    "application-snapshot/WAL-reclamation interval changes. Snapshot intervals are not "
+    "retained-log suffix sizes. Managed Raft bytes include WAL data and metadata plus "
+    "snapshot data and metadata. Reported maintenance maxima cover Raft snapshot "
+    "publication, WAL compaction, bounded retired-log handoff, snapshot pruning, and "
+    "bounded size-triggered application-journal checkpointing after application snapshot "
+    "encoding; application snapshot encoding is reported separately, and accepted "
+    "background log destruction is outside those maxima."
+)
+
+_CURRENT_SCOPE = (
+    _SCOPE
+    + " Final snapshot artifacts are checked per node against its durable snapshot index; "
+    "zero files are correct only before that node's staggered first snapshot boundary."
+)
+
 
 def _timing_cases(data: dict) -> list[dict]:
     return [
@@ -575,27 +592,37 @@ def assess(data: dict, *, schema: int = 2) -> dict[str, Any]:
                             1 if snapshot_index is None or snapshot_index > 0 else 0
                         )
                         if artifacts["data_files"] != expected_snapshot_files:
-                            failures["physical_reclamation"].append(
-                                f"{variant} at {rate}/s repetition {repetition} had "
-                                f"{artifacts['data_files']} snapshot data files on node {node} "
-                                f"after final restart; expected {expected_snapshot_files}"
-                                + (
-                                    f" for durable snapshot index {snapshot_index}"
-                                    if snapshot_index is not None
-                                    else ""
+                            if schema == 1:
+                                error = (
+                                    f"{variant} at {rate}/s repetition {repetition} retained "
+                                    f"{artifacts['data_files']} snapshot data files on node "
+                                    f"{node} after final restart"
                                 )
-                            )
+                            else:
+                                error = (
+                                    f"{variant} at {rate}/s repetition {repetition} had "
+                                    f"{artifacts['data_files']} snapshot data files on node "
+                                    f"{node} after final restart; expected "
+                                    f"{expected_snapshot_files} for durable snapshot index "
+                                    f"{snapshot_index}"
+                                )
+                            failures["physical_reclamation"].append(error)
                         if artifacts["metadata_files"] != expected_snapshot_files:
-                            failures["physical_reclamation"].append(
-                                f"{variant} at {rate}/s repetition {repetition} had "
-                                f"{artifacts['metadata_files']} snapshot metadata files on node "
-                                f"{node} after final restart; expected {expected_snapshot_files}"
-                                + (
-                                    f" for durable snapshot index {snapshot_index}"
-                                    if snapshot_index is not None
-                                    else ""
+                            if schema == 1:
+                                error = (
+                                    f"{variant} at {rate}/s repetition {repetition} retained "
+                                    f"{artifacts['metadata_files']} snapshot metadata files on "
+                                    f"node {node} after final restart"
                                 )
-                            )
+                            else:
+                                error = (
+                                    f"{variant} at {rate}/s repetition {repetition} had "
+                                    f"{artifacts['metadata_files']} snapshot metadata files on "
+                                    f"node {node} after final restart; expected "
+                                    f"{expected_snapshot_files} for durable snapshot index "
+                                    f"{snapshot_index}"
+                                )
+                            failures["physical_reclamation"].append(error)
                         if artifacts["temporary_files"] != 0:
                             failures["physical_reclamation"].append(
                                 f"{variant} at {rate}/s repetition {repetition} retained "
@@ -826,16 +853,7 @@ def assess(data: dict, *, schema: int = 2) -> dict[str, Any]:
         "objective": OBJECTIVE if schema >= 2 else _LEGACY_OBJECTIVE,
         "verdicts": verdicts,
         "comparisons": rows,
-        "scope": (
-            "same exact Rafter revision and durable service configuration; only the "
-            "application-snapshot/WAL-reclamation interval changes. Snapshot intervals are not "
-            "retained-log suffix sizes. Managed Raft bytes include WAL data and metadata plus "
-            "snapshot data and metadata. Reported maintenance maxima cover Raft snapshot "
-            "publication, WAL compaction, bounded retired-log handoff, snapshot pruning, and "
-            "bounded size-triggered application-journal checkpointing after application snapshot encoding; "
-            "application snapshot encoding is reported separately, and accepted background log "
-            "destruction is outside those maxima."
-        ),
+        "scope": _CURRENT_SCOPE if schema >= 2 else _SCOPE,
     }
 
 
