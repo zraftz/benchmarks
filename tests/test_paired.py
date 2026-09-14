@@ -53,6 +53,11 @@ class PairedTests(unittest.TestCase):
             'cat results/summary/summary.md >> "$GITHUB_STEP_SUMMARY"', workflow
         )
 
+    def test_hosted_snapshot_smoke_exercises_diagnostic_stages(self):
+        script = (Path(__file__).parents[1] / "scripts/snapshot-smoke").read_text()
+        self.assertIn("--snapshot-interval-entries 8", script)
+        self.assertIn("--diagnostics", script)
+
     def test_build_preparation_restores_selection_after_failure(self):
         args = SimpleNamespace(
             prior="a" * 40,
