@@ -2,8 +2,8 @@
   "schema": 1,
   "rafter": {
     "git": "https://github.com/zsumz/rafter",
-    "rev": "2f12e2ec832218d541ee2add11e02c99bffadbc4",
-    "requested_ref": "2f12e2ec832218d541ee2add11e02c99bffadbc4"
+    "rev": "831aa0cdbc9c5473d088ae375ce81a713c4779b8",
+    "requested_ref": "831aa0cdbc9c5473d088ae375ce81a713c4779b8"
   },
   "raft-rs": {
     "crate": "raft",
