@@ -4,7 +4,7 @@
 use crate::journal::Journal;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::{cell::Cell, collections::BTreeMap, path::Path};
+use std::{cell::RefCell, collections::BTreeMap, path::Path};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +56,7 @@ pub struct Model {
 }
 
 const APPLICATION_SNAPSHOT_SCHEMA: u32 = 1;
+const RETAINED_SNAPSHOT_CAPACITY: usize = 8 * 1024 * 1024;
 
 /// Complete durable application state at one applied Raft-log boundary.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -182,7 +183,7 @@ pub struct DurableModel {
     pub index: u64,
     has_applied: bool,
     pub metadata: Option<serde_json::Value>,
-    snapshot_payload_capacity: Cell<usize>,
+    snapshot_payload: RefCell<Vec<u8>>,
 }
 impl DurableModel {
     pub fn open(path: &Path) -> Result<Self> {
@@ -193,7 +194,7 @@ impl DurableModel {
             index: 0,
             has_applied: false,
             metadata: None,
-            snapshot_payload_capacity: Cell::new(4 * 1024),
+            snapshot_payload: RefCell::new(Vec::with_capacity(4 * 1024)),
         };
         for record in records {
             match record {
@@ -276,13 +277,21 @@ impl DurableModel {
             model: &self.model,
             metadata: &self.metadata,
         };
-        let mut payload = Vec::with_capacity(self.snapshot_payload_capacity.get());
-        serde_json::to_writer(&mut payload, &snapshot)?;
-        self.snapshot_payload_capacity.set(payload.len());
+        let mut payload = std::mem::take(&mut *self.snapshot_payload.borrow_mut());
+        if let Err(error) = serde_json::to_writer(&mut payload, &snapshot) {
+            self.recycle_snapshot_payload(payload);
+            return Err(error.into());
+        }
         Ok(EncodedApplicationSnapshot {
             applied_index: self.index,
             payload,
         })
+    }
+    pub(crate) fn recycle_snapshot_payload(&self, mut payload: Vec<u8>) {
+        payload.clear();
+        if payload.capacity() <= RETAINED_SNAPSHOT_CAPACITY {
+            *self.snapshot_payload.borrow_mut() = payload;
+        }
     }
     /// Atomically replaces prior application history with this durable state.
     pub fn checkpoint_snapshot(&mut self, snapshot: &EncodedApplicationSnapshot) -> Result<()> {
@@ -398,14 +407,14 @@ mod tests {
         let encoded = source.encode_snapshot().unwrap();
         assert_eq!(encoded.applied_index, owned.applied_index);
         assert_eq!(encoded.payload, owned.encode().unwrap());
-        assert_eq!(
-            source.snapshot_payload_capacity.get(),
-            encoded.payload.len()
-        );
-        let repeated = source.encode_snapshot().unwrap();
-        assert_eq!(repeated.payload, encoded.payload);
-        assert!(repeated.payload.capacity() >= encoded.payload.len());
+        let expected = encoded.payload.clone();
+        let capacity = encoded.payload.capacity();
         let snapshot = ApplicationSnapshot::decode(&encoded.payload).unwrap();
+        source.recycle_snapshot_payload(encoded.payload);
+        assert_eq!(source.snapshot_payload.borrow().capacity(), capacity);
+        let repeated = source.encode_snapshot().unwrap();
+        assert_eq!(repeated.payload, expected);
+        assert_eq!(repeated.payload.capacity(), capacity);
 
         let mut target = DurableModel::open(&target_path).unwrap();
         target.install_snapshot(snapshot).unwrap();
@@ -462,6 +471,16 @@ mod tests {
             Some("after")
         );
         assert_eq!(reopened.metadata, Some(serde_json::json!({"term": 1})));
+        std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_buffer_retention_is_bounded() {
+        let model_path = path("snapshot-buffer-bound");
+        let model = DurableModel::open(&model_path).unwrap();
+        let initial_capacity = model.snapshot_payload.borrow().capacity();
+        model.recycle_snapshot_payload(Vec::with_capacity(RETAINED_SNAPSHOT_CAPACITY + 1));
+        assert_eq!(model.snapshot_payload.borrow().capacity(), initial_capacity);
         std::fs::remove_file(model_path).unwrap();
     }
 
