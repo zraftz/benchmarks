@@ -404,11 +404,19 @@ def load_durable_suite(directory: Path, *, require_derived: bool = True) -> dict
         from .reclamation_load import assess
 
         assessment_path = directory / "reclamation-under-load.json"
-        expected_assessment = assess(result)
         try:
             recorded_assessment = _read(assessment_path)
         except (OSError, ValueError, json.JSONDecodeError):
             recorded_assessment = None
+        try:
+            assessment_schema = (
+                recorded_assessment.get("schema", 1)
+                if isinstance(recorded_assessment, dict)
+                else 2
+            )
+            expected_assessment = assess(result, schema=assessment_schema)
+        except ValueError:
+            expected_assessment = None
         result["reclamation_under_load"] = recorded_assessment
         if recorded_assessment != expected_assessment:
             error = "reclamation-under-load assessment is missing or differs from sealed cases"

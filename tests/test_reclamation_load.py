@@ -86,6 +86,7 @@ def case(variant: str, rate: int, repetition: int, *, candidate: bool) -> dict:
         "snapshot_reclamation": ({
             "nodes": {
                 str(node): {
+                    "current_snapshot_index": 10_000,
                     "measurement_compaction": {
                         "samples": 1,
                         "max_upper_bound_ns": 1_048_575,
@@ -120,6 +121,31 @@ def suite() -> dict:
 
 
 class ReclamationLoadTests(unittest.TestCase):
+    def test_snapshot_artifact_expectation_follows_durable_boundary(self):
+        data = suite()
+        for item in data["cases"]:
+            if item["configuration"]["variant"] != "snap10k":
+                continue
+            node = item["snapshot_reclamation"]["nodes"]["3"]
+            node["current_snapshot_index"] = 0
+            node["measurement_compaction"] = {
+                "samples": 0,
+                "max_upper_bound_ns": None,
+            }
+            artifacts = item["storage_footprint"]["snapshots"][
+                "after_final_restart"
+            ]["nodes"]["3"]["totals"]
+            artifacts["raft_snapshot_data"]["files"] = 0
+            artifacts["raft_snapshot_metadata"]["files"] = 0
+
+        current = assess(data)
+        legacy = assess(data, schema=1)
+
+        self.assertEqual(current["schema"], 2)
+        self.assertEqual(current["verdicts"]["physical_reclamation"]["status"], "passed")
+        self.assertEqual(legacy["schema"], 1)
+        self.assertEqual(legacy["verdicts"]["physical_reclamation"]["status"], "failed")
+
     def test_schema_six_requires_application_snapshot_encode_timing(self):
         item = case("snap10k", 0, 1, candidate=True)
         item["measurement_mode"] = "diagnostic"

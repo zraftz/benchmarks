@@ -28,12 +28,21 @@ OBJECTIVE = {
         "no-snapshot control"
     ),
     "snapshot_artifact_bound": (
-        "after final restart, exactly one selected snapshot envelope and manifest per node, "
-        "with no temporary snapshot artifacts"
+        "after final restart, exactly one selected snapshot envelope and manifest for each "
+        "node with a positive durable snapshot index, none before its first snapshot, and no "
+        "temporary snapshot artifacts"
     ),
     "application_journal": (
         "post-load and post-restart allocated bytes below the same-seed no-snapshot control; "
         "one authoritative journal and no checkpoint temporary per node after restart"
+    ),
+}
+
+_LEGACY_OBJECTIVE = {
+    **OBJECTIVE,
+    "snapshot_artifact_bound": (
+        "after final restart, exactly one selected snapshot envelope and manifest per node, "
+        "with no temporary snapshot artifacts"
     ),
 }
 
@@ -155,6 +164,24 @@ def _final_snapshot_artifacts(case: dict) -> dict[str, dict[str, int]]:
             "metadata_files": metadata,
             "temporary_files": temporary,
         }
+    return result
+
+
+def _durable_snapshot_indexes(case: dict) -> dict[str, int]:
+    receipt = case.get("snapshot_reclamation")
+    if not isinstance(receipt, dict):
+        raise ValueError("missing live reclamation activity")
+    nodes = receipt.get("nodes")
+    if not isinstance(nodes, dict) or set(nodes) != {"1", "2", "3"}:
+        raise ValueError("invalid live reclamation node inventory")
+    result = {}
+    for node, observed in nodes.items():
+        if not isinstance(observed, dict):
+            raise ValueError(f"invalid live reclamation receipt for node {node}")
+        index = observed.get("current_snapshot_index")
+        if type(index) is not int or index < 0:
+            raise ValueError(f"invalid durable snapshot index for node {node}")
+        result[node] = index
     return result
 
 
@@ -353,7 +380,9 @@ def _tail_limit(control: float, *, ratio: float, absolute_ms: float) -> float:
     return control + max(control * (ratio - 1.0), absolute_ms)
 
 
-def assess(data: dict) -> dict[str, Any]:
+def assess(data: dict, *, schema: int = 2) -> dict[str, Any]:
+    if type(schema) is not int or schema not in (1, 2):
+        raise ValueError("unsupported reclamation-under-load assessment schema")
     failures: dict[str, list[str]] = {
         "evidence_and_correctness": [],
         "service_objective": [],
@@ -496,6 +525,9 @@ def assess(data: dict) -> dict[str, Any]:
                         candidate, "application_journal", "after_final_restart"
                     )
                     snapshot_artifacts_by_node = _final_snapshot_artifacts(candidate)
+                    snapshot_indexes_by_node = (
+                        _durable_snapshot_indexes(candidate) if schema >= 2 else None
+                    )
                     application_artifacts_by_node = _final_application_artifacts(candidate)
                     snapshot_data_files = sum(
                         item["data_files"]
@@ -534,17 +566,35 @@ def assess(data: dict) -> dict[str, Any]:
                             f"restart versus {control_final_application} without checkpointing"
                         )
                     for node, artifacts in snapshot_artifacts_by_node.items():
-                        if artifacts["data_files"] != 1:
+                        snapshot_index = (
+                            snapshot_indexes_by_node[node]
+                            if snapshot_indexes_by_node is not None
+                            else None
+                        )
+                        expected_snapshot_files = (
+                            1 if snapshot_index is None or snapshot_index > 0 else 0
+                        )
+                        if artifacts["data_files"] != expected_snapshot_files:
                             failures["physical_reclamation"].append(
-                                f"{variant} at {rate}/s repetition {repetition} retained "
+                                f"{variant} at {rate}/s repetition {repetition} had "
                                 f"{artifacts['data_files']} snapshot data files on node {node} "
-                                "after final restart"
+                                f"after final restart; expected {expected_snapshot_files}"
+                                + (
+                                    f" for durable snapshot index {snapshot_index}"
+                                    if snapshot_index is not None
+                                    else ""
+                                )
                             )
-                        if artifacts["metadata_files"] != 1:
+                        if artifacts["metadata_files"] != expected_snapshot_files:
                             failures["physical_reclamation"].append(
-                                f"{variant} at {rate}/s repetition {repetition} retained "
+                                f"{variant} at {rate}/s repetition {repetition} had "
                                 f"{artifacts['metadata_files']} snapshot metadata files on node "
-                                f"{node} after final restart"
+                                f"{node} after final restart; expected {expected_snapshot_files}"
+                                + (
+                                    f" for durable snapshot index {snapshot_index}"
+                                    if snapshot_index is not None
+                                    else ""
+                                )
                             )
                         if artifacts["temporary_files"] != 0:
                             failures["physical_reclamation"].append(
@@ -770,10 +820,10 @@ def assess(data: dict) -> dict[str, Any]:
         for name, errors in failures.items()
     }
     return {
-        "schema": 1,
+        "schema": schema,
         "kind": "reclamation-under-load",
         "status": "passed" if all(not errors for errors in failures.values()) else "failed",
-        "objective": OBJECTIVE,
+        "objective": OBJECTIVE if schema >= 2 else _LEGACY_OBJECTIVE,
         "verdicts": verdicts,
         "comparisons": rows,
         "scope": (
