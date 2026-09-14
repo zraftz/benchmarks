@@ -169,11 +169,51 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual(windows["any_full_fraction"], .5)
         self.assertEqual(windows["mean_full_followers"], 1.0)
 
+    def test_extracts_a_restarted_node_new_counter_epoch(self):
+        before = add_diagnostics(snapshot(64, [timeline(1)]), samples=7, total=140,
+                                 observed=700, full=350)
+        after = add_diagnostics(snapshot(128, [timeline(1), timeline(65)]), samples=9,
+                                total=180, observed=900, full=450)
+        reset = add_diagnostics(snapshot(32, [timeline(1)]), samples=2, total=30,
+                                observed=100, full=25)
+        after["2"] = reset["2"]
+        result = extract(before, after, restarted_nodes={2})
+        restarted = result["nodes"]["2"]
+        self.assertTrue(restarted["restarted_between_status_snapshots"])
+        self.assertEqual(restarted["before_operations_seen"], 0)
+        self.assertEqual(restarted["measurement_operations_seen"], 32)
+        self.assertEqual(
+            restarted["measurement_metrics"]["owner_persistence_blocked_ns"]["samples"],
+            2,
+        )
+        self.assertEqual(
+            restarted["measurement_replication_windows"]["observed_ns"], 100
+        )
+        self.assertFalse(result["nodes"]["1"]["restarted_between_status_snapshots"])
+
+    def test_restarted_nodes_must_be_known_and_old_schemas_cannot_hide_restart(self):
+        before = snapshot(64, [timeline(1)])
+        after = snapshot(128, [timeline(1), timeline(65)])
+        after["2"] = snapshot(32, [timeline(1)])["2"]
+        with self.assertRaisesRegex(ValueError, "unknown node"):
+            extract(before, after, restarted_nodes={4})
+        current = extract(before, after, restarted_nodes={2})
+        old = copy.deepcopy(current)
+        old["schema"] = 2
+        old.pop("counter_epoch_scope")
+        for node in old["nodes"].values():
+            node.pop("restarted_between_status_snapshots")
+        self.assertFalse(recorded_extract_matches(current, old))
+
     def test_sealed_extraction_compatibility_is_explicit_and_fail_closed(self):
         current = extract(snapshot(64, [timeline(1)]), snapshot(128, [timeline(1), timeline(65)]))
         transitional = copy.deepcopy(current)
-        transitional["schema"] = 1
+        transitional["schema"] = 2
+        transitional.pop("counter_epoch_scope")
+        for node in transitional["nodes"].values():
+            node.pop("restarted_between_status_snapshots")
         legacy = copy.deepcopy(transitional)
+        legacy["schema"] = 1
         for node in legacy["nodes"].values():
             node.pop("measurement_metrics")
             node.pop("measurement_replication_windows")
@@ -183,4 +223,4 @@ class TimelineTests(unittest.TestCase):
         malformed = copy.deepcopy(transitional)
         malformed["nodes"]["1"].pop("measurement_metrics")
         self.assertFalse(recorded_extract_matches(current, malformed))
-        self.assertFalse(recorded_extract_matches(current, {**current, "schema": 3}))
+        self.assertFalse(recorded_extract_matches(current, {**current, "schema": 4}))

@@ -191,6 +191,38 @@ class ReclamationServiceTests(unittest.TestCase):
             },
         )
 
+    def test_verifier_preserves_old_diagnostic_contract_but_enforces_new_declaration(self):
+        before = statuses(completed=1, installs=(0, 0, 0), index=64)
+        after = statuses(completed=2, installs=(0, 0, 0), index=128)
+        for value, bucket_counts in ((before, {6: 1}), (after, {6: 1, 7: 1})):
+            for status in value.values():
+                buckets = [0] * 64
+                for bucket, count in bucket_counts.items():
+                    buckets[bucket] = count
+                status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
+        manifest = {
+            "scenario": "durable-kv",
+            "options": {"snapshot_interval_entries": 64, "diagnostics": True},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "before.json").write_text(json.dumps(before))
+            (root / "snapshot-after-scenario.json").write_text(json.dumps(after))
+            receipt = activity(before, after, 64, "durable-kv")
+            (root / "snapshot-compaction-activity.json").write_text(json.dumps(receipt))
+
+            self.assertEqual(snapshot_reclamation_errors(root, manifest), [])
+
+            manifest["native_snapshot_stage_observation"] = {
+                "schema": 1,
+                "required": True,
+            }
+            failures = snapshot_reclamation_errors(root, manifest)
+            self.assertIn(
+                "live snapshot/reclamation receipt differs from runtime status", failures
+            )
+            self.assertIn("live snapshot/reclamation activity did not pass", failures)
+
     def test_current_status_reports_native_snapshot_stage_deltas(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)
         after = statuses(completed=3, installs=(0, 0, 0), index=128)

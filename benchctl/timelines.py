@@ -107,14 +107,16 @@ def _state(status: dict, node: str) -> dict:
     return state
 
 
-def _metric_deltas(before: dict, after: dict, node: str) -> dict:
+def _metric_deltas(before: dict, after: dict, node: str, restarted: bool) -> dict:
     earlier = before["info"]["diagnostics"].get("metrics", {})
     later = after["info"]["diagnostics"].get("metrics", {})
     if not isinstance(earlier, dict) or not isinstance(later, dict):
         raise ValueError(f"node {node} diagnostic metrics are malformed")
     result = {}
     for name in sorted(set(earlier) | set(later)):
-        first = earlier.get(name, {"samples": 0, "total": 0, "max": 0, "buckets_log2": []})
+        first = earlier.get(
+            name, {"samples": 0, "total": 0, "max": 0, "buckets_log2": []}
+        )
         last = later.get(name)
         if not isinstance(first, dict) or not isinstance(last, dict):
             raise ValueError(f"node {node} diagnostic metric changed inventory: {name}")
@@ -129,9 +131,13 @@ def _metric_deltas(before: dict, after: dict, node: str) -> dict:
         width = max(len(first_buckets), len(last_buckets))
         first_buckets = first_buckets + [0] * (width - len(first_buckets))
         last_buckets = last_buckets + [0] * (width - len(last_buckets))
-        samples = last["samples"] - first["samples"]
-        total = last["total"] - first["total"]
-        buckets = [right - left for left, right in zip(first_buckets, last_buckets, strict=True)]
+        samples = last["samples"] if restarted else last["samples"] - first["samples"]
+        total = last["total"] if restarted else last["total"] - first["total"]
+        buckets = (
+            last_buckets
+            if restarted
+            else [right - left for left, right in zip(first_buckets, last_buckets, strict=True)]
+        )
         if samples < 0 or total < 0 or any(value < 0 for value in buckets) or sum(buckets) != samples:
             raise ValueError(f"node {node} diagnostic metric regressed: {name}")
         if samples:
@@ -140,7 +146,9 @@ def _metric_deltas(before: dict, after: dict, node: str) -> dict:
     return result
 
 
-def _replication_window_delta(before: dict, after: dict, node: str) -> dict | None:
+def _replication_window_delta(
+    before: dict, after: dict, node: str, restarted: bool
+) -> dict | None:
     earlier = before.get("info", {}).get("engine", {}).get("replication_windows")
     later = after.get("info", {}).get("engine", {}).get("replication_windows")
     if earlier is None and later is None:
@@ -154,9 +162,9 @@ def _replication_window_delta(before: dict, after: dict, node: str) -> dict | No
     for field in fields:
         first = _nonnegative(earlier.get(field), f"node {node} replication windows {field}")
         last = _nonnegative(later.get(field), f"node {node} replication windows {field}")
-        if last < first:
+        if not restarted and last < first:
             raise ValueError(f"node {node} replication-window counter regressed: {field}")
-        delta[field] = last - first
+        delta[field] = last if restarted else last - first
     observed = delta["observed_ns"]
     delta["any_full_fraction"] = delta["any_full_ns"] / observed if observed else None
     delta["mean_full_followers"] = delta["full_follower_ns"] / observed if observed else None
@@ -164,21 +172,28 @@ def _replication_window_delta(before: dict, after: dict, node: str) -> dict | No
     return delta
 
 
-def extract(before: dict, after: dict) -> dict:
-    """Return only samples admitted after the pre-measurement status watermark."""
+def extract(
+    before: dict, after: dict, *, restarted_nodes: set[int] | None = None
+) -> dict:
+    """Return samples from each process epoch observed during measurement."""
     before_nodes = _nodes(before)
     after_nodes = _nodes(after)
     if set(before_nodes) != set(after_nodes):
         raise ValueError("timeline node inventory changed during measurement")
+    restarted_nodes = set() if restarted_nodes is None else set(restarted_nodes)
+    known_nodes = {int(node) for node in before_nodes}
+    if restarted_nodes - known_nodes:
+        raise ValueError("timeline restart inventory contains an unknown node")
     nodes = {}
     retained_total = 0
     for node in sorted(before_nodes, key=lambda value: int(value)):
         earlier = _state(before_nodes[node], node)
         later = _state(after_nodes[node], node)
+        restarted = int(node) in restarted_nodes
         if any(earlier[name] != later[name] for name in LIMITS):
             raise ValueError(f"node {node} timeline configuration changed")
-        watermark = earlier["operations_seen"]
-        if later["operations_seen"] < watermark:
+        watermark = 0 if restarted else earlier["operations_seen"]
+        if not restarted and later["operations_seen"] < watermark:
             raise ValueError(f"node {node} operation timeline counter regressed")
         retained = [
             timeline
@@ -193,14 +208,20 @@ def extract(before: dict, after: dict) -> dict:
             "measurement_operations_seen": later["operations_seen"] - watermark,
             "retained_after_total": len(later["retained"]),
             "retained_measurement_timelines": retained,
-            "measurement_metrics": _metric_deltas(before_nodes[node], after_nodes[node], node),
+            "restarted_between_status_snapshots": restarted,
+            "measurement_metrics": _metric_deltas(
+                before_nodes[node], after_nodes[node], node, restarted
+            ),
             "measurement_replication_windows": _replication_window_delta(
-                before_nodes[node], after_nodes[node], node
+                before_nodes[node], after_nodes[node], node, restarted
             ),
         }
     return {
-        "schema": 2,
+        "schema": 3,
         "scope": "bounded samples admitted after the pre-measurement watermark; callback timestamps, not kernel commit timestamps",
+        "counter_epoch_scope": (
+            "nodes restarted between status snapshots contain only their post-restart process epoch"
+        ),
         "commit_boundaries": {
             "engine_apply_effect": "first committed apply effect observed by the shared Rafter or raft-rs owner",
             "state_machine_apply_callback": "entry to OpenRaft's committed state-machine apply callback",
@@ -214,11 +235,22 @@ def extract(before: dict, after: dict) -> dict:
 def recorded_extract_matches(actual: dict, recorded: dict) -> bool:
     """Compare current, transitional, and pre-metrics sealed extractions."""
     schema = recorded.get("schema")
-    if schema == 2:
+    if schema == 3:
         return actual == recorded
-    if schema != 1:
+    if schema not in (1, 2) or actual.get("schema") != 3:
+        return False
+    if any(
+        node.get("restarted_between_status_snapshots") is not False
+        for node in actual.get("nodes", {}).values()
+    ):
         return False
     compatible = copy.deepcopy(actual)
+    compatible["schema"] = 2
+    compatible.pop("counter_epoch_scope", None)
+    for node in compatible["nodes"].values():
+        node.pop("restarted_between_status_snapshots", None)
+    if schema == 2:
+        return compatible == recorded
     compatible["schema"] = 1
     legacy_node_fields = {
         "before_operations_seen",

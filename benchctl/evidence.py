@@ -484,7 +484,15 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         required_snapshot_index = catchup.get("required_snapshot_index")
 
     recorded = json.loads(receipt_path.read_text())
-    diagnostics = bool(options.get("diagnostics", False))
+    declared_stages = manifest.get("native_snapshot_stage_observation")
+    expected_stages = {"schema": 1, "required": True}
+    if declared_stages is not None and declared_stages != expected_stages:
+        errors.append("unsupported native snapshot stage observation declaration")
+    recorded_stage_requirement = (
+        recorded.get("requirements", {}).get("native_snapshot_stage_activity") is True
+    )
+    require_native_stages = declared_stages == expected_stages or recorded_stage_requirement
+    observe_native_stages = recorded.get("schema") == 3 or require_native_stages
     actual = activity(
         json.loads((directory / "before.json").read_text()),
         json.loads(after_path.read_text()),
@@ -493,8 +501,8 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         restarted_node=restarted_node,
         stopped_application_index=stopped_application_index,
         required_snapshot_index=required_snapshot_index,
-        native_snapshot_stages=diagnostics or recorded.get("schema") == 3,
-        require_native_snapshot_stage_activity=diagnostics,
+        native_snapshot_stages=observe_native_stages,
+        require_native_snapshot_stage_activity=require_native_stages,
     )
     if actual != recorded:
         errors.append("live snapshot/reclamation receipt differs from runtime status")
@@ -618,9 +626,46 @@ def verify(directory: Path) -> dict[str, Any]:
         integrity_errors.extend(storage_footprint_errors(directory, manifest))
         if manifest.get("options", {}).get("diagnostics"):
             from .timelines import extract, recorded_extract_matches
+            restarted_nodes = set()
+            if manifest.get("scenario") in ("leader-loss", "snapshot-catchup"):
+                try:
+                    fault = json.loads((directory / "fault.json").read_text())
+                    fault_events = fault["events"]
+                    if (
+                        not isinstance(fault_events, list)
+                        or len(fault_events) != 2
+                        or any(not isinstance(event, dict) for event in fault_events)
+                    ):
+                        raise ValueError("invalid diagnostic fault event inventory")
+                    expected_kill = (
+                        "SIGKILL leader"
+                        if manifest.get("scenario") == "leader-loss"
+                        else "SIGKILL follower"
+                    )
+                    if (
+                        fault_events[0].get("action") != expected_kill
+                        or fault_events[1].get("action")
+                        != "restart same data directory"
+                        or fault_events[0].get("node") != fault_events[1].get("node")
+                    ):
+                        raise ValueError("invalid diagnostic restart sequence")
+                    restarted_nodes = {
+                        event["node"]
+                        for event in fault_events
+                        if event.get("action") == "restart same data directory"
+                    }
+                    if (
+                        len(restarted_nodes) != 1
+                        or any(type(node) is not int or node not in (1, 2, 3)
+                               for node in restarted_nodes)
+                    ):
+                        raise ValueError("invalid diagnostic restart node")
+                except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    integrity_errors.append("diagnostic restart evidence is invalid")
             actual_timelines = extract(
                 json.loads((directory / "before.json").read_text()),
                 json.loads((directory / "diagnostics-after-load.json").read_text()),
+                restarted_nodes=restarted_nodes,
             )
             recorded_timelines = json.loads((directory / "operation-timelines.json").read_text())
             if not recorded_extract_matches(actual_timelines, recorded_timelines):

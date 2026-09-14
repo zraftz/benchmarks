@@ -103,6 +103,13 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         "storage_footprint_observation": (
             STORAGE_FOOTPRINT_OBSERVATION if observe_storage_footprint else None
         ),
+        "native_snapshot_stage_observation": (
+            {"schema": 1, "required": True}
+            if implementation == "rafter"
+            and getattr(options, "diagnostics", False)
+            and getattr(options, "snapshot_interval_entries", 0)
+            else None
+        ),
         "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(options).items()},
         "host": host_info(data),
         "source_digest": receipt.get("source_digest") if receipt else source_digest(),
@@ -286,8 +293,22 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             write_json(directory / "after-measurement-status.json", after_load)
         if getattr(options, "diagnostics", False):
             from .timelines import extract
+            restarted_nodes = (
+                {fault_node}
+                if fault_node is not None
+                and options.scenario in ("leader-loss", "snapshot-catchup")
+                and any(
+                    event.get("action") == "restart same data directory"
+                    and event.get("node") == fault_node
+                    for event in fault["events"]
+                )
+                else set()
+            )
             write_json(directory / "diagnostics-after-load.json", after_load)
-            write_json(directory / "operation-timelines.json", extract(before, after_load))
+            write_json(
+                directory / "operation-timelines.json",
+                extract(before, after_load, restarted_nodes=restarted_nodes),
+            )
             if implementation == "rafter":
                 from .replication_windows import configuration_receipt
                 write_json(directory / "replication-window-config.json", configuration_receipt(
