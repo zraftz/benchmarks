@@ -702,6 +702,42 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(rendered.count("bounded completion-priority lookahead"), 1)
         self.assertIn("| Service objective | failed |", rendered)
 
+    def test_feature_coverage_detail_names_only_incomplete_variants(self):
+        data = durable_data()
+        data["verdicts"] = {
+            "feature_coverage": {
+                "status": "incomplete",
+                "checks": [
+                    {
+                        "variant": "candidate-snapshot10k",
+                        "status": "incomplete",
+                        "detail": (
+                            "bounded completion-priority lookahead was not observed "
+                            "in any completed case"
+                        ),
+                    },
+                    {
+                        "variant": "candidate-snapshot100k",
+                        "status": "passed",
+                        "detail": (
+                            "completion-priority and bounded-lookahead activity were both observed"
+                        ),
+                    },
+                ],
+            },
+        }
+
+        rendered = render_markdown(build_summary(durable=data), {})
+        self.assertIn(
+            "candidate-snapshot10k: bounded completion-priority lookahead",
+            rendered,
+        )
+        self.assertNotIn("candidate-snapshot100k:", rendered)
+        self.assertNotIn(
+            "completion-priority and bounded-lookahead activity were both observed",
+            rendered,
+        )
+
     def test_legacy_suite_activation_failure_is_feature_coverage(self):
         self.assertTrue(_is_feature_coverage_failure({
             "case": "suite:candidate-commit-first",

@@ -560,7 +560,7 @@ def _measured_load_context(durable: dict) -> dict:
             "durable_service", [case["source_case"] for case in observed]
         ),
         "scope": (
-            "workload and unrelated host activity are inseparable in these counters; "
+            "Workload and unrelated host activity are inseparable in these counters; "
             "they never remove, accept, or rank a result"
         ),
     }
@@ -1127,7 +1127,14 @@ def _verdict_detail(verdict: dict) -> str:
         return verdict["detail"]
     checks = verdict.get("checks", [])
     if checks:
-        return "; ".join(dict.fromkeys(check["detail"] for check in checks))
+        incomplete = [check for check in checks if check.get("status") != "passed"]
+        selected = incomplete or checks
+        details = []
+        for check in selected:
+            variant = check.get("variant")
+            prefix = f"{variant}: " if isinstance(variant, str) and variant else ""
+            details.append(prefix + check["detail"])
+        return "; ".join(dict.fromkeys(details))
     errors = verdict.get("errors", [])
     if errors:
         return "; ".join(str(error) for error in errors)
