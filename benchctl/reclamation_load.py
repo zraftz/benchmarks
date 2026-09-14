@@ -576,7 +576,9 @@ def assess(data: dict) -> dict[str, Any]:
             "same exact Rafter revision and durable service configuration; only the "
             "application-snapshot/WAL-reclamation interval changes. Snapshot intervals are not "
             "retained-log suffix sizes. Managed Raft bytes include WAL data and metadata plus "
-            "snapshot data and metadata. Application-journal physical reclamation is not tested."
+            "snapshot data and metadata. Reported maintenance maxima cover Raft snapshot "
+            "publication, WAL compaction, and snapshot pruning after application snapshot clone "
+            "and encoding. Application-journal physical reclamation is not tested."
         ),
     }
 
@@ -590,7 +592,7 @@ def markdown(value: dict) -> str:
         value["scope"],
         "",
         "| Snapshot interval | Offered/s | Throughput retained | Worst p99 delta | "
-        "Worst p99.9 delta | Compactions | Compaction max upper bound | "
+        "Worst p99.9 delta | Compactions | Raft maintenance max upper bound | "
         "Managed Raft after load | No-reclamation after load | Managed Raft after restart | "
         "No-reclamation after restart | Snapshot files | Max restart |",
         "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -648,9 +650,10 @@ def markdown(value: dict) -> str:
             )
     lines += [
         "",
-        "The application journal is reported separately and remains append-only. Compaction "
-        "maxima are log2 upper bounds for pauses observed between the pre-load and post-load "
-        "status watermarks.",
+        "The application journal is reported separately and remains append-only. Raft "
+        "maintenance maxima are log2 upper bounds observed between the pre-load and post-load "
+        "status watermarks. The adapter timer covers Raft snapshot publication, WAL compaction, "
+        "and snapshot pruning; application snapshot clone and encoding happen before it.",
         "",
     ]
     for name, verdict in value["verdicts"].items():

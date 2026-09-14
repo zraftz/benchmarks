@@ -618,6 +618,7 @@ impl<E: Engine> State<E> {
                     "snapshot_compaction":{"interval_entries":self.config.snapshot_interval_entries,
                         "completed":self.snapshot_compactions,
                         "current_index":self.engine.snapshot_index(),
+                        "timing_scope":"Raft snapshot publication, WAL compaction, and snapshot pruning after application snapshot clone and encoding",
                         "total_ns":self.snapshot_compaction_total_ns,
                         "max_ns":self.snapshot_compaction_max_ns,
                         "buckets_log2":self.snapshot_compaction_buckets_log2,

@@ -1244,7 +1244,7 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                 under_load["scope"],
                 "",
                 "| Snapshot interval | Offered | Throughput retained | Worst p99 / p99.9 delta | "
-                "Compactions / max pause | Managed Raft after load | Managed Raft after restart | Max restart |",
+                "Compactions / Raft maintenance max | Managed Raft after load | Managed Raft after restart | Max restart |",
                 "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
             for row in under_load["comparisons"]:
@@ -1517,7 +1517,7 @@ def render_html(summary: dict, evidence: dict) -> str:
             content.append(
                 "<div class='table'><table><thead><tr><th>Snapshot interval</th><th>Offered</th>"
                 "<th>Throughput retained</th><th>Worst p99 / p99.9 delta</th>"
-                "<th>Compactions / max pause</th><th>Managed Raft after load</th>"
+                "<th>Compactions / Raft maintenance max</th><th>Managed Raft after load</th>"
                 "<th>Managed Raft after restart</th><th>Max restart</th>"
                 f"</tr></thead><tbody>{reclamation_body}</tbody></table></div>"
             )
