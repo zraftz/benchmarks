@@ -18,6 +18,31 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+const DIAGNOSTIC_METRICS: &[&str] = &[
+    "application_batch_entries",
+    "application_dispatch_to_client_completion_ns",
+    "application_queue_ns",
+    "application_snapshot_encode_ns",
+    "journal_checkpoint_publish_ns",
+    "journal_checkpoint_sync_ns",
+    "journal_checkpoint_write_ns",
+    "journal_encode_ns",
+    "journal_sync_ns",
+    "journal_write_ns",
+    "owner_client_queue_ns",
+    "owner_peer_queue_ns",
+    "owner_persistence_blocked_ns",
+    "owner_replication_ack_queue_ns",
+    "peer_outbound_queue_ns",
+    "peer_receive_to_durable_outputs_ns",
+    "sampled_application_dispatched_to_durable_ns",
+    "sampled_application_durable_to_client_completion_ns",
+    "sampled_client_ingress_to_client_completion_ns",
+    "sampled_client_ingress_to_raft_commit_observed_ns",
+    "sampled_raft_commit_observed_to_application_dispatched_ns",
+    "sampled_raft_commit_observed_to_client_completion_ns",
+];
+
 pub enum Effect {
     Send {
         to: u64,
@@ -161,6 +186,9 @@ impl Actor {
             .max(1);
         let client_slots = Arc::new(tokio::sync::Semaphore::new(client_limit));
         let diagnostics = Diagnostics::new(config.diagnostics);
+        for metric in DIAGNOSTIC_METRICS {
+            diagnostics.declare(metric);
+        }
         model.set_diagnostics(diagnostics.clone());
         let (tx, rx) = mpsc::sync_channel(config.capacity);
         let tx = Arc::new(tx);
@@ -618,7 +646,7 @@ impl<E: Engine> State<E> {
                     "snapshot_compaction":{"interval_entries":self.config.snapshot_interval_entries,
                         "completed":self.snapshot_compactions,
                         "current_index":self.engine.snapshot_index(),
-                        "timing_scope":"Raft snapshot publication, WAL compaction, bounded retired-log handoff, snapshot pruning, and atomic application-journal checkpointing after application snapshot encoding; excludes accepted background destruction",
+                        "timing_scope":"Raft snapshot publication, WAL compaction, bounded retired-log handoff, snapshot pruning, and atomic application-journal checkpointing; application snapshot encoding is reported separately as application_snapshot_encode_ns; excludes accepted background destruction",
                         "total_ns":self.snapshot_compaction_total_ns,
                         "max_ns":self.snapshot_compaction_max_ns,
                         "buckets_log2":self.snapshot_compaction_buckets_log2,

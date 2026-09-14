@@ -211,6 +211,75 @@ def _application_checkpoint_delta(
     return result
 
 
+def _owner_metric(info: dict, stage: str, node: str) -> dict[str, Any] | None:
+    diagnostics = info.get("diagnostics")
+    if diagnostics is None:
+        return None
+    if not isinstance(diagnostics, dict) or "metrics" not in diagnostics:
+        raise ValueError(f"node {node} owner diagnostics are unavailable")
+    metrics = diagnostics["metrics"]
+    if not isinstance(metrics, dict):
+        raise ValueError(f"node {node} owner diagnostics are invalid")
+    metric = metrics.get(stage)
+    if metric is None:
+        return None
+    if not isinstance(metric, dict) or set(metric) != {
+        "samples", "total", "max", "buckets_log2"
+    }:
+        raise ValueError(f"node {node} {stage} owner metric shape changed")
+    samples = metric["samples"]
+    total = metric["total"]
+    maximum = metric["max"]
+    buckets = metric["buckets_log2"]
+    if any(type(value) is not int or value < 0 for value in (samples, total, maximum)):
+        raise ValueError(f"node {node} {stage} owner counters are invalid")
+    buckets = _native_histogram(buckets, samples, node, stage)
+    return {"samples": samples, "total": total, "max": maximum, "buckets_log2": buckets}
+
+
+def _application_snapshot_encode_delta(
+    before_info: dict,
+    after_info: dict,
+    restarted: bool,
+    node: str,
+    completed: int,
+) -> dict[str, Any] | None:
+    stage = "application_snapshot_encode_ns"
+    first = _owner_metric(before_info, stage, node)
+    last = _owner_metric(after_info, stage, node)
+    if first is None and last is None:
+        return None
+    if first is None or last is None:
+        raise ValueError(f"node {node} application snapshot encode availability changed")
+    samples = last["samples"] if restarted else last["samples"] - first["samples"]
+    total_ns = last["total"] if restarted else last["total"] - first["total"]
+    buckets = (
+        last["buckets_log2"]
+        if restarted
+        else [
+            right - left
+            for left, right in zip(
+                first["buckets_log2"], last["buckets_log2"], strict=True
+            )
+        ]
+    )
+    if samples < 0 or total_ns < 0 or any(value < 0 for value in buckets):
+        raise ValueError(f"node {node} application snapshot encode counters regressed")
+    if sum(buckets) != samples:
+        raise ValueError(f"node {node} application snapshot encode histogram delta disagrees")
+    if samples != completed:
+        raise ValueError(
+            f"node {node} application snapshot encode count differs from completed compactions"
+        )
+    return {
+        "samples": samples,
+        "total_ns": total_ns,
+        "mean_ns": total_ns / samples if samples else None,
+        "max_upper_bound_ns": _upper_bound_ns(buckets),
+        "buckets_ns_log2": buckets,
+    }
+
+
 def _aggregate_application_stages(nodes: dict[str, dict]) -> dict[str, dict[str, Any]]:
     result = {}
     for stage in APPLICATION_CHECKPOINT_STAGES:
@@ -229,6 +298,23 @@ def _aggregate_application_stages(nodes: dict[str, dict]) -> dict[str, dict[str,
             "buckets_ns_log2": buckets,
         }
     return result
+
+
+def _aggregate_application_snapshot_encode(nodes: dict[str, dict]) -> dict[str, Any]:
+    metrics = [node["application_snapshot_encode"] for node in nodes.values()]
+    buckets = [
+        sum(metric["buckets_ns_log2"][index] for metric in metrics)
+        for index in range(64)
+    ]
+    samples = sum(metric["samples"] for metric in metrics)
+    total_ns = sum(metric["total_ns"] for metric in metrics)
+    return {
+        "samples": samples,
+        "total_ns": total_ns,
+        "mean_ns": total_ns / samples if samples else None,
+        "max_upper_bound_ns": _upper_bound_ns(buckets),
+        "buckets_ns_log2": buckets,
+    }
 
 
 def _retirement_delta(
@@ -305,6 +391,7 @@ def activity(
     histogram_nodes = 0
     native_stage_nodes = 0
     application_stage_nodes = 0
+    application_encode_nodes = 0
     retirement_worker_nodes = 0
     for node in ("1", "2", "3"):
         try:
@@ -386,6 +473,12 @@ def activity(
             }
             if measurement is not None:
                 nodes[node]["measurement_compaction"] = measurement
+            application_encode = _application_snapshot_encode_delta(
+                before_info, after_info, restarted, node, completed
+            )
+            if application_encode is not None:
+                application_encode_nodes += 1
+                nodes[node]["application_snapshot_encode"] = application_encode
             if native_snapshot_stages:
                 native_stages = _native_snapshot_delta(before_info, after_info, restarted, node)
                 if native_stages is not None:
@@ -414,6 +507,8 @@ def activity(
         failures.append("required application checkpoint stages were not selected")
     if application_checkpoint_stages and application_stage_nodes != 3:
         failures.append("application checkpoint stages are not available on all three nodes")
+    if application_encode_nodes not in (0, 3):
+        failures.append("application snapshot encode timing is not available on all three nodes")
     if require_retired_log_worker_activity and not retired_log_worker:
         failures.append("required retired-log worker observation was not selected")
     if retired_log_worker and retirement_worker_nodes != 3:
@@ -466,6 +561,8 @@ def activity(
             failures.append(
                 "no application checkpoint stage activity observed: " + ", ".join(missing)
             )
+    if application_encode_nodes == 3:
+        totals["application_snapshot_encode"] = _aggregate_application_snapshot_encode(nodes)
     if retirement_worker_nodes == 3:
         retirement_totals = {
             name: sum(node["log_retirement"][name] for node in nodes.values())
@@ -480,7 +577,21 @@ def activity(
             failures.append("retired log prefixes fell back to owner-thread destruction")
     return {
         "schema": (
-            5
+            6
+            if (
+                native_snapshot_stages
+                and application_checkpoint_stages
+                and histogram_nodes
+                == native_stage_nodes
+                == application_stage_nodes
+                == application_encode_nodes
+                == 3
+                and all(
+                    stage in totals.get("native_snapshot_stages", {})
+                    for stage in NATIVE_SNAPSHOT_KERNEL_STAGES
+                )
+            )
+            else 5
             if (
                 native_snapshot_stages
                 and application_checkpoint_stages

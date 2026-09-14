@@ -92,9 +92,12 @@ impl<E: Engine> State<E> {
         if !snapshot_due(applied, current, interval, self.config.id) {
             return Ok(());
         }
+        let encode_started = self.diagnostics.start();
         let Some(snapshot) = self.application.encode_snapshot_if_idle()? else {
             return Ok(());
         };
+        let encode_elapsed = encode_started
+            .map(|started| started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
         if snapshot.applied_index != applied {
             bail!("application snapshot boundary changed while preparing snapshot")
         }
@@ -108,6 +111,10 @@ impl<E: Engine> State<E> {
         self.engine
             .compact_snapshot(snapshot.applied_index, &snapshot.payload)?;
         self.application.checkpoint_snapshot(&snapshot)?;
+        if let Some(elapsed) = encode_elapsed {
+            self.diagnostics
+                .observe("application_snapshot_encode_ns", elapsed);
+        }
         let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         self.snapshot_compactions = self.snapshot_compactions.saturating_add(1);
         self.snapshot_compaction_total_ns =

@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from benchctl.reclamation_load import assess, markdown
+from benchctl.reclamation_load import _application_snapshot_encode, assess, markdown
 from benchctl.reclamation_service import (
     APPLICATION_CHECKPOINT_STAGES,
     NATIVE_SNAPSHOT_BASE_STAGES,
@@ -119,6 +119,17 @@ def suite() -> dict:
 
 
 class ReclamationLoadTests(unittest.TestCase):
+    def test_schema_six_requires_application_snapshot_encode_timing(self):
+        item = case("snap10k", 0, 1, candidate=True)
+        item["measurement_mode"] = "diagnostic"
+        item["snapshot_reclamation"]["schema"] = 6
+        item["snapshot_reclamation"]["totals"] = {}
+
+        with self.assertRaisesRegex(
+            ValueError, "application snapshot encode timing is missing"
+        ):
+            _application_snapshot_encode(item)
+
     def test_passing_assessment_preserves_same_seed_service_and_storage_evidence(self):
         value = assess(suite())
         self.assertEqual(value["status"], "passed")
@@ -154,8 +165,13 @@ class ReclamationLoadTests(unittest.TestCase):
                     }
                     for stage in APPLICATION_CHECKPOINT_STAGES
                 },
+                "application_snapshot_encode": {
+                    "samples": 1,
+                    "total_ns": 300,
+                    "max_upper_bound_ns": 511,
+                },
             }
-            item["snapshot_reclamation"]["schema"] = 5
+            item["snapshot_reclamation"]["schema"] = 6
             data["cases"].append(item)
 
         value = assess(data)
@@ -178,7 +194,10 @@ class ReclamationLoadTests(unittest.TestCase):
         ]
         self.assertEqual(application_sync["samples"], 1)
         self.assertEqual(application_sync["max_upper_bound_ns"], 255)
-        self.assertIn("Application checkpoint stage maxima", markdown(value))
+        application_encode = saturated["application_snapshot_encode"]
+        self.assertEqual(application_encode["samples"], 1)
+        self.assertEqual(application_encode["max_upper_bound_ns"], 511)
+        self.assertIn("Application snapshot and checkpoint stage maxima", markdown(value))
 
     def test_schema_four_native_stages_remain_replayable(self):
         data = suite()

@@ -66,6 +66,26 @@ def add_application_checkpoint_metrics(value: dict, bucket_counts: dict[int, int
         status["info"]["application"]["diagnostics"] = {"metrics": metrics}
 
 
+def add_application_snapshot_encode_metrics(
+    value: dict, bucket_counts: dict[int, int]
+) -> None:
+    samples = sum(bucket_counts.values())
+    for status in value.values():
+        buckets = [0] * 64 if samples else []
+        for bucket, count in bucket_counts.items():
+            buckets[bucket] = count
+        status["info"]["diagnostics"] = {
+            "metrics": {
+                "application_snapshot_encode_ns": {
+                    "samples": samples,
+                    "total": samples * 100,
+                    "max": 100 if samples else 0,
+                    "buckets_log2": buckets,
+                }
+            }
+        }
+
+
 def add_log_retirement(
     value: dict, accepted_batches: int, accepted_entries: int, fallbacks: int = 0
 ) -> None:
@@ -331,6 +351,8 @@ class ReclamationServiceTests(unittest.TestCase):
         add_native_snapshot_metrics(after, {6: 1, 7: 2})
         add_application_checkpoint_metrics(before, {6: 1})
         add_application_checkpoint_metrics(after, {6: 1, 7: 2})
+        add_application_snapshot_encode_metrics(before, {6: 1})
+        add_application_snapshot_encode_metrics(after, {6: 1, 7: 2})
 
         receipt = activity(
             before,
@@ -343,7 +365,7 @@ class ReclamationServiceTests(unittest.TestCase):
             require_application_checkpoint_stage_activity=True,
         )
 
-        self.assertEqual(receipt["schema"], 5)
+        self.assertEqual(receipt["schema"], 6)
         publication = receipt["totals"]["native_snapshot_stages"][
             "snapshot_publication"
         ]
@@ -363,6 +385,11 @@ class ReclamationServiceTests(unittest.TestCase):
         self.assertEqual(application_sync["total_ns"], 600)
         self.assertEqual(application_sync["mean_ns"], 100.0)
         self.assertEqual(application_sync["max_upper_bound_ns"], 255)
+        application_encode = receipt["totals"]["application_snapshot_encode"]
+        self.assertEqual(application_encode["samples"], 6)
+        self.assertEqual(application_encode["total_ns"], 600)
+        self.assertEqual(application_encode["mean_ns"], 100.0)
+        self.assertEqual(application_encode["max_upper_bound_ns"], 255)
 
     def test_native_snapshot_stage_availability_cannot_change_mid_case(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)
@@ -381,6 +408,20 @@ class ReclamationServiceTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "failed")
         self.assertTrue(any(
             "native snapshot stage availability changed" in failure
+            for failure in receipt["failures"]
+        ))
+
+    def test_application_snapshot_encode_count_must_match_compactions(self):
+        before = statuses(completed=1, installs=(0, 0, 0), index=64)
+        after = statuses(completed=2, installs=(0, 0, 0), index=128)
+        add_application_snapshot_encode_metrics(before, {6: 1})
+        add_application_snapshot_encode_metrics(after, {6: 1, 7: 2})
+
+        receipt = activity(before, after, 64, "durable-kv")
+
+        self.assertEqual(receipt["status"], "failed")
+        self.assertTrue(any(
+            "application snapshot encode count differs from completed compactions" in failure
             for failure in receipt["failures"]
         ))
 
