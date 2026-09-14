@@ -264,7 +264,11 @@ impl Engine for Rafter {
                 ApplicationSnapshotVersion::new(APPLICATION_SNAPSHOT_VERSION)?,
             ),
         )?;
-        let snapshot = RaftSnapshot::from_payload(metadata, payload);
+        let snapshot = RaftSnapshot::new(
+            metadata,
+            payload.len() as u64,
+            rafter_storage::crc32(payload),
+        );
         let source = BorrowedSnapshotPayload {
             snapshot: &snapshot,
             payload,
