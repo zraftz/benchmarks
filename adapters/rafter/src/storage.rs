@@ -15,7 +15,7 @@ use rafter_storage::FileRaftSnapshotStore;
 use rafter_storage::JournalRaftHardStateStore as HardState;
 #[cfg(all(feature = "journal-hard-state", not(feature = "wal-hard-state")))]
 pub use rafter_storage::JournalRaftNodeStores as NodeStores;
-use std::{io, path::Path};
+use std::path::Path;
 
 pub const HARD_STATE_BACKEND: &str = if cfg!(feature = "wal-hard-state") {
     "wal"
@@ -26,23 +26,23 @@ pub const HARD_STATE_BACKEND: &str = if cfg!(feature = "wal-hard-state") {
 };
 pub type Node = DurableRaftNode<HardState, Log, FileRaftSnapshotStore>;
 
-pub fn open(directory: &Path, wal_reclamation_bytes: u64) -> io::Result<NodeStores> {
+pub fn open(directory: &Path, wal_reclamation_bytes: u64) -> anyhow::Result<NodeStores> {
     #[cfg(feature = "wal-hard-state")]
     {
         use rafter_storage::durable_batch::WalRaftNodeStoresOptions;
-        use std::num::NonZeroU64;
+        use std::{io, num::NonZeroU64};
 
         let threshold = NonZeroU64::new(wal_reclamation_bytes)
             .ok_or_else(|| io::Error::other("WAL reclamation threshold must be nonzero"))?;
-        NodeStores::open_with_options(
+        Ok(NodeStores::open_with_options(
             directory,
             WalRaftNodeStoresOptions::new().with_reclamation_threshold_bytes(threshold),
-        )
+        )?)
     }
     #[cfg(not(feature = "wal-hard-state"))]
     {
         let _ = wal_reclamation_bytes;
-        NodeStores::open(directory)
+        Ok(NodeStores::open(directory)?)
     }
 }
 
