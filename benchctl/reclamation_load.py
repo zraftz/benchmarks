@@ -5,6 +5,7 @@ from collections import defaultdict
 from statistics import median
 from typing import Any
 
+from .reclamation_service import NATIVE_SNAPSHOT_STAGES
 from .storage_footprint import MANAGED_RAFT_CATEGORIES
 
 
@@ -180,6 +181,43 @@ def _compaction(case: dict) -> tuple[int, int]:
     return samples, maximum
 
 
+def _native_snapshot_stages(case: dict) -> dict[str, dict[str, int | float | None]]:
+    receipt = case.get("snapshot_reclamation")
+    if not isinstance(receipt, dict):
+        raise ValueError("missing live reclamation activity")
+    totals = receipt.get("totals")
+    if not isinstance(totals, dict):
+        raise ValueError("live reclamation totals are invalid")
+    raw = totals.get("native_snapshot_stages")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or set(raw) != set(NATIVE_SNAPSHOT_STAGES):
+        raise ValueError("native snapshot stage set changed")
+    result = {}
+    for stage in NATIVE_SNAPSHOT_STAGES:
+        metric = raw[stage]
+        if not isinstance(metric, dict):
+            raise ValueError(f"invalid {stage} metric")
+        samples = metric.get("samples")
+        total_ns = metric.get("total_ns")
+        maximum = metric.get("max_upper_bound_ns")
+        if type(samples) is not int or samples < 0:
+            raise ValueError(f"invalid {stage} sample count")
+        if type(total_ns) is not int or total_ns < 0:
+            raise ValueError(f"invalid {stage} total")
+        if maximum is not None and (type(maximum) is not int or maximum <= 0):
+            raise ValueError(f"invalid {stage} maximum upper bound")
+        if (samples == 0) != (maximum is None):
+            raise ValueError(f"incoherent {stage} samples and maximum")
+        result[stage] = {
+            "samples": samples,
+            "total_ns": total_ns,
+            "mean_ns": total_ns / samples if samples else None,
+            "max_upper_bound_ns": maximum,
+        }
+    return result
+
+
 def _tail_limit(control: float, *, ratio: float, absolute_ms: float) -> float:
     return control + max(control * (ratio - 1.0), absolute_ms)
 
@@ -199,6 +237,14 @@ def assess(data: dict) -> dict[str, Any]:
         failures["evidence_and_correctness"].extend(data.get("qualification_errors", []))
 
     cases = _timing_cases(data)
+    diagnostic_grouped: dict[tuple[str, float], list[dict]] = defaultdict(list)
+    for case in data.get("cases", []):
+        if case.get("smoke") or case.get("measurement_mode") != "diagnostic":
+            continue
+        diagnostic_grouped[(
+            case["configuration"]["variant"],
+            case["workload"]["offered_per_second"],
+        )].append(case)
     grouped: dict[tuple[str, float, int], list[dict]] = defaultdict(list)
     for case in cases:
         key = (
@@ -447,7 +493,20 @@ def assess(data: dict) -> dict[str, Any]:
                     "candidate_process_restart_ns": restart_ns,
                 })
             if paired:
-                rows.append({
+                native_snapshot_stages = {}
+                diagnostic_cases = diagnostic_grouped.get((variant, rate), [])
+                if diagnostic_grouped and len(diagnostic_cases) != 1:
+                    failures["reclamation_activity"].append(
+                        f"{variant} at {rate}/s has {len(diagnostic_cases)} diagnostic cases"
+                    )
+                elif diagnostic_cases:
+                    try:
+                        native_snapshot_stages = _native_snapshot_stages(diagnostic_cases[0])
+                    except ValueError as error:
+                        failures["reclamation_activity"].append(
+                            f"{variant} at {rate}/s diagnostic: {error}"
+                        )
+                row = {
                     "variant": variant,
                     "snapshot_interval_entries": interval,
                     "offered_per_second": rate,
@@ -497,7 +556,10 @@ def assess(data: dict) -> dict[str, Any]:
                     "max_candidate_process_restart_ns": max(
                         item["candidate_process_restart_ns"] for item in paired
                     ),
-                })
+                }
+                if native_snapshot_stages:
+                    row["native_snapshot_stages"] = native_snapshot_stages
+                rows.append(row)
 
     verdicts = {
         name: {"status": "passed" if not errors else "failed", "errors": errors}
@@ -551,6 +613,39 @@ def markdown(value: dict) -> str:
             f"{row['max_candidate_final_snapshot_temporary_files']} temporary | "
             f"{row['max_candidate_process_restart_ns'] / 1e9:.3f} s |"
         )
+    staged = [row for row in value["comparisons"] if row.get("native_snapshot_stages")]
+    if staged:
+        lines += [
+            "",
+            "## Native snapshot stage maxima",
+            "",
+            "Log2 upper bounds across all three nodes in the separate diagnostic case; "
+            "not timing-run percentiles.",
+            "",
+            "| Snapshot interval | Offered/s | Publication | Source + write | Data sync | "
+            "File publish | Manifest publish | Prune |",
+            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for row in staged:
+            rate = (
+                "saturation"
+                if row["offered_per_second"] == 0
+                else f"{row['offered_per_second']:,}"
+            )
+
+            def maximum(stage: str) -> str:
+                value_ns = row["native_snapshot_stages"][stage]["max_upper_bound_ns"]
+                return "not observed" if value_ns is None else f"{value_ns / 1e6:.3f} ms"
+
+            lines.append(
+                f"| {row['snapshot_interval_entries']:,} | {rate} | "
+                f"{maximum('snapshot_publication')} | "
+                f"{maximum('snapshot_data_write')} | "
+                f"{maximum('snapshot_data_sync')} | "
+                f"{maximum('snapshot_file_publish')} | "
+                f"{maximum('snapshot_manifest_publish')} | "
+                f"{maximum('snapshot_prune')} |"
+            )
     lines += [
         "",
         "The application journal is reported separately and remains append-only. Compaction "

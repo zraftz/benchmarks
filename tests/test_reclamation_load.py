@@ -2,6 +2,7 @@ import copy
 import unittest
 
 from benchctl.reclamation_load import assess, markdown
+from benchctl.reclamation_service import NATIVE_SNAPSHOT_STAGES
 
 
 def footprint(
@@ -119,8 +120,38 @@ class ReclamationLoadTests(unittest.TestCase):
         )
         self.assertAlmostEqual(saturated["median_throughput_ratio"], 0.97)
         self.assertEqual(saturated["measured_compactions"], 9)
+        self.assertNotIn("native_snapshot_stages", saturated)
         self.assertIn("Application-journal physical reclamation is not tested", value["scope"])
         self.assertIn("Verdict: passed", markdown(value))
+
+    def test_native_snapshot_stage_maxima_are_imported_and_rendered(self):
+        data = suite()
+        for rate in (3000, 0):
+            item = case("snap10k", rate, 1, candidate=True)
+            item["measurement_mode"] = "diagnostic"
+            item["snapshot_reclamation"]["totals"] = {
+                "native_snapshot_stages": {
+                    stage: {
+                        "samples": 1,
+                        "total_ns": 100,
+                        "max_upper_bound_ns": 127,
+                    }
+                    for stage in NATIVE_SNAPSHOT_STAGES
+                }
+            }
+            data["cases"].append(item)
+
+        value = assess(data)
+
+        self.assertEqual(value["status"], "passed")
+        saturated = next(
+            row for row in value["comparisons"] if row["offered_per_second"] == 0
+        )
+        publication = saturated["native_snapshot_stages"]["snapshot_publication"]
+        self.assertEqual(publication["samples"], 1)
+        self.assertEqual(publication["total_ns"], 100)
+        self.assertEqual(publication["max_upper_bound_ns"], 127)
+        self.assertIn("Native snapshot stage maxima", markdown(value))
 
     def test_tail_regression_and_missing_compaction_fail_separate_verdicts(self):
         data = copy.deepcopy(suite())

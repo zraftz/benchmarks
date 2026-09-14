@@ -14,5 +14,5 @@ serde_json.workspace = true
 tokio.workspace = true
 fs2.workspace = true
 crc32fast.workspace = true
-rafter = { git = "https://github.com/zsumz/rafter", rev = "bd64c224368a77d55ac950d349bd94cd97b25e76" }
-rafter-runtime = { git = "https://github.com/zsumz/rafter", rev = "bd64c224368a77d55ac950d349bd94cd97b25e76" }
+rafter = { git = "https://github.com/zsumz/rafter", rev = "1d4befde820ad58e2638133faf8949fc3c1342a3" }
+rafter-runtime = { git = "https://github.com/zsumz/rafter", rev = "1d4befde820ad58e2638133faf8949fc3c1342a3" }
