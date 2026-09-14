@@ -67,6 +67,21 @@ pub struct ApplicationSnapshot {
     metadata: Option<serde_json::Value>,
 }
 
+/// Encoded application snapshot plus the Raft boundary it represents.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EncodedApplicationSnapshot {
+    pub applied_index: u64,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct BorrowedApplicationSnapshot<'a> {
+    snapshot_schema: u32,
+    applied_index: u64,
+    model: &'a Model,
+    metadata: &'a Option<serde_json::Value>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum ApplicationRecord {
@@ -251,6 +266,19 @@ impl DurableModel {
             metadata: self.metadata.clone(),
         }
     }
+    /// Encodes the same snapshot format without cloning the application model.
+    pub fn encode_snapshot(&self) -> Result<EncodedApplicationSnapshot> {
+        let snapshot = BorrowedApplicationSnapshot {
+            snapshot_schema: APPLICATION_SNAPSHOT_SCHEMA,
+            applied_index: self.index,
+            model: &self.model,
+            metadata: &self.metadata,
+        };
+        Ok(EncodedApplicationSnapshot {
+            applied_index: self.index,
+            payload: serde_json::to_vec(&snapshot)?,
+        })
+    }
     /// Durably replaces application state with an authoritative Raft snapshot.
     pub fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
         snapshot.validate()?;
@@ -343,8 +371,11 @@ mod tests {
                 metadata: None,
             }])
             .unwrap();
-        let encoded = source.snapshot().encode().unwrap();
-        let snapshot = ApplicationSnapshot::decode(&encoded).unwrap();
+        let owned = source.snapshot();
+        let encoded = source.encode_snapshot().unwrap();
+        assert_eq!(encoded.applied_index, owned.applied_index);
+        assert_eq!(encoded.payload, owned.encode().unwrap());
+        let snapshot = ApplicationSnapshot::decode(&encoded.payload).unwrap();
 
         let mut target = DurableModel::open(&target_path).unwrap();
         target.install_snapshot(snapshot).unwrap();

@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     apply_worker::{ApplyWorker, Query, BATCH_BYTES, BATCH_ENTRIES, QUEUE_ENTRIES},
-    model::{ApplicationSnapshot, Outcome},
+    model::{ApplicationSnapshot, EncodedApplicationSnapshot, Outcome},
 };
 
 fn snapshot_due(applied: u64, current: u64, interval: u64, node_id: u64) -> bool {
@@ -50,10 +50,10 @@ impl Application {
         }
     }
 
-    pub fn snapshot_if_idle(&self) -> Result<Option<ApplicationSnapshot>> {
+    pub fn encode_snapshot_if_idle(&self) -> Result<Option<EncodedApplicationSnapshot>> {
         match self {
-            Self::Inline(model) => Ok(Some(model.snapshot())),
-            Self::Worker(worker) => worker.snapshot(),
+            Self::Inline(model) => model.encode_snapshot().map(Some),
+            Self::Worker(worker) => worker.encode_snapshot(),
         }
     }
 
@@ -85,7 +85,7 @@ impl<E: Engine> State<E> {
         if !snapshot_due(applied, current, interval, self.config.id) {
             return Ok(());
         }
-        let Some(snapshot) = self.application.snapshot_if_idle()? else {
+        let Some(snapshot) = self.application.encode_snapshot_if_idle()? else {
             return Ok(());
         };
         if snapshot.applied_index != applied {
@@ -96,11 +96,10 @@ impl<E: Engine> State<E> {
         {
             bail!("application snapshot boundary is ahead of committed or dispatched state")
         }
-        let payload = snapshot.encode()?;
-        let payload_bytes = payload.len() as u64;
+        let payload_bytes = snapshot.payload.len() as u64;
         let started = Instant::now();
         self.engine
-            .compact_snapshot(snapshot.applied_index, payload)?;
+            .compact_snapshot(snapshot.applied_index, snapshot.payload)?;
         let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         self.snapshot_compactions = self.snapshot_compactions.saturating_add(1);
         self.snapshot_compaction_total_ns =

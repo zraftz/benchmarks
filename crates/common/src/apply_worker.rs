@@ -3,7 +3,7 @@
 //! The Raft owner never blocks submitting work or receiving a completion.
 use crate::{
     diagnostics::Diagnostics,
-    model::{ApplicationSnapshot, Applied, DurableModel, Outcome},
+    model::{ApplicationSnapshot, Applied, DurableModel, EncodedApplicationSnapshot, Outcome},
     Reply,
 };
 use anyhow::{bail, Result};
@@ -38,6 +38,13 @@ pub trait ApplicationStore: Send + 'static {
     fn snapshot(&self) -> Result<ApplicationSnapshot> {
         bail!("application snapshots are unsupported by this store")
     }
+    fn encode_snapshot(&self) -> Result<EncodedApplicationSnapshot> {
+        let snapshot = self.snapshot()?;
+        Ok(EncodedApplicationSnapshot {
+            applied_index: snapshot.applied_index,
+            payload: snapshot.encode()?,
+        })
+    }
     fn install_snapshot(&mut self, _snapshot: ApplicationSnapshot) -> Result<()> {
         bail!("application snapshots are unsupported by this store")
     }
@@ -57,6 +64,9 @@ impl ApplicationStore for DurableModel {
     }
     fn snapshot(&self) -> Result<ApplicationSnapshot> {
         Ok(self.snapshot())
+    }
+    fn encode_snapshot(&self) -> Result<EncodedApplicationSnapshot> {
+        DurableModel::encode_snapshot(self)
     }
     fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
         self.install_snapshot(snapshot)
@@ -409,6 +419,17 @@ impl ApplyWorker {
             .lock()
             .map_err(|_| anyhow::anyhow!("application store lock poisoned"))?;
         store.snapshot().map(Some)
+    }
+
+    pub fn encode_snapshot(&self) -> Result<Option<EncodedApplicationSnapshot>> {
+        if self.is_busy() {
+            return Ok(None);
+        }
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("application store lock poisoned"))?;
+        store.encode_snapshot().map(Some)
     }
 
     pub fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
