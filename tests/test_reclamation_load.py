@@ -2,7 +2,11 @@ import copy
 import unittest
 
 from benchctl.reclamation_load import assess, markdown
-from benchctl.reclamation_service import APPLICATION_CHECKPOINT_STAGES, NATIVE_SNAPSHOT_STAGES
+from benchctl.reclamation_service import (
+    APPLICATION_CHECKPOINT_STAGES,
+    NATIVE_SNAPSHOT_BASE_STAGES,
+    NATIVE_SNAPSHOT_STAGES,
+)
 
 
 def footprint(
@@ -151,7 +155,7 @@ class ReclamationLoadTests(unittest.TestCase):
                     for stage in APPLICATION_CHECKPOINT_STAGES
                 },
             }
-            item["snapshot_reclamation"]["schema"] = 4
+            item["snapshot_reclamation"]["schema"] = 5
             data["cases"].append(item)
 
         value = assess(data)
@@ -165,12 +169,53 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertEqual(publication["total_ns"], 100)
         self.assertEqual(publication["max_upper_bound_ns"], 127)
         self.assertIn("Native snapshot stage maxima", markdown(value))
+        kernel_commit = saturated["native_snapshot_stages"][
+            "snapshot_kernel_commit"
+        ]
+        self.assertEqual(kernel_commit["samples"], 1)
         application_sync = saturated["application_checkpoint_stages"][
             "journal_checkpoint_sync_ns"
         ]
         self.assertEqual(application_sync["samples"], 1)
         self.assertEqual(application_sync["max_upper_bound_ns"], 255)
         self.assertIn("Application checkpoint stage maxima", markdown(value))
+
+    def test_schema_four_native_stages_remain_replayable(self):
+        data = suite()
+        for rate in (3000, 0):
+            item = case("snap10k", rate, 1, candidate=True)
+            item["measurement_mode"] = "diagnostic"
+            item["snapshot_reclamation"]["schema"] = 4
+            item["snapshot_reclamation"]["totals"] = {
+                "native_snapshot_stages": {
+                    stage: {
+                        "samples": 1,
+                        "total_ns": 100,
+                        "max_upper_bound_ns": 127,
+                    }
+                    for stage in NATIVE_SNAPSHOT_BASE_STAGES
+                },
+                "application_checkpoint_stages": {
+                    stage: {
+                        "samples": 1,
+                        "total_ns": 200,
+                        "max_upper_bound_ns": 255,
+                    }
+                    for stage in APPLICATION_CHECKPOINT_STAGES
+                },
+            }
+            data["cases"].append(item)
+
+        value = assess(data)
+
+        self.assertEqual(value["status"], "passed")
+        saturated = next(
+            row for row in value["comparisons"] if row["offered_per_second"] == 0
+        )
+        self.assertNotIn(
+            "snapshot_kernel_commit", saturated["native_snapshot_stages"]
+        )
+        self.assertIn("not observed", markdown(value))
 
     def test_tail_regression_and_missing_compaction_fail_separate_verdicts(self):
         data = copy.deepcopy(suite())

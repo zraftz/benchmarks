@@ -30,6 +30,8 @@ SNAPSHOT_STAGE_COLUMNS = (
     ("snapshot_file_publish", "File publish"),
     ("snapshot_manifest_publish", "Manifest publish"),
     ("snapshot_prune", "Prune"),
+    ("snapshot_kernel_prepare", "Kernel prepare"),
+    ("snapshot_kernel_commit", "Kernel commit"),
 )
 
 

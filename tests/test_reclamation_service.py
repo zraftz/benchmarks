@@ -282,7 +282,7 @@ class ReclamationServiceTests(unittest.TestCase):
             require_application_checkpoint_stage_activity=True,
         )
 
-        self.assertEqual(receipt["schema"], 4)
+        self.assertEqual(receipt["schema"], 5)
         publication = receipt["totals"]["native_snapshot_stages"][
             "snapshot_publication"
         ]
@@ -291,6 +291,10 @@ class ReclamationServiceTests(unittest.TestCase):
         self.assertEqual(publication["mean_ns"], 100.0)
         self.assertEqual(publication["max_upper_bound_ns"], 255)
         self.assertEqual(publication["buckets_ns_log2"], [0] * 7 + [6] + [0] * 56)
+        kernel_commit = receipt["totals"]["native_snapshot_stages"][
+            "snapshot_kernel_commit"
+        ]
+        self.assertEqual(kernel_commit["samples"], 6)
         application_sync = receipt["totals"]["application_checkpoint_stages"][
             "journal_checkpoint_sync_ns"
         ]

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 
-NATIVE_SNAPSHOT_STAGES = (
+NATIVE_SNAPSHOT_BASE_STAGES = (
     "snapshot_publication",
     "snapshot_data_write",
     "snapshot_data_sync",
@@ -12,6 +12,11 @@ NATIVE_SNAPSHOT_STAGES = (
     "snapshot_manifest_publish",
     "snapshot_prune",
 )
+NATIVE_SNAPSHOT_KERNEL_STAGES = (
+    "snapshot_kernel_prepare",
+    "snapshot_kernel_commit",
+)
+NATIVE_SNAPSHOT_STAGES = NATIVE_SNAPSHOT_BASE_STAGES + NATIVE_SNAPSHOT_KERNEL_STAGES
 APPLICATION_CHECKPOINT_STAGES = (
     "journal_checkpoint_write_ns",
     "journal_checkpoint_sync_ns",
@@ -62,14 +67,24 @@ def _native_snapshot_delta(
         return None
     if not isinstance(old, dict) or not isinstance(new, dict):
         raise ValueError(f"node {node} native snapshot stage availability changed")
-    present = [stage in old or stage in new for stage in NATIVE_SNAPSHOT_STAGES]
-    if not any(present):
+    base_present = [stage in old or stage in new for stage in NATIVE_SNAPSHOT_BASE_STAGES]
+    if not any(base_present):
         return None
-    if not all(stage in old and stage in new for stage in NATIVE_SNAPSHOT_STAGES):
+    if not all(stage in old and stage in new for stage in NATIVE_SNAPSHOT_BASE_STAGES):
         raise ValueError(f"node {node} native snapshot stages are incomplete")
+    kernel_present = [stage in old or stage in new for stage in NATIVE_SNAPSHOT_KERNEL_STAGES]
+    if any(kernel_present) and not all(
+        stage in old and stage in new for stage in NATIVE_SNAPSHOT_KERNEL_STAGES
+    ):
+        raise ValueError(f"node {node} native snapshot kernel stages are incomplete")
+    stages = (
+        NATIVE_SNAPSHOT_STAGES
+        if all(kernel_present)
+        else NATIVE_SNAPSHOT_BASE_STAGES
+    )
 
     result = {}
-    for stage in NATIVE_SNAPSHOT_STAGES:
+    for stage in stages:
         first = old[stage]
         last = new[stage]
         if not isinstance(first, dict) or not isinstance(last, dict):
@@ -114,7 +129,14 @@ def _native_snapshot_delta(
 
 def _aggregate_native_stages(nodes: dict[str, dict]) -> dict[str, dict[str, Any]]:
     result = {}
-    for stage in NATIVE_SNAPSHOT_STAGES:
+    stage_sets = {
+        tuple(node["native_snapshot_stages"])
+        for node in nodes.values()
+    }
+    if len(stage_sets) != 1:
+        raise ValueError("native snapshot stage availability differs between nodes")
+    present = set(next(iter(stage_sets)))
+    for stage in (stage for stage in NATIVE_SNAPSHOT_STAGES if stage in present):
         metrics = [node["native_snapshot_stages"][stage] for node in nodes.values()]
         buckets = [
             sum(metric["buckets_ns_log2"][index] for metric in metrics)
@@ -362,15 +384,19 @@ def activity(
         "application_installs_since_before_status": installs,
     }
     if native_stage_nodes == 3:
-        native_totals = _aggregate_native_stages(nodes)
-        totals["native_snapshot_stages"] = native_totals
-        missing = [
-            stage for stage, metric in native_totals.items() if metric["samples"] == 0
-        ]
-        if require_native_snapshot_stage_activity and missing:
-            failures.append(
-                "no native snapshot stage activity observed: " + ", ".join(missing)
-            )
+        try:
+            native_totals = _aggregate_native_stages(nodes)
+        except ValueError as error:
+            failures.append(str(error))
+        else:
+            totals["native_snapshot_stages"] = native_totals
+            missing = [
+                stage for stage, metric in native_totals.items() if metric["samples"] == 0
+            ]
+            if require_native_snapshot_stage_activity and missing:
+                failures.append(
+                    "no native snapshot stage activity observed: " + ", ".join(missing)
+                )
     if application_stage_nodes == 3:
         application_totals = _aggregate_application_stages(nodes)
         totals["application_checkpoint_stages"] = application_totals
@@ -383,7 +409,17 @@ def activity(
             )
     return {
         "schema": (
-            4
+            5
+            if (
+                native_snapshot_stages
+                and application_checkpoint_stages
+                and histogram_nodes == native_stage_nodes == application_stage_nodes == 3
+                and all(
+                    stage in totals.get("native_snapshot_stages", {})
+                    for stage in NATIVE_SNAPSHOT_KERNEL_STAGES
+                )
+            )
+            else 4
             if (
                 native_snapshot_stages
                 and application_checkpoint_stages
