@@ -23,6 +23,14 @@ SERVICE_OBJECTIVE = {
     "require_zero_errors_unknown_and_unsent": True,
     "evaluation": "Every repetition must meet the rate and tail limits; accounting is summed without survivor filtering.",
 }
+SNAPSHOT_STAGE_COLUMNS = (
+    ("snapshot_publication", "Publication"),
+    ("snapshot_data_write", "Source + write"),
+    ("snapshot_data_sync", "Data sync"),
+    ("snapshot_file_publish", "File publish"),
+    ("snapshot_manifest_publish", "Manifest publish"),
+    ("snapshot_prune", "Prune"),
+)
 
 
 def _brief_version(value: str) -> str:
@@ -31,6 +39,13 @@ def _brief_version(value: str) -> str:
 
 def _source_refs(evidence: str, cases: Iterable[str]) -> list[dict]:
     return [{"evidence": evidence, "case": case} for case in cases]
+
+
+def _snapshot_stage_maximum(row: dict, stage: str) -> str:
+    value = row.get("native_snapshot_stages", {}).get(stage, {}).get(
+        "max_upper_bound_ns"
+    )
+    return "not observed" if value is None else f"{value / 1e6:.3f} ms"
 
 
 def _consensus_section(micro: dict | None) -> dict:
@@ -1249,6 +1264,37 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                     f"{row['max_candidate_process_restart_ns'] / 1e9:.3f} s |"
                 )
             lines.append("")
+            staged = [
+                row
+                for row in under_load["comparisons"]
+                if row.get("native_snapshot_stages")
+            ]
+            if staged:
+                lines += [
+                    "Snapshot publication stage maxima from separate diagnostic cases "
+                    "(log2 upper bounds, not timing-run percentiles):",
+                    "",
+                    "| Snapshot interval | Offered | "
+                    + " | ".join(label for _, label in SNAPSHOT_STAGE_COLUMNS)
+                    + " |",
+                    "| ---: | ---: | "
+                    + " | ".join("---:" for _ in SNAPSHOT_STAGE_COLUMNS)
+                    + " |",
+                ]
+                for row in staged:
+                    rate = (
+                        "saturation"
+                        if row["offered_per_second"] == 0
+                        else f"{row['offered_per_second']:,}/s"
+                    )
+                    maxima = " | ".join(
+                        _snapshot_stage_maximum(row, stage)
+                        for stage, _ in SNAPSHOT_STAGE_COLUMNS
+                    )
+                    lines.append(
+                        f"| {row['snapshot_interval_entries']:,} | {rate} | {maxima} |"
+                    )
+                lines.append("")
             for name, verdict in under_load["verdicts"].items():
                 lines.append(f"- {name.replace('_', ' ')}: {verdict['status']}")
                 lines.extend(f"  - {error}" for error in verdict.get("errors", []))
@@ -1475,6 +1521,38 @@ def render_html(summary: dict, evidence: dict) -> str:
                 "<th>Managed Raft after restart</th><th>Max restart</th>"
                 f"</tr></thead><tbody>{reclamation_body}</tbody></table></div>"
             )
+            staged = [
+                row
+                for row in under_load["comparisons"]
+                if row.get("native_snapshot_stages")
+            ]
+            if staged:
+                stage_body = ""
+                for row in staged:
+                    rate = (
+                        "saturation"
+                        if row["offered_per_second"] == 0
+                        else f"{row['offered_per_second']:,}/s"
+                    )
+                    values = "".join(
+                        f"<td>{_snapshot_stage_maximum(row, stage)}</td>"
+                        for stage, _ in SNAPSHOT_STAGE_COLUMNS
+                    )
+                    stage_body += (
+                        f"<tr><td>{row['snapshot_interval_entries']:,}</td>"
+                        f"<td>{rate}</td>{values}</tr>"
+                    )
+                headings = "".join(
+                    f"<th>{html.escape(label)}</th>"
+                    for _, label in SNAPSHOT_STAGE_COLUMNS
+                )
+                content.append(
+                    "<p>Snapshot publication stage maxima from separate diagnostic cases "
+                    "(log2 upper bounds, not timing-run percentiles):</p>"
+                    "<div class='table'><table><thead><tr><th>Snapshot interval</th>"
+                    f"<th>Offered</th>{headings}</tr></thead>"
+                    f"<tbody>{stage_body}</tbody></table></div>"
+                )
             verdicts = "".join(
                 f"<li><strong>{html.escape(name.replace('_', ' '))}:</strong> "
                 f"{html.escape(verdict['status'])}"

@@ -146,6 +146,17 @@ def reclamation_under_load_assessment(*, status="passed"):
             "median_candidate_final_managed_raft_allocated_bytes": 2 * 2**20,
             "median_control_final_managed_raft_allocated_bytes": 20 * 2**20,
             "max_candidate_process_restart_ns": 250_000_000,
+            "native_snapshot_stages": {
+                stage: {"max_upper_bound_ns": 1_048_575}
+                for stage in (
+                    "snapshot_publication",
+                    "snapshot_data_write",
+                    "snapshot_data_sync",
+                    "snapshot_file_publish",
+                    "snapshot_manifest_publish",
+                    "snapshot_prune",
+                )
+            },
         }],
     }
 
@@ -811,6 +822,9 @@ class SummaryTests(unittest.TestCase):
             self.assertIn("98.0%", rendered)
             self.assertIn("2.00 MiB / 20.00 MiB", rendered)
             self.assertIn("Application-journal physical reclamation is not tested", rendered)
+            self.assertIn("Snapshot publication stage maxima", rendered)
+            self.assertIn("Source + write", rendered)
+            self.assertIn("1.049 ms", rendered)
 
     def test_reclamation_under_load_failure_remains_visible(self):
         data = durable_data()
