@@ -4,7 +4,7 @@
 use crate::journal::Journal;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::{cell::Cell, collections::BTreeMap, path::Path};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -182,6 +182,7 @@ pub struct DurableModel {
     pub index: u64,
     has_applied: bool,
     pub metadata: Option<serde_json::Value>,
+    snapshot_payload_capacity: Cell<usize>,
 }
 impl DurableModel {
     pub fn open(path: &Path) -> Result<Self> {
@@ -192,6 +193,7 @@ impl DurableModel {
             index: 0,
             has_applied: false,
             metadata: None,
+            snapshot_payload_capacity: Cell::new(4 * 1024),
         };
         for record in records {
             match record {
@@ -274,9 +276,12 @@ impl DurableModel {
             model: &self.model,
             metadata: &self.metadata,
         };
+        let mut payload = Vec::with_capacity(self.snapshot_payload_capacity.get());
+        serde_json::to_writer(&mut payload, &snapshot)?;
+        self.snapshot_payload_capacity.set(payload.len());
         Ok(EncodedApplicationSnapshot {
             applied_index: self.index,
-            payload: serde_json::to_vec(&snapshot)?,
+            payload,
         })
     }
     /// Atomically replaces prior application history with this durable state.
@@ -393,6 +398,10 @@ mod tests {
         let encoded = source.encode_snapshot().unwrap();
         assert_eq!(encoded.applied_index, owned.applied_index);
         assert_eq!(encoded.payload, owned.encode().unwrap());
+        assert_eq!(source.snapshot_payload_capacity.get(), encoded.payload.len());
+        let repeated = source.encode_snapshot().unwrap();
+        assert_eq!(repeated.payload, encoded.payload);
+        assert!(repeated.payload.capacity() >= encoded.payload.len());
         let snapshot = ApplicationSnapshot::decode(&encoded.payload).unwrap();
 
         let mut target = DurableModel::open(&target_path).unwrap();
