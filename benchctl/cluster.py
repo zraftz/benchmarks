@@ -12,6 +12,8 @@ from typing import Any
 from . import protocol
 from .evidence import write_json, CONTRACT
 
+DEFAULT_APPLICATION_CHECKPOINT_BYTES = 64 * 1024 * 1024
+
 
 class Cluster:
     def __init__(self, implementation: str, command: list[str], directory: Path,
@@ -20,7 +22,8 @@ class Cluster:
                  peer_message_stream: bool = False, pipelined_durability: bool = False,
                  max_speculative_proposals: int = 1, combine_peer_proposals: bool = False,
                  max_inflight_appends: int = 8, durable_completion_priority: bool = False,
-                 openraft_async_flush: bool = False, snapshot_interval_entries: int = 0):
+                 openraft_async_flush: bool = False, snapshot_interval_entries: int = 0,
+                 application_checkpoint_bytes: int = DEFAULT_APPLICATION_CHECKPOINT_BYTES):
         self.implementation, self.command = implementation, command
         self.directory, self.data = directory, data
         self.processes: dict[int, subprocess.Popen] = {}
@@ -53,7 +56,8 @@ class Cluster:
                     "max_inflight_appends": max_inflight_appends,
                     "durable_completion_priority": durable_completion_priority,
                     "openraft_async_flush": openraft_async_flush,
-                    "snapshot_interval_entries": snapshot_interval_entries})
+                    "snapshot_interval_entries": snapshot_interval_entries,
+                    "application_checkpoint_bytes": application_checkpoint_bytes})
         finally:
             for sock in reserved:
                 sock.close()

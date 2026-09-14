@@ -56,7 +56,7 @@ pub struct Model {
 }
 
 const APPLICATION_SNAPSHOT_SCHEMA: u32 = 1;
-const APPLICATION_JOURNAL_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_APPLICATION_JOURNAL_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
 const RETAINED_SNAPSHOT_CAPACITY: usize = 8 * 1024 * 1024;
 
 /// Complete durable application state at one applied Raft-log boundary.
@@ -185,6 +185,7 @@ pub struct DurableModel {
     has_applied: bool,
     pub metadata: Option<serde_json::Value>,
     snapshot_payload: RefCell<Vec<u8>>,
+    application_checkpoint_bytes: u64,
 }
 impl DurableModel {
     pub fn open(path: &Path) -> Result<Self> {
@@ -196,6 +197,7 @@ impl DurableModel {
             has_applied: false,
             metadata: None,
             snapshot_payload: RefCell::new(Vec::with_capacity(4 * 1024)),
+            application_checkpoint_bytes: DEFAULT_APPLICATION_JOURNAL_CHECKPOINT_BYTES,
         };
         for record in records {
             match record {
@@ -309,7 +311,7 @@ impl DurableModel {
         &mut self,
         snapshot: &EncodedApplicationSnapshot,
     ) -> Result<()> {
-        self.checkpoint_snapshot_if_larger_than(snapshot, APPLICATION_JOURNAL_CHECKPOINT_BYTES)
+        self.checkpoint_snapshot_if_larger_than(snapshot, self.application_checkpoint_bytes)
     }
     fn checkpoint_snapshot_if_larger_than(
         &mut self,
@@ -354,11 +356,14 @@ impl DurableModel {
         }
         self.journal.diagnostics = diagnostics;
     }
+    pub(crate) fn set_application_checkpoint_bytes(&mut self, maximum_bytes: u64) {
+        self.application_checkpoint_bytes = maximum_bytes;
+    }
     pub fn stats(&self) -> serde_json::Value {
         serde_json::json!({"applied_index":self.index,"keys":self.model.values.len(),
             "sessions":self.model.sessions(),"application_syncs":self.journal.syncs,
             "application_bytes":self.journal.bytes,
-            "application_checkpoint_bytes":APPLICATION_JOURNAL_CHECKPOINT_BYTES,
+            "application_checkpoint_bytes":self.application_checkpoint_bytes,
             "diagnostics":self.journal.diagnostics.snapshot()})
     }
 }

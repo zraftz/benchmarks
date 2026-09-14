@@ -9,6 +9,7 @@ import re
 from statistics import median
 from typing import Any
 
+from .cluster import DEFAULT_APPLICATION_CHECKPOINT_BYTES
 from .evidence import CONTRACT, digest, verify
 from .feature_coverage import verdict as feature_coverage_verdict
 from .suite_plan import execution_plan, load_window_plan
@@ -157,6 +158,9 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "durable_completion_priority": bool(options.get("durable_completion_priority", False)),
             "openraft_async_flush": bool(options.get("openraft_async_flush", False)),
             "snapshot_interval_entries": options.get("snapshot_interval_entries", 0),
+            "application_checkpoint_bytes": options.get(
+                "application_checkpoint_bytes", DEFAULT_APPLICATION_CHECKPOINT_BYTES
+            ),
         },
         "workload": _workload(manifest, measurement),
         "completion_boundary": (measurement or {}).get("contract", CONTRACT),

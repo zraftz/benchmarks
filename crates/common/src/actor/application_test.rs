@@ -146,6 +146,7 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         durable_completion_priority: false,
         openraft_async_flush: false,
         snapshot_interval_entries: 0,
+        application_checkpoint_bytes: 64 * 1024 * 1024,
     };
     let mut state = State {
         diagnostics: Diagnostics::default(),

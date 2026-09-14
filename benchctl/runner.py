@@ -13,7 +13,7 @@ import time
 import uuid
 from . import protocol
 from .checker import check_history, read_history
-from .cluster import Cluster
+from .cluster import Cluster, DEFAULT_APPLICATION_CHECKPOINT_BYTES
 from .evidence import (ROOT, capture, digest, host_info, seal, source_digest,
                        validate_result, write_json)
 from .load_sampling import LoadSampler
@@ -144,7 +144,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         getattr(options, "max_inflight_appends", 8),
         getattr(options, "durable_completion_priority", False),
         getattr(options, "openraft_async_flush", False),
-        getattr(options, "snapshot_interval_entries", 0))
+        getattr(options, "snapshot_interval_entries", 0),
+        getattr(options, "application_checkpoint_bytes", DEFAULT_APPLICATION_CHECKPOINT_BYTES))
     load = None
     try:
         cluster.start()

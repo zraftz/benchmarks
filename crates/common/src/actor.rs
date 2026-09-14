@@ -189,6 +189,7 @@ impl Actor {
         for metric in DIAGNOSTIC_METRICS {
             diagnostics.declare(metric);
         }
+        model.set_application_checkpoint_bytes(config.application_checkpoint_bytes);
         model.set_diagnostics(diagnostics.clone());
         let (tx, rx) = mpsc::sync_channel(config.capacity);
         let tx = Arc::new(tx);

@@ -147,7 +147,8 @@ The WAL pipeline can also run the finite live-reclamation smoke directly:
 ./raft-bench build --rafter-hard-state wal --pipelined-durability
 ./raft-bench run --smoke --implementations rafter --rates 0 \
   --pipelined-durability --peer-batch-size 32 \
-  --snapshot-interval-entries 8 --scenario snapshot-catchup
+  --snapshot-interval-entries 8 --scenario snapshot-catchup \
+  --application-checkpoint-bytes 1
 ```
 
 That scenario kills a follower before load, requires a newer leader snapshot,

@@ -56,6 +56,8 @@ pub struct Config {
     pub openraft_async_flush: bool,
     #[serde(default)]
     pub snapshot_interval_entries: u64,
+    #[serde(default = "application_checkpoint_bytes")]
+    pub application_checkpoint_bytes: u64,
 }
 fn peer_batch_size() -> usize {
     1
@@ -74,6 +76,9 @@ fn max_speculative_proposals() -> usize {
 }
 fn max_inflight_appends() -> usize {
     8
+}
+fn application_checkpoint_bytes() -> u64 {
+    crate::model::DEFAULT_APPLICATION_JOURNAL_CHECKPOINT_BYTES
 }
 impl Config {
     pub fn load() -> Result<Self> {
@@ -104,8 +109,10 @@ impl Config {
             || (c.snapshot_interval_entries > 0
                 && (!c.ordered_apply || !c.peer_message_stream || !c.pipelined_durability))
             || c.snapshot_interval_entries > 1_000_000_000
+            || c.application_checkpoint_bytes == 0
+            || c.application_checkpoint_bytes > 1024 * 1024 * 1024
         {
-            bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, batch and inflight limits in 1..64, pipeline-only scheduling options, one mixed-input policy, and full pipeline mode for snapshot compaction");
+            bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, batch and inflight limits in 1..64, application checkpoint bytes in 1..1073741824, pipeline-only scheduling options, one mixed-input policy, and full pipeline mode for snapshot compaction");
         }
         if c.peers.get(&c.id) != Some(&c.peer) {
             bail!("own peer address does not match peers map");

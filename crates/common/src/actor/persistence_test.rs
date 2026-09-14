@@ -112,6 +112,7 @@ fn state(engine: PendingEngine, outbound: OutboundPeers) -> State<PendingEngine>
             durable_completion_priority: false,
             openraft_async_flush: false,
             snapshot_interval_entries: 0,
+            application_checkpoint_bytes: 64 * 1024 * 1024,
         },
         name: "test",
         engine,
