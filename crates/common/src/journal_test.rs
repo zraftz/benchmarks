@@ -215,6 +215,22 @@ fn checkpoint_replaces_history_and_following_appends_reopen() {
 }
 
 #[test]
+fn checkpoint_does_not_stage_a_second_payload_copy() {
+    let p = path();
+    let (mut journal, _) = Journal::open::<Vec<u8>>(&p).unwrap();
+    let checkpoint = serde_json::to_vec(&vec![9u8; 1024]).unwrap();
+    journal.checkpoint_payload(&checkpoint).unwrap();
+    assert!(journal.frame.is_empty());
+    assert_eq!(journal.frame.capacity(), 0);
+    drop(journal);
+
+    let (journal, records) = Journal::open::<Vec<u8>>(&p).unwrap();
+    assert_eq!(records, vec![vec![9u8; 1024]]);
+    drop(journal);
+    std::fs::remove_file(p).unwrap();
+}
+
+#[test]
 fn failed_checkpoint_sync_keeps_authoritative_history_and_poisons_writer() {
     let p = path();
     let (mut journal, _) = Journal::open::<Vec<u64>>(&p).unwrap();

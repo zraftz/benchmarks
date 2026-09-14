@@ -149,11 +149,10 @@ impl Journal {
             bail!("journal checkpoint record exceeds limit");
         }
         debug_assert!(self.frame.is_empty());
-        self.frame.resize(8, 0);
-        self.frame.extend_from_slice(payload);
-        self.frame[..4].copy_from_slice(&(payload.len() as u32).to_be_bytes());
-        self.frame[4..8].copy_from_slice(&crc32(payload).to_be_bytes());
-        let frame_len = self.frame.len();
+        let mut header = [0; 8];
+        header[..4].copy_from_slice(&(payload.len() as u32).to_be_bytes());
+        header[4..].copy_from_slice(&crc32(payload).to_be_bytes());
+        let frame_len = header.len() + payload.len();
         let temporary = checkpoint_path(&self.path);
         self.poisoned = true;
 
@@ -164,7 +163,8 @@ impl Journal {
                 .truncate(true)
                 .write(true)
                 .open(&temporary)?;
-            file.write_all(&self.frame)?;
+            file.write_all(&header)?;
+            file.write_all(payload)?;
             self.diagnostics
                 .elapsed("journal_checkpoint_write_ns", started);
 
@@ -191,7 +191,6 @@ impl Journal {
             reopened.seek(SeekFrom::End(0))?;
             Ok(reopened)
         })();
-        clear_frame(&mut self.frame);
         let reopened = result?;
         self.file = reopened;
         self.poisoned = false;
