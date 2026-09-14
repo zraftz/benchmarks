@@ -282,6 +282,14 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertEqual(value["verdicts"]["service_objective"]["status"], "failed")
         self.assertAlmostEqual(fixed["repetitions"][0]["throughput_ratio"], 2995 / 3000)
         self.assertEqual(fixed["repetitions"][0]["p99_regression_ms"], 0.5)
+        self.assertTrue(any(
+            "snap10k had 1 unsent requests" in error
+            for error in value["verdicts"]["service_objective"]["errors"]
+        ))
+        self.assertFalse(any(
+            "unknown outcomes" in error
+            for error in value["verdicts"]["service_objective"]["errors"]
+        ))
 
     def test_accumulated_snapshot_envelopes_fail_physical_reclamation(self):
         data = suite()

@@ -407,9 +407,14 @@ def assess(data: dict) -> dict[str, Any]:
                         pair_failures.append(f"{label} source case did not pass")
                         continue
                     accounting = case["accounting"]
-                    loss = sum(accounting[name] for name in ("errors", "unknown", "not_issued"))
-                    if loss:
-                        pair_failures.append(f"{label} had {loss} errors, unknown outcomes, or unsent requests")
+                    for name, description in (
+                        ("errors", "errors"),
+                        ("unknown", "unknown outcomes"),
+                        ("not_issued", "unsent requests"),
+                    ):
+                        count = accounting[name]
+                        if count:
+                            pair_failures.append(f"{label} had {count} {description}")
                     if rate > 0:
                         achieved = case["metrics"]["throughput_ops_s"] / rate * 100.0
                         if achieved < OBJECTIVE["minimum_fixed_load_achieved_percent"]:
