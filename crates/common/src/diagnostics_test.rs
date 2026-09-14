@@ -66,6 +66,31 @@ fn completed_timeline_has_ordered_named_boundaries() {
 }
 
 #[test]
+fn nonmonotonic_retry_attribution_is_discarded() {
+    let diagnostics = Diagnostics::new(true);
+    let command = command(1);
+    diagnostics.admit_operation(&command, diagnostics.start());
+    diagnostics.raft_commit_observed(7, "engine_apply_effect");
+    let entry = Applied {
+        index: 7,
+        command: Some(command.clone()),
+        metadata: None,
+    };
+    diagnostics.application_dispatched(std::slice::from_ref(&entry));
+    diagnostics.proposals_submitted(std::slice::from_ref(&command));
+    diagnostics.application_started(std::slice::from_ref(&entry));
+    diagnostics.application_durable(std::slice::from_ref(&entry));
+    diagnostics.client_completed(&command);
+
+    let snapshot = diagnostics.status_snapshot();
+    let timelines = &snapshot["operation_timelines"];
+    assert_eq!(timelines["operations_sampled"], 1);
+    assert_eq!(timelines["completed_seen"], 0);
+    assert_eq!(timelines["discarded_incomplete"], 1);
+    assert!(timelines["retained"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn completed_timeline_retention_is_bounded() {
     let diagnostics = Diagnostics::new(true);
     let operations = OPERATION_TIMELINE_SAMPLE_EVERY * (OPERATION_TIMELINE_RETAINED as u64 + 17);

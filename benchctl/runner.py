@@ -361,10 +361,10 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 require_retired_log_worker_activity=True,
             )
             write_json(directory / "snapshot-compaction-activity.json", reclamation)
-            if reclamation["status"] != "passed":
-                raise RuntimeError(
-                    f"live snapshot/reclamation activity did not pass: {reclamation['failures']}"
-                )
+            # Preserve feature-coverage failures in the sealed receipt and
+            # continue through canaries, restart recovery, and footprint
+            # capture. The suite-level verdict reports missing activity
+            # independently from evidence integrity and correctness.
         footprint_after_load = (
             capture_storage_footprint(data) if observe_storage_footprint else None
         )

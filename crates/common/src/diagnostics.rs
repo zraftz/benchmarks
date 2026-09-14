@@ -53,6 +53,22 @@ impl InFlightTimeline {
         let application_dispatched = self.application_dispatched?;
         let application_started = self.application_started?;
         let application_durable = self.application_durable?;
+        let ordered = [
+            self.ingress,
+            self.owner_admitted,
+            proposal_submitted,
+            commit.at,
+            application_dispatched,
+            application_started,
+            application_durable,
+            client_completion,
+        ];
+        if !ordered.windows(2).all(|pair| pair[0] <= pair[1]) {
+            // A retry can share a command identity with an older, already
+            // committed duplicate log entry. Do not publish a timeline whose
+            // stages cannot be attributed to one operation generation.
+            return None;
+        }
         let mut points_ns = BTreeMap::new();
         points_ns.insert("client_ingress", 0);
         points_ns.insert(

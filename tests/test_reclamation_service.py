@@ -103,6 +103,41 @@ def add_log_retirement(
 
 
 class ReclamationServiceTests(unittest.TestCase):
+    def test_zero_snapshot_index_is_valid_before_feature_activity(self):
+        before = statuses(completed=0, installs=(0, 0, 0), index=0)
+        after = statuses(completed=0, installs=(0, 0, 0), index=0)
+
+        receipt = activity(before, after, 64, "durable-kv")
+
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(
+            receipt["failures"],
+            ["no live snapshot compaction completed since the before status"],
+        )
+        self.assertTrue(all(
+            node["current_snapshot_index"] == 0
+            for node in receipt["nodes"].values()
+        ))
+
+    def test_verifier_keeps_missing_activity_out_of_evidence_integrity(self):
+        before = statuses(completed=0, installs=(0, 0, 0), index=0)
+        after = statuses(completed=0, installs=(0, 0, 0), index=0)
+        receipt = activity(before, after, 64, "durable-kv")
+        manifest = {
+            "scenario": "durable-kv",
+            "options": {"snapshot_interval_entries": 64},
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "before.json").write_text(json.dumps(before))
+            (root / "snapshot-after-scenario.json").write_text(json.dumps(after))
+            (root / "snapshot-compaction-activity.json").write_text(
+                json.dumps(receipt)
+            )
+
+            self.assertEqual(snapshot_reclamation_errors(root, manifest), [])
+
     def test_follower_catchup_requires_compaction_and_application_install(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)
         after = statuses(completed=2, installs=(0, 0, 1), index=128)
@@ -333,7 +368,7 @@ class ReclamationServiceTests(unittest.TestCase):
             self.assertIn(
                 "live snapshot/reclamation receipt differs from runtime status", failures
             )
-            self.assertIn("live snapshot/reclamation activity did not pass", failures)
+            self.assertNotIn("live snapshot/reclamation activity did not pass", failures)
 
     def test_current_status_reports_native_snapshot_stage_deltas(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)

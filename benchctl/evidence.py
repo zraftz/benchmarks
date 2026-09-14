@@ -536,8 +536,6 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
     )
     if actual != recorded:
         errors.append("live snapshot/reclamation receipt differs from runtime status")
-    if actual["status"] != "passed":
-        errors.append("live snapshot/reclamation activity did not pass")
     return errors
 
 

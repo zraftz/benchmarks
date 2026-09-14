@@ -432,7 +432,11 @@ def activity(
                 or new_total_ns < old_total_ns
             ):
                 failures.append(f"node {node} snapshot counters regressed")
-            if not 0 < current_index <= applied_index <= commit_index:
+            # Zero is the valid pre-snapshot state. Snapshot activity is a
+            # separate feature-coverage requirement below; it must not turn a
+            # node that has not reached its staggered first boundary into an
+            # evidence/correctness failure.
+            if not current_index <= applied_index <= commit_index:
                 failures.append(f"node {node} snapshot/application/commit boundaries are incoherent")
             completed = new_completed if restarted else new_completed - old_completed
             installs = new_installs if restarted else new_installs - old_installs
