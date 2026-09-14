@@ -152,8 +152,10 @@ The WAL pipeline can also run the finite live-reclamation smoke directly:
 
 That scenario kills a follower before load, requires a newer leader snapshot,
 then proves snapshot installation and acknowledged canaries after restart. It
-does not qualify reclamation latency. The Raft WAL is reclaimed; the benchmark
-application journal remains append-only.
+does not qualify reclamation latency. After the matching Raft snapshot and WAL
+compaction are durable, snapshot-enabled Rafter atomically checkpoints the
+benchmark application journal to the same applied boundary. Default cases that
+do not enable snapshots remain append-only.
 
 On a fixed machine, qualify the service cost and physical effect of reclamation
 without editing the suite after observing results:
@@ -185,11 +187,13 @@ retained-suffix sizes.
 Every current Rafter WAL case records controller-observed logical and allocated
 bytes before measurement, after measurement, and after final restart. Raft WAL,
 its manifest, Raft snapshot envelopes, manifests and temporary artifacts, and
-the append-only application journal are reported separately. Temporary bytes
-remain part of the managed Raft total but do not count as retained snapshot
-generations. The live node files are removed after verification, so the sealed
-receipt is a controller `stat` observation rather than a retained copy of the
-database.
+the application journal are reported separately. Reclamation runs compare the
+checkpointed application journal with the append-only no-snapshot control and
+require one authoritative journal with no checkpoint temporary after restart.
+Temporary bytes remain part of the managed Raft total but do not count as
+retained snapshot generations. The live node files are removed after
+verification, so the sealed receipt is a controller `stat` observation rather
+than a retained copy of the database.
 
 Results live under `results/`. Verify a case or an in-memory suite with:
 

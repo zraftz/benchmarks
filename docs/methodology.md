@@ -148,8 +148,11 @@ requires an application-snapshot install at that exact or a later boundary.
 Its receipt replays the kill/restart actions, local compaction counters, snapshot
 boundary, application boundary, and restart canaries. This is functional smoke
 evidence, not fault-performance or power-loss evidence. Default timing cases do
-not enable snapshots. The application journal remains append-only even when the
-Raft WAL is reclaimed. Dynamic membership and TLS are not exercised.
+not enable snapshots, so their application journals remain append-only.
+Snapshot-enabled Rafter checkpoints the application journal only after the
+matching Raft snapshot and WAL compaction are durable; the reclamation suite
+verifies its physical bound and authoritative restart shape separately from the
+Raft storage bound. Dynamic membership and TLS are not exercised.
 
 ## Reproduction
 
