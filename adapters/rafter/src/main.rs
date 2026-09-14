@@ -221,7 +221,7 @@ impl Engine for Rafter {
     fn snapshot_index(&self) -> u64 {
         self.node.ready().snapshot_index().0
     }
-    fn compact_snapshot(&mut self, applied_index: u64, payload: Vec<u8>) -> Result<()> {
+    fn compact_snapshot(&mut self, applied_index: u64, payload: &[u8]) -> Result<()> {
         if self.node.pending() {
             anyhow::bail!("cannot compact while persistence owns the Raft node")
         }
@@ -246,7 +246,7 @@ impl Engine for Rafter {
         )?;
         node.compact_log_with_snapshot(PersistedRaftSnapshot {
             metadata,
-            application_payload: payload,
+            application_payload: payload.to_vec(),
         })?;
         node.prune_snapshot_files(SnapshotRetention::CurrentOnly)?;
         self.observe_replication_windows();

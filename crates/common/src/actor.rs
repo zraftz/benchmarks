@@ -61,7 +61,7 @@ pub trait Engine: Send + 'static {
     fn snapshot_index(&self) -> u64 {
         0
     }
-    fn compact_snapshot(&mut self, _applied_index: u64, _payload: Vec<u8>) -> Result<()> {
+    fn compact_snapshot(&mut self, _applied_index: u64, _payload: &[u8]) -> Result<()> {
         bail!("snapshot compaction is unsupported by this engine")
     }
     fn committed_entries(&self, _after: u64, _count: usize, _bytes: usize) -> Result<Vec<Applied>> {
@@ -618,7 +618,7 @@ impl<E: Engine> State<E> {
                     "snapshot_compaction":{"interval_entries":self.config.snapshot_interval_entries,
                         "completed":self.snapshot_compactions,
                         "current_index":self.engine.snapshot_index(),
-                        "timing_scope":"Raft snapshot publication, WAL compaction, and snapshot pruning after application snapshot clone and encoding",
+                        "timing_scope":"Raft snapshot publication, WAL compaction, snapshot pruning, and atomic application-journal checkpointing after application snapshot encoding",
                         "total_ns":self.snapshot_compaction_total_ns,
                         "max_ns":self.snapshot_compaction_max_ns,
                         "buckets_log2":self.snapshot_compaction_buckets_log2,

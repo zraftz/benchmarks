@@ -29,10 +29,14 @@ def footprint(
     nodes = {
         str(node): {
             "files": ([{
+                "path": f"node-{node}/application.wal",
+                "category": "application_journal",
+                "allocated_bytes": application_bytes // 3,
+            }] + ([{
                 "path": f"node-{node}/raft/hard-state",
                 "category": "other",
                 "allocated_bytes": legacy_wal_bytes,
-            }] if legacy_wal_bytes else []),
+            }] if legacy_wal_bytes else [])),
             "totals": {
                 "raft_snapshot_data": {"files": 1 if candidate else 0},
                 "raft_snapshot_metadata": {"files": 1 if candidate else 0},
@@ -71,7 +75,7 @@ def case(variant: str, rate: int, repetition: int, *, candidate: bool) -> dict:
         },
         "accounting": {"errors": 0, "unknown": 0, "not_issued": 0},
         "storage_footprint": footprint(
-            100 if candidate else 1000, 2000, candidate=candidate
+            100 if candidate else 1000, 200 if candidate else 2000, candidate=candidate
         ),
         "recovery": {"timing": {"process_restart_ns": 250_000_000}},
         "snapshot_reclamation": ({
@@ -121,7 +125,7 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertAlmostEqual(saturated["median_throughput_ratio"], 0.97)
         self.assertEqual(saturated["measured_compactions"], 9)
         self.assertNotIn("native_snapshot_stages", saturated)
-        self.assertIn("Application-journal physical reclamation is not tested", value["scope"])
+        self.assertIn("atomic application-journal checkpointing", value["scope"])
         self.assertIn("Verdict: passed", markdown(value))
 
     def test_native_snapshot_stage_maxima_are_imported_and_rendered(self):
@@ -169,7 +173,7 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertEqual(value["verdicts"]["service_objective"]["status"], "failed")
         self.assertEqual(value["verdicts"]["reclamation_activity"]["status"], "failed")
 
-    def test_application_growth_is_reported_but_not_called_reclaimed(self):
+    def test_application_growth_fails_physical_reclamation(self):
         data = suite()
         for item in data["cases"]:
             if item["configuration"]["variant"] == "snap10k":
@@ -177,10 +181,14 @@ class ReclamationLoadTests(unittest.TestCase):
                     "application_journal"
                 ]["allocated_bytes"] = 10_000_000
         value = assess(data)
-        self.assertEqual(value["status"], "passed")
+        self.assertEqual(value["verdicts"]["physical_reclamation"]["status"], "failed")
         self.assertTrue(all(
             row["median_candidate_application_journal_allocated_bytes"] == 10_000_000
             for row in value["comparisons"]
+        ))
+        self.assertTrue(any(
+            "application-journal bytes" in error
+            for error in value["verdicts"]["physical_reclamation"]["errors"]
         ))
 
     def test_initial_wal_path_is_included_in_no_reclamation_control(self):
@@ -246,6 +254,27 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertEqual(value["verdicts"]["physical_reclamation"]["status"], "failed")
         self.assertTrue(any(
             "1 temporary snapshot files on node 2" in error
+            for error in value["verdicts"]["physical_reclamation"]["errors"]
+        ))
+
+    def test_temporary_application_checkpoint_after_restart_fails_reclamation(self):
+        data = suite()
+        candidate = next(
+            item
+            for item in data["cases"]
+            if item["configuration"]["variant"] == "snap10k"
+        )
+        candidate["storage_footprint"]["snapshots"]["after_final_restart"]["nodes"][
+            "2"
+        ]["files"].append({
+            "path": "node-2/application.wal.checkpoint.tmp",
+            "category": "other",
+            "allocated_bytes": 4096,
+        })
+        value = assess(data)
+        self.assertEqual(value["verdicts"]["physical_reclamation"]["status"], "failed")
+        self.assertTrue(any(
+            "application checkpoint temporary files on node 2" in error
             for error in value["verdicts"]["physical_reclamation"]["errors"]
         ))
 

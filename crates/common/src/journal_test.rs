@@ -198,6 +198,75 @@ fn append_clears_reused_frame_after_serialization_failure() {
 }
 
 #[test]
+fn checkpoint_replaces_history_and_following_appends_reopen() {
+    let p = path();
+    let (mut journal, _) = Journal::open::<Vec<u64>>(&p).unwrap();
+    journal.append(&vec![1, 2]).unwrap();
+    journal.append(&vec![3, 4]).unwrap();
+    let checkpoint = serde_json::to_vec(&vec![9u64]).unwrap();
+    journal.checkpoint_payload(&checkpoint).unwrap();
+    journal.append(&vec![10]).unwrap();
+    drop(journal);
+
+    let (journal, records) = Journal::open::<Vec<u64>>(&p).unwrap();
+    assert_eq!(records, vec![vec![9], vec![10]]);
+    drop(journal);
+    std::fs::remove_file(p).unwrap();
+}
+
+#[test]
+fn failed_checkpoint_sync_keeps_authoritative_history_and_poisons_writer() {
+    let p = path();
+    let (mut journal, _) = Journal::open::<Vec<u64>>(&p).unwrap();
+    journal.append(&vec![1, 2]).unwrap();
+    let checkpoint = serde_json::to_vec(&vec![9u64]).unwrap();
+    assert!(journal
+        .checkpoint_payload_inner(&checkpoint, CheckpointFailure::AfterTemporarySync)
+        .is_err());
+    assert!(journal.append(&vec![3]).is_err());
+    drop(journal);
+
+    let (journal, records) = Journal::open::<Vec<u64>>(&p).unwrap();
+    assert_eq!(records, vec![vec![1, 2]]);
+    drop(journal);
+    std::fs::remove_file(&p).unwrap();
+    std::fs::remove_file(checkpoint_path(&p)).unwrap();
+}
+
+#[test]
+fn failed_checkpoint_after_rename_recovers_published_state() {
+    let p = path();
+    let (mut journal, _) = Journal::open::<Vec<u64>>(&p).unwrap();
+    journal.append(&vec![1, 2]).unwrap();
+    let checkpoint = serde_json::to_vec(&vec![9u64]).unwrap();
+    assert!(journal
+        .checkpoint_payload_inner(&checkpoint, CheckpointFailure::AfterRename)
+        .is_err());
+    assert!(journal.append(&vec![3]).is_err());
+    drop(journal);
+
+    let (journal, records) = Journal::open::<Vec<u64>>(&p).unwrap();
+    assert_eq!(records, vec![vec![9]]);
+    drop(journal);
+    std::fs::remove_file(p).unwrap();
+}
+
+#[test]
+fn orphan_checkpoint_never_overrides_authoritative_history() {
+    let p = path();
+    let (mut journal, _) = Journal::open::<Vec<u64>>(&p).unwrap();
+    journal.append(&vec![1, 2]).unwrap();
+    drop(journal);
+    std::fs::write(checkpoint_path(&p), legacy_frame(&vec![9u64])).unwrap();
+
+    let (journal, records) = Journal::open::<Vec<u64>>(&p).unwrap();
+    assert_eq!(records, vec![vec![1, 2]]);
+    drop(journal);
+    std::fs::remove_file(&p).unwrap();
+    std::fs::remove_file(checkpoint_path(&p)).unwrap();
+}
+
+#[test]
 fn every_partial_frame_recovers_only_the_complete_prefix() {
     let p = path();
     let first = legacy_frame(&vec![1u64, 2, 3]);

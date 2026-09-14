@@ -279,6 +279,17 @@ impl DurableModel {
             payload: serde_json::to_vec(&snapshot)?,
         })
     }
+    /// Atomically replaces prior application history with this durable state.
+    pub fn checkpoint_snapshot(&mut self, snapshot: &EncodedApplicationSnapshot) -> Result<()> {
+        if snapshot.applied_index == 0 || snapshot.applied_index != self.index {
+            bail!(
+                "application checkpoint boundary mismatch: snapshot {}, durable {}",
+                snapshot.applied_index,
+                self.index
+            );
+        }
+        self.journal.checkpoint_payload(&snapshot.payload)
+    }
     /// Durably replaces application state with an authoritative Raft snapshot.
     pub fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
         snapshot.validate()?;
@@ -396,6 +407,43 @@ mod tests {
         );
         std::fs::remove_file(source_path).unwrap();
         std::fs::remove_file(target_path).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_bounds_history_and_preserves_following_entries() {
+        let model_path = path("checkpoint");
+        let mut model = DurableModel::open(&model_path).unwrap();
+        for index in 1..=32 {
+            model
+                .apply(&[Applied {
+                    index,
+                    command: Some(command(index, "put", &format!("value-{index}"))),
+                    metadata: (index == 32).then(|| serde_json::json!({"term": 1})),
+                }])
+                .unwrap();
+        }
+        let before = std::fs::metadata(&model_path).unwrap().len();
+        let snapshot = model.encode_snapshot().unwrap();
+        model.checkpoint_snapshot(&snapshot).unwrap();
+        let checkpointed = std::fs::metadata(&model_path).unwrap().len();
+        assert!(checkpointed < before);
+        model
+            .apply(&[Applied {
+                index: 33,
+                command: Some(command(33, "put", "after")),
+                metadata: None,
+            }])
+            .unwrap();
+        drop(model);
+
+        let reopened = DurableModel::open(&model_path).unwrap();
+        assert_eq!(reopened.index, 33);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("after")
+        );
+        assert_eq!(reopened.metadata, Some(serde_json::json!({"term": 1})));
+        std::fs::remove_file(model_path).unwrap();
     }
 
     #[test]

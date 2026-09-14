@@ -45,6 +45,9 @@ pub trait ApplicationStore: Send + 'static {
             payload: snapshot.encode()?,
         })
     }
+    fn checkpoint_snapshot(&mut self, _snapshot: &EncodedApplicationSnapshot) -> Result<()> {
+        bail!("application snapshot checkpointing is unsupported by this store")
+    }
     fn install_snapshot(&mut self, _snapshot: ApplicationSnapshot) -> Result<()> {
         bail!("application snapshots are unsupported by this store")
     }
@@ -67,6 +70,9 @@ impl ApplicationStore for DurableModel {
     }
     fn encode_snapshot(&self) -> Result<EncodedApplicationSnapshot> {
         DurableModel::encode_snapshot(self)
+    }
+    fn checkpoint_snapshot(&mut self, snapshot: &EncodedApplicationSnapshot) -> Result<()> {
+        DurableModel::checkpoint_snapshot(self, snapshot)
     }
     fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
         self.install_snapshot(snapshot)
@@ -430,6 +436,17 @@ impl ApplyWorker {
             .lock()
             .map_err(|_| anyhow::anyhow!("application store lock poisoned"))?;
         store.encode_snapshot().map(Some)
+    }
+
+    pub fn checkpoint_snapshot(&self, snapshot: &EncodedApplicationSnapshot) -> Result<()> {
+        if self.is_busy() {
+            bail!("cannot checkpoint an application snapshot while work is in flight")
+        }
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("application store lock poisoned"))?;
+        store.checkpoint_snapshot(snapshot)
     }
 
     pub fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {

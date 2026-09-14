@@ -1,21 +1,25 @@
-//! Append-only checksum-framed journal. Each appended batch is synced before return.
-//! Incomplete EOF frames are truncated on open. A complete frame with a bad checksum
-//! is rejected, including at EOF: corruption is never silently treated as a clean log.
+//! Checksum-framed journal with atomic single-record checkpoints. Each append is synced
+//! before return. Incomplete EOF frames are truncated on open. A complete frame with a
+//! bad checksum is rejected, including at EOF: corruption is never silently treated as
+//! a clean log.
 use crate::diagnostics::Diagnostics;
 use anyhow::{bail, Result};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    fs::{File, OpenOptions},
+    ffi::OsString,
+    fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 const MAX_RECORD: usize = 64 * 1024 * 1024;
 const RETAINED_FRAME_CAPACITY: usize = 4 * 1024 * 1024;
 #[derive(Debug)]
 pub struct Journal {
+    path: PathBuf,
     file: File,
     frame: Vec<u8>,
+    poisoned: bool,
     pub diagnostics: Diagnostics,
     pub syncs: u64,
     pub bytes: u64,
@@ -79,8 +83,10 @@ impl Journal {
         f.seek(SeekFrom::Start(valid))?;
         Ok((
             Self {
+                path: path.to_path_buf(),
                 file: f,
                 frame: Vec::new(),
+                poisoned: false,
                 diagnostics: Diagnostics::default(),
                 syncs: 0,
                 bytes: 0,
@@ -89,6 +95,9 @@ impl Journal {
         ))
     }
     pub fn append<T: Serialize + ?Sized>(&mut self, record: &T) -> Result<()> {
+        if self.poisoned {
+            bail!("application journal is poisoned after failed checkpoint publication");
+        }
         let started = self.diagnostics.start();
         debug_assert!(self.frame.is_empty());
         self.frame.resize(8, 0);
@@ -118,6 +127,92 @@ impl Journal {
         self.bytes += frame_len as u64;
         Ok(())
     }
+
+    /// Replaces all prior records with one already-encoded record.
+    ///
+    /// The temporary file is synced before rename and the parent directory is
+    /// synced before this writer resumes. Any failure poisons the current
+    /// writer; reopening uses only the authoritative path and never the temp.
+    pub fn checkpoint_payload(&mut self, payload: &[u8]) -> Result<()> {
+        self.checkpoint_payload_inner(payload, CheckpointFailure::None)
+    }
+
+    fn checkpoint_payload_inner(
+        &mut self,
+        payload: &[u8],
+        failure: CheckpointFailure,
+    ) -> Result<()> {
+        if self.poisoned {
+            bail!("application journal is poisoned after failed checkpoint publication");
+        }
+        if payload.is_empty() || payload.len() > MAX_RECORD {
+            bail!("journal checkpoint record exceeds limit");
+        }
+        debug_assert!(self.frame.is_empty());
+        self.frame.resize(8, 0);
+        self.frame.extend_from_slice(payload);
+        self.frame[..4].copy_from_slice(&(payload.len() as u32).to_be_bytes());
+        self.frame[4..8].copy_from_slice(&crc32(payload).to_be_bytes());
+        let frame_len = self.frame.len();
+        let temporary = checkpoint_path(&self.path);
+        self.poisoned = true;
+
+        let started = self.diagnostics.start();
+        let result = (|| -> Result<File> {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&temporary)?;
+            file.write_all(&self.frame)?;
+            self.diagnostics
+                .elapsed("journal_checkpoint_write_ns", started);
+
+            let started = self.diagnostics.start();
+            file.sync_all()?;
+            self.diagnostics
+                .elapsed("journal_checkpoint_sync_ns", started);
+            if failure == CheckpointFailure::AfterTemporarySync {
+                bail!("injected failure after application checkpoint sync");
+            }
+
+            let started = self.diagnostics.start();
+            fs::rename(&temporary, &self.path)?;
+            if failure == CheckpointFailure::AfterRename {
+                bail!("injected failure after application checkpoint rename");
+            }
+            if let Some(parent) = self.path.parent() {
+                File::open(parent)?.sync_all()?;
+            }
+            self.diagnostics
+                .elapsed("journal_checkpoint_publish_ns", started);
+
+            let mut reopened = OpenOptions::new().read(true).write(true).open(&self.path)?;
+            reopened.seek(SeekFrom::End(0))?;
+            Ok(reopened)
+        })();
+        clear_frame(&mut self.frame);
+        let reopened = result?;
+        self.file = reopened;
+        self.poisoned = false;
+        self.syncs = self.syncs.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(frame_len as u64);
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckpointFailure {
+    None,
+    AfterTemporarySync,
+    AfterRename,
+}
+
+fn checkpoint_path(path: &Path) -> PathBuf {
+    let mut value = OsString::from(path.as_os_str());
+    value.push(".checkpoint.tmp");
+    PathBuf::from(value)
 }
 
 fn clear_frame(frame: &mut Vec<u8>) {

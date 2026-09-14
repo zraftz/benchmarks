@@ -71,6 +71,13 @@ impl Application {
             Self::Worker(worker) => worker.install_snapshot(snapshot),
         }
     }
+
+    pub fn checkpoint_snapshot(&mut self, snapshot: &EncodedApplicationSnapshot) -> Result<()> {
+        match self {
+            Self::Inline(model) => model.checkpoint_snapshot(snapshot),
+            Self::Worker(worker) => worker.checkpoint_snapshot(snapshot),
+        }
+    }
 }
 impl<E: Engine> State<E> {
     pub(super) fn maybe_compact_snapshot(&mut self) -> Result<()> {
@@ -99,7 +106,8 @@ impl<E: Engine> State<E> {
         let payload_bytes = snapshot.payload.len() as u64;
         let started = Instant::now();
         self.engine
-            .compact_snapshot(snapshot.applied_index, snapshot.payload)?;
+            .compact_snapshot(snapshot.applied_index, &snapshot.payload)?;
+        self.application.checkpoint_snapshot(&snapshot)?;
         let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         self.snapshot_compactions = self.snapshot_compactions.saturating_add(1);
         self.snapshot_compaction_total_ns =

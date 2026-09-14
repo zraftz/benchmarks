@@ -26,7 +26,10 @@ OBJECTIVE = {
         "after final restart, exactly one selected snapshot envelope and manifest per node, "
         "with no temporary snapshot artifacts"
     ),
-    "application_journal": "reported separately; no physical-reclamation claim",
+    "application_journal": (
+        "post-load and post-restart allocated bytes below the same-seed no-snapshot control; "
+        "one authoritative journal and no checkpoint temporary per node after restart"
+    ),
 }
 
 
@@ -146,6 +149,31 @@ def _final_snapshot_artifacts(case: dict) -> dict[str, dict[str, int]]:
             "data_files": data,
             "metadata_files": metadata,
             "temporary_files": temporary,
+        }
+    return result
+
+
+def _final_application_artifacts(case: dict) -> dict[str, dict[str, int]]:
+    try:
+        nodes = case["storage_footprint"]["snapshots"]["after_final_restart"]["nodes"]
+    except (KeyError, TypeError) as error:
+        raise ValueError("missing after_final_restart node inventory") from error
+    if not isinstance(nodes, dict) or set(nodes) != {"1", "2", "3"}:
+        raise ValueError("invalid after_final_restart storage node inventory")
+    result = {}
+    for node, observed in nodes.items():
+        try:
+            files = observed["files"]
+        except (KeyError, TypeError) as error:
+            raise ValueError(
+                f"missing after_final_restart storage files for node {node}"
+            ) from error
+        if not isinstance(files, list):
+            raise ValueError(f"invalid after_final_restart storage files for node {node}")
+        paths = [item.get("path") for item in files if isinstance(item, dict)]
+        result[node] = {
+            "journal_files": paths.count(f"node-{node}/application.wal"),
+            "temporary_files": paths.count(f"node-{node}/application.wal.checkpoint.tmp"),
         }
     return result
 
@@ -351,8 +379,16 @@ def assess(data: dict) -> dict[str, Any]:
                     candidate_final_managed = _managed_raft_allocated(
                         candidate, "after_final_restart"
                     )
-                    application_bytes = _allocated(candidate, "application_journal")
+                    control_application = _allocated(control, "application_journal")
+                    candidate_application = _allocated(candidate, "application_journal")
+                    control_final_application = _allocated(
+                        control, "application_journal", "after_final_restart"
+                    )
+                    candidate_final_application = _allocated(
+                        candidate, "application_journal", "after_final_restart"
+                    )
                     snapshot_artifacts_by_node = _final_snapshot_artifacts(candidate)
+                    application_artifacts_by_node = _final_application_artifacts(candidate)
                     snapshot_data_files = sum(
                         item["data_files"]
                         for item in snapshot_artifacts_by_node.values()
@@ -377,6 +413,18 @@ def assess(data: dict) -> dict[str, Any]:
                             f"{candidate_final_managed} managed Raft bytes after final restart "
                             f"versus {control_final_managed} without reclamation"
                         )
+                    if candidate_application >= control_application:
+                        failures["physical_reclamation"].append(
+                            f"{variant} at {rate}/s repetition {repetition} retained "
+                            f"{candidate_application} application-journal bytes versus "
+                            f"{control_application} without checkpointing"
+                        )
+                    if candidate_final_application >= control_final_application:
+                        failures["physical_reclamation"].append(
+                            f"{variant} at {rate}/s repetition {repetition} retained "
+                            f"{candidate_final_application} application-journal bytes after "
+                            f"restart versus {control_final_application} without checkpointing"
+                        )
                     for node, artifacts in snapshot_artifacts_by_node.items():
                         if artifacts["data_files"] != 1:
                             failures["physical_reclamation"].append(
@@ -396,15 +444,30 @@ def assess(data: dict) -> dict[str, Any]:
                                 f"{artifacts['temporary_files']} temporary snapshot files on node "
                                 f"{node} after final restart"
                             )
+                    for node, artifacts in application_artifacts_by_node.items():
+                        if artifacts["journal_files"] != 1:
+                            failures["physical_reclamation"].append(
+                                f"{variant} at {rate}/s repetition {repetition} retained "
+                                f"{artifacts['journal_files']} application journals on node {node} "
+                                "after final restart"
+                            )
+                        if artifacts["temporary_files"] != 0:
+                            failures["physical_reclamation"].append(
+                                f"{variant} at {rate}/s repetition {repetition} retained "
+                                f"{artifacts['temporary_files']} application checkpoint temporary "
+                                f"files on node {node} after final restart"
+                            )
                 except ValueError as error:
                     control_wal = candidate_wal = 0
                     control_snapshot = candidate_snapshot = 0
                     control_managed = candidate_managed = 0
                     control_final_managed = candidate_final_managed = 0
-                    application_bytes = 0
+                    control_application = candidate_application = 0
+                    control_final_application = candidate_final_application = 0
                     snapshot_data_files = snapshot_metadata_files = 0
                     snapshot_temporary_files = 0
                     snapshot_artifacts_by_node = {}
+                    application_artifacts_by_node = {}
                     failures["physical_reclamation"].append(
                         f"{variant} at {rate}/s repetition {repetition}: {error}"
                     )
@@ -489,7 +552,17 @@ def assess(data: dict) -> dict[str, Any]:
                     "candidate_final_snapshot_artifacts_by_node": (
                         snapshot_artifacts_by_node
                     ),
-                    "candidate_application_journal_allocated_bytes": application_bytes,
+                    "candidate_application_journal_allocated_bytes": candidate_application,
+                    "control_application_journal_allocated_bytes": control_application,
+                    "candidate_final_application_journal_allocated_bytes": (
+                        candidate_final_application
+                    ),
+                    "control_final_application_journal_allocated_bytes": (
+                        control_final_application
+                    ),
+                    "candidate_final_application_artifacts_by_node": (
+                        application_artifacts_by_node
+                    ),
                     "candidate_process_restart_ns": restart_ns,
                 })
             if paired:
@@ -553,6 +626,17 @@ def assess(data: dict) -> dict[str, Any]:
                     "median_candidate_application_journal_allocated_bytes": median(
                         item["candidate_application_journal_allocated_bytes"] for item in paired
                     ),
+                    "median_control_application_journal_allocated_bytes": median(
+                        item["control_application_journal_allocated_bytes"] for item in paired
+                    ),
+                    "median_candidate_final_application_journal_allocated_bytes": median(
+                        item["candidate_final_application_journal_allocated_bytes"]
+                        for item in paired
+                    ),
+                    "median_control_final_application_journal_allocated_bytes": median(
+                        item["control_final_application_journal_allocated_bytes"]
+                        for item in paired
+                    ),
                     "max_candidate_process_restart_ns": max(
                         item["candidate_process_restart_ns"] for item in paired
                     ),
@@ -577,8 +661,8 @@ def assess(data: dict) -> dict[str, Any]:
             "application-snapshot/WAL-reclamation interval changes. Snapshot intervals are not "
             "retained-log suffix sizes. Managed Raft bytes include WAL data and metadata plus "
             "snapshot data and metadata. Reported maintenance maxima cover Raft snapshot "
-            "publication, WAL compaction, and snapshot pruning after application snapshot clone "
-            "and encoding. Application-journal physical reclamation is not tested."
+            "publication, WAL compaction, snapshot pruning, and atomic application-journal "
+            "checkpointing after application snapshot encoding."
         ),
     }
 
@@ -594,8 +678,8 @@ def markdown(value: dict) -> str:
         "| Snapshot interval | Offered/s | Throughput retained | Worst p99 delta | "
         "Worst p99.9 delta | Compactions | Raft maintenance max upper bound | "
         "Managed Raft after load | No-reclamation after load | Managed Raft after restart | "
-        "No-reclamation after restart | Snapshot files | Max restart |",
-        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "No-reclamation after restart | App journal | No-checkpoint app journal | Snapshot files | Max restart |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in value["comparisons"]:
         rate = "saturation" if row["offered_per_second"] == 0 else f"{row['offered_per_second']:,}"
@@ -610,6 +694,8 @@ def markdown(value: dict) -> str:
             f"{row['median_control_managed_raft_allocated_bytes'] / 2**20:.2f} MiB | "
             f"{row['median_candidate_final_managed_raft_allocated_bytes'] / 2**20:.2f} MiB | "
             f"{row['median_control_final_managed_raft_allocated_bytes'] / 2**20:.2f} MiB | "
+            f"{row['median_candidate_application_journal_allocated_bytes'] / 2**20:.2f} MiB | "
+            f"{row['median_control_application_journal_allocated_bytes'] / 2**20:.2f} MiB | "
             f"{row['max_candidate_final_snapshot_data_files']} data / "
             f"{row['max_candidate_final_snapshot_metadata_files']} metadata / "
             f"{row['max_candidate_final_snapshot_temporary_files']} temporary | "
@@ -650,10 +736,12 @@ def markdown(value: dict) -> str:
             )
     lines += [
         "",
-        "The application journal is reported separately and remains append-only. Raft "
-        "maintenance maxima are log2 upper bounds observed between the pre-load and post-load "
-        "status watermarks. The adapter timer covers Raft snapshot publication, WAL compaction, "
-        "and snapshot pruning; application snapshot clone and encoding happen before it.",
+        "The selected candidate atomically checkpoints the application journal after the "
+        "corresponding Raft snapshot is durable; the physical-reclamation verdict assesses its "
+        "observed bound. Maintenance maxima are log2 upper bounds between the pre-load and "
+        "post-load status watermarks. The adapter timer covers Raft snapshot publication, WAL "
+        "compaction, snapshot pruning, and the application-journal checkpoint; application "
+        "snapshot encoding happens before it.",
         "",
     ]
     for name, verdict in value["verdicts"].items():
