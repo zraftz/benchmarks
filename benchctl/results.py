@@ -161,6 +161,10 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "application_checkpoint_bytes": options.get(
                 "application_checkpoint_bytes", DEFAULT_APPLICATION_CHECKPOINT_BYTES
             ),
+            # Absence is preserved for evidence produced before this control
+            # existed; assigning today's default would misdescribe the old
+            # binary's immediate-reclamation behavior.
+            "wal_reclamation_bytes": options.get("wal_reclamation_bytes"),
         },
         "workload": _workload(manifest, measurement),
         "completion_boundary": (measurement or {}).get("contract", CONTRACT),

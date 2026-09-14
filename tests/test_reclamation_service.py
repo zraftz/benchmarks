@@ -7,6 +7,7 @@ from benchctl.evidence import snapshot_reclamation_errors
 from benchctl.reclamation_service import (
     APPLICATION_CHECKPOINT_STAGES,
     NATIVE_SNAPSHOT_STAGES,
+    NATIVE_WAL_RECLAMATION_STAGES,
     activity,
 )
 
@@ -47,6 +48,22 @@ def add_native_snapshot_metrics(value: dict, bucket_counts: dict[int, int]) -> N
                 "buckets_ns_log2": buckets,
             }
         status["info"]["engine"]["persistence_diagnostics"] = metrics
+
+
+def add_wal_reclamation_metrics(value: dict, bucket_counts: dict[int, int]) -> None:
+    calls = sum(bucket_counts.values())
+    for status in value.values():
+        metrics = status["info"]["engine"]["persistence_diagnostics"]
+        for stage in NATIVE_WAL_RECLAMATION_STAGES:
+            buckets = [0] * 64 if calls else []
+            for bucket, count in bucket_counts.items():
+                buckets[bucket] = count
+            metrics[stage] = {
+                "calls": calls,
+                "total_ns": calls * 100,
+                "max_ns": 100 if calls else 0,
+                "buckets_ns_log2": buckets,
+            }
 
 
 def add_application_checkpoint_metrics(value: dict, bucket_counts: dict[int, int]) -> None:
@@ -425,6 +442,69 @@ class ReclamationServiceTests(unittest.TestCase):
         self.assertEqual(application_encode["total_ns"], 600)
         self.assertEqual(application_encode["mean_ns"], 100.0)
         self.assertEqual(application_encode["max_upper_bound_ns"], 255)
+
+    def test_schema_seven_observes_zero_wal_reclaims_without_requiring_one(self):
+        before = statuses(completed=1, installs=(0, 0, 0), index=64)
+        after = statuses(completed=2, installs=(0, 0, 0), index=128)
+        for status in before.values():
+            buckets = [0] * 64
+            buckets[6] = 1
+            status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
+        for status in after.values():
+            buckets = [0] * 64
+            buckets[6] = 1
+            buckets[7] = 1
+            status["info"]["snapshot_compaction"]["buckets_log2"] = buckets
+        add_native_snapshot_metrics(before, {6: 1})
+        add_native_snapshot_metrics(after, {6: 1, 7: 1})
+        add_wal_reclamation_metrics(before, {})
+        add_wal_reclamation_metrics(after, {})
+        add_application_checkpoint_metrics(before, {6: 1})
+        add_application_checkpoint_metrics(after, {6: 1, 7: 1})
+        add_application_snapshot_encode_metrics(before, {6: 1})
+        add_application_snapshot_encode_metrics(after, {6: 1, 7: 1})
+
+        receipt = activity(
+            before,
+            after,
+            64,
+            "durable-kv",
+            native_snapshot_stages=True,
+            require_native_snapshot_stage_activity=True,
+            wal_reclamation_stages=True,
+            application_checkpoint_stages=True,
+            require_application_checkpoint_stage_activity=True,
+        )
+
+        self.assertEqual(receipt["schema"], 7)
+        self.assertEqual(receipt["status"], "passed")
+        self.assertTrue(
+            receipt["requirements"]["wal_reclamation_stage_observation"]
+        )
+        self.assertEqual(
+            receipt["totals"]["native_snapshot_stages"]["wal_reclamation"][
+                "samples"
+            ],
+            0,
+        )
+
+        manifest = {
+            "scenario": "durable-kv",
+            "options": {"snapshot_interval_entries": 64},
+            "native_snapshot_stage_observation": {"schema": 2, "required": True},
+            "application_checkpoint_stage_observation": {
+                "schema": 1,
+                "required": True,
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "before.json").write_text(json.dumps(before))
+            (root / "snapshot-after-scenario.json").write_text(json.dumps(after))
+            (root / "snapshot-compaction-activity.json").write_text(
+                json.dumps(receipt)
+            )
+            self.assertEqual(snapshot_reclamation_errors(root, manifest), [])
 
     def test_native_snapshot_stage_availability_cannot_change_mid_case(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)

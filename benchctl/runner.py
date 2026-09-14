@@ -13,7 +13,11 @@ import time
 import uuid
 from . import protocol
 from .checker import check_history, read_history
-from .cluster import Cluster, DEFAULT_APPLICATION_CHECKPOINT_BYTES
+from .cluster import (
+    Cluster,
+    DEFAULT_APPLICATION_CHECKPOINT_BYTES,
+    DEFAULT_WAL_RECLAMATION_BYTES,
+)
 from .evidence import (ROOT, capture, digest, host_info, seal, source_digest,
                        validate_result, write_json)
 from .load_sampling import LoadSampler
@@ -104,7 +108,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             STORAGE_FOOTPRINT_OBSERVATION if observe_storage_footprint else None
         ),
         "native_snapshot_stage_observation": (
-            {"schema": 1, "required": True}
+            {"schema": 2, "required": True}
             if implementation == "rafter"
             and getattr(options, "diagnostics", False)
             and getattr(options, "snapshot_interval_entries", 0)
@@ -130,7 +134,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         "binary_sha256": digest(Path(command[0])), "loadgen_sha256": digest(ROOT / "dist/raft-bench-load"),
         "build_receipt": receipt,
         "limitations": ["plaintext transport", "logged reads", "static three-voter group",
-                        ("application journal checkpoints at a bounded size after durable Raft snapshots; physical bounds require qualification"
+                        ("Raft WAL reclamation and application journal checkpointing use explicit byte thresholds at durable snapshot boundaries; physical bounds require qualification"
                          if getattr(options, "snapshot_interval_entries", 0)
                          else "retained logs; no snapshots"),
                         "adapter storage/codec costs differ and are disclosed", "not upstream-reviewed tuning"]}
@@ -145,7 +149,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         getattr(options, "durable_completion_priority", False),
         getattr(options, "openraft_async_flush", False),
         getattr(options, "snapshot_interval_entries", 0),
-        getattr(options, "application_checkpoint_bytes", DEFAULT_APPLICATION_CHECKPOINT_BYTES))
+        getattr(options, "application_checkpoint_bytes", DEFAULT_APPLICATION_CHECKPOINT_BYTES),
+        getattr(options, "wal_reclamation_bytes", DEFAULT_WAL_RECLAMATION_BYTES))
     load = None
     try:
         cluster.start()
@@ -353,6 +358,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 require_native_snapshot_stage_activity=getattr(
                     options, "diagnostics", False
                 ),
+                wal_reclamation_stages=getattr(options, "diagnostics", False),
                 application_checkpoint_stages=getattr(options, "diagnostics", False),
                 require_application_checkpoint_stage_activity=getattr(
                     options, "diagnostics", False

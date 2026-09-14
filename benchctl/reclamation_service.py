@@ -17,6 +17,12 @@ NATIVE_SNAPSHOT_KERNEL_STAGES = (
     "snapshot_kernel_commit",
 )
 NATIVE_SNAPSHOT_STAGES = NATIVE_SNAPSHOT_BASE_STAGES + NATIVE_SNAPSHOT_KERNEL_STAGES
+NATIVE_WAL_RECLAMATION_STAGES = (
+    "wal_reclamation",
+    "wal_checkpoint_prepare",
+    "wal_manifest_publish",
+    "wal_cleanup",
+)
 APPLICATION_CHECKPOINT_STAGES = (
     "journal_checkpoint_write_ns",
     "journal_checkpoint_sync_ns",
@@ -59,7 +65,11 @@ def _native_histogram(values: Any, calls: int, node: str, stage: str) -> list[in
 
 
 def _native_snapshot_delta(
-    before_info: dict, after_info: dict, restarted: bool, node: str
+    before_info: dict,
+    after_info: dict,
+    restarted: bool,
+    node: str,
+    wal_reclamation_stages: bool,
 ) -> dict[str, dict[str, Any]] | None:
     old = before_info.get("engine", {}).get("persistence_diagnostics")
     new = after_info.get("engine", {}).get("persistence_diagnostics")
@@ -82,6 +92,12 @@ def _native_snapshot_delta(
         if all(kernel_present)
         else NATIVE_SNAPSHOT_BASE_STAGES
     )
+    if wal_reclamation_stages:
+        if not all(
+            stage in old and stage in new for stage in NATIVE_WAL_RECLAMATION_STAGES
+        ):
+            raise ValueError(f"node {node} native WAL reclamation stages are incomplete")
+        stages += NATIVE_WAL_RECLAMATION_STAGES
 
     result = {}
     for stage in stages:
@@ -136,7 +152,11 @@ def _aggregate_native_stages(nodes: dict[str, dict]) -> dict[str, dict[str, Any]
     if len(stage_sets) != 1:
         raise ValueError("native snapshot stage availability differs between nodes")
     present = set(next(iter(stage_sets)))
-    for stage in (stage for stage in NATIVE_SNAPSHOT_STAGES if stage in present):
+    for stage in (
+        stage
+        for stage in NATIVE_SNAPSHOT_STAGES + NATIVE_WAL_RECLAMATION_STAGES
+        if stage in present
+    ):
         metrics = [node["native_snapshot_stages"][stage] for node in nodes.values()]
         buckets = [
             sum(metric["buckets_ns_log2"][index] for metric in metrics)
@@ -376,6 +396,7 @@ def activity(
     required_snapshot_index: int | None = None,
     native_snapshot_stages: bool = False,
     require_native_snapshot_stage_activity: bool = False,
+    wal_reclamation_stages: bool = False,
     application_checkpoint_stages: bool = False,
     require_application_checkpoint_stage_activity: bool = False,
     retired_log_worker: bool = False,
@@ -484,7 +505,13 @@ def activity(
                 application_encode_nodes += 1
                 nodes[node]["application_snapshot_encode"] = application_encode
             if native_snapshot_stages:
-                native_stages = _native_snapshot_delta(before_info, after_info, restarted, node)
+                native_stages = _native_snapshot_delta(
+                    before_info,
+                    after_info,
+                    restarted,
+                    node,
+                    wal_reclamation_stages,
+                )
                 if native_stages is not None:
                     native_stage_nodes += 1
                     nodes[node]["native_snapshot_stages"] = native_stages
@@ -549,7 +576,9 @@ def activity(
         else:
             totals["native_snapshot_stages"] = native_totals
             missing = [
-                stage for stage, metric in native_totals.items() if metric["samples"] == 0
+                stage
+                for stage in NATIVE_SNAPSHOT_STAGES
+                if stage in native_totals and native_totals[stage]["samples"] == 0
             ]
             if require_native_snapshot_stage_activity and missing:
                 failures.append(
@@ -581,7 +610,23 @@ def activity(
             failures.append("retired log prefixes fell back to owner-thread destruction")
     return {
         "schema": (
-            6
+            7
+            if (
+                wal_reclamation_stages
+                and native_snapshot_stages
+                and application_checkpoint_stages
+                and histogram_nodes
+                == native_stage_nodes
+                == application_stage_nodes
+                == application_encode_nodes
+                == 3
+                and all(
+                    stage in totals.get("native_snapshot_stages", {})
+                    for stage in NATIVE_SNAPSHOT_KERNEL_STAGES
+                    + NATIVE_WAL_RECLAMATION_STAGES
+                )
+            )
+            else 6
             if (
                 native_snapshot_stages
                 and application_checkpoint_stages
@@ -629,6 +674,11 @@ def activity(
             **(
                 {"native_snapshot_stage_activity": True}
                 if require_native_snapshot_stage_activity
+                else {}
+            ),
+            **(
+                {"wal_reclamation_stage_observation": True}
+                if wal_reclamation_stages
                 else {}
             ),
             **(

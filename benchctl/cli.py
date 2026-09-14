@@ -10,7 +10,7 @@ import sys
 import uuid
 from .evidence import ROOT, digest, source_digest, verify, write_json
 from .build import IMPLEMENTATIONS, PUBLIC_APPLICATION_WORKER, build
-from .cluster import DEFAULT_APPLICATION_CHECKPOINT_BYTES
+from .cluster import DEFAULT_APPLICATION_CHECKPOINT_BYTES, DEFAULT_WAL_RECLAMATION_BYTES
 
 
 CAPACITY_RATES = "1000,2000,3000,4000,6000,8000,10000,12000"
@@ -166,6 +166,8 @@ def run(options) -> None:
             raise ValueError("snapshot interval entries must be 1..1000000000")
     if not 1 <= options.application_checkpoint_bytes <= 1024 * 1024 * 1024:
         raise ValueError("application checkpoint bytes must be 1..1073741824")
+    if not 1 <= options.wal_reclamation_bytes <= 1024 * 1024 * 1024:
+        raise ValueError("WAL reclamation bytes must be 1..1073741824")
     if options.scenario == "snapshot-catchup" and not options.snapshot_interval_entries:
         raise ValueError("snapshot-catchup requires a nonzero snapshot interval")
     rates = [float(r) for r in options.rates.split(",")]
@@ -352,6 +354,9 @@ def main() -> None:
     p.add_argument("--application-checkpoint-bytes", type=int,
                    default=DEFAULT_APPLICATION_CHECKPOINT_BYTES,
                    help="Rafter only; checkpoint durable application history after it exceeds this many bytes")
+    p.add_argument("--wal-reclamation-bytes", type=int,
+                   default=DEFAULT_WAL_RECLAMATION_BYTES,
+                   help="Rafter WAL only; physically reclaim at the next snapshot after its active segment reaches this many bytes")
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
     p.add_argument("--seed-base", type=int, default=1)

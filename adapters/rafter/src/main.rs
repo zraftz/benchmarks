@@ -16,7 +16,7 @@ use rafter::{
 };
 use rafter_storage::SnapshotRetention;
 mod storage;
-use storage::{Node, NodeStores, HARD_STATE_BACKEND};
+use storage::{Node, HARD_STATE_BACKEND};
 struct Rafter {
     node: driver::Driver,
     node_id: NodeId,
@@ -448,7 +448,7 @@ async fn main() -> Result<()> {
     let raft_dir = config.data_dir.join("raft");
     std::fs::create_dir_all(&raft_dir)?;
     std::fs::File::open(&config.data_dir)?.sync_all()?;
-    let (hard, log, snap) = NodeStores::open(&raft_dir)?.into_parts();
+    let (hard, log, snap) = storage::open(&raft_dir, config.wal_reclamation_bytes)?.into_parts();
     let peers = config
         .peers
         .keys()

@@ -834,11 +834,15 @@ class SummaryTests(unittest.TestCase):
             self.assertIn("98.0%", rendered)
             self.assertIn("2.00 MiB / 20.00 MiB", rendered)
             self.assertIn("Application-journal physical reclamation is not tested", rendered)
-            self.assertIn("Snapshot publication stage maxima", rendered)
+            self.assertIn(
+                "Snapshot publication and WAL reclamation stage maxima", rendered
+            )
             self.assertIn("Source + write", rendered)
             self.assertIn("1.049 ms", rendered)
-            self.assertIn("Snapshot encodes / journal checkpoints", rendered)
-            self.assertIn("9 / 3", rendered)
+            self.assertIn(
+                "Snapshot encodes / WAL reclaims / journal checkpoints", rendered
+            )
+            self.assertIn("9 / 0 / 3", rendered)
 
     def test_reclamation_under_load_failure_remains_visible(self):
         data = durable_data()

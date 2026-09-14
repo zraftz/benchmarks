@@ -227,6 +227,10 @@ class PairedTests(unittest.TestCase):
             {item["arm"]: item["options"]["snapshot_interval_entries"] for item in timing},
             {"prior": 0, "snap10k": 10000, "snap100k": 100000},
         )
+        self.assertEqual(
+            {item["options"]["wal_reclamation_bytes"] for item in timing},
+            {64 * 1024 * 1024},
+        )
 
     def test_execution_plan_replay_rejects_case_or_recorded_plan_drift(self):
         suite = {

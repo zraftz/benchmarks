@@ -32,6 +32,7 @@ SNAPSHOT_STAGE_COLUMNS = (
     ("snapshot_prune", "Prune"),
     ("snapshot_kernel_prepare", "Kernel prepare"),
     ("snapshot_kernel_commit", "Kernel commit"),
+    ("wal_reclamation", "WAL reclaim"),
 )
 APPLICATION_CHECKPOINT_STAGE_COLUMNS = (
     ("journal_checkpoint_write_ns", "Write max"),
@@ -69,12 +70,17 @@ def _application_encode_maximum(row: dict) -> str:
 
 def _application_maintenance_counts(row: dict) -> str:
     encodes = row.get("application_snapshot_encode", {}).get("samples", 0)
+    wal_reclaims = (
+        row.get("native_snapshot_stages", {})
+        .get("wal_reclamation", {})
+        .get("samples", 0)
+    )
     checkpoints = (
         row.get("application_checkpoint_stages", {})
         .get("journal_checkpoint_sync_ns", {})
         .get("samples", 0)
     )
-    return f"{encodes:,} / {checkpoints:,}"
+    return f"{encodes:,} / {wal_reclaims:,} / {checkpoints:,}"
 
 
 def _consensus_section(micro: dict | None) -> dict:
@@ -1300,7 +1306,8 @@ def render_markdown(summary: dict, evidence: dict) -> str:
             ]
             if staged:
                 lines += [
-                    "Snapshot publication stage maxima from separate diagnostic cases "
+                    "Snapshot publication and WAL reclamation stage maxima from separate "
+                    "diagnostic cases "
                     "(log2 upper bounds, not timing-run percentiles):",
                     "",
                     "| Snapshot interval | Offered | "
@@ -1335,7 +1342,8 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                     "Application maintenance from separate diagnostic cases "
                     "(counts and log2 upper bounds, not timing-run percentiles):",
                     "",
-                    "| Snapshot interval | Offered | Snapshot encodes / journal checkpoints | "
+                    "| Snapshot interval | Offered | Snapshot encodes / WAL reclaims / "
+                    "journal checkpoints | "
                     "Encode max | "
                     + " | ".join(
                         label for _, label in APPLICATION_CHECKPOINT_STAGE_COLUMNS
@@ -1613,7 +1621,8 @@ def render_html(summary: dict, evidence: dict) -> str:
                     for _, label in SNAPSHOT_STAGE_COLUMNS
                 )
                 content.append(
-                    "<p>Snapshot publication stage maxima from separate diagnostic cases "
+                    "<p>Snapshot publication and WAL reclamation stage maxima from separate "
+                    "diagnostic cases "
                     "(log2 upper bounds, not timing-run percentiles):</p>"
                     "<div class='table'><table><thead><tr><th>Snapshot interval</th>"
                     f"<th>Offered</th>{headings}</tr></thead>"
@@ -1651,7 +1660,8 @@ def render_html(summary: dict, evidence: dict) -> str:
                     "<p>Application maintenance from separate diagnostic cases "
                     "(counts and log2 upper bounds, not timing-run percentiles):</p>"
                     "<div class='table'><table><thead><tr><th>Snapshot interval</th>"
-                    "<th>Offered</th><th>Snapshot encodes / journal checkpoints</th>"
+                    "<th>Offered</th><th>Snapshot encodes / WAL reclaims / "
+                    "journal checkpoints</th>"
                     f"<th>Encode max</th>{headings}</tr></thead>"
                     f"<tbody>{application_body}</tbody></table></div>"
                 )

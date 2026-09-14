@@ -638,6 +638,7 @@ impl<E: Engine> State<E> {
                     "diagnostics":self.diagnostics.status_snapshot(),"peer_batches":self.peer_batches,"peer_events":self.peer_events,
                     "peer_batch_sizes":self.peer_batch_sizes,
                     "peer_message_stream":self.config.peer_message_stream,
+                    "wal_reclamation_bytes":self.config.wal_reclamation_bytes,
                     "combine_peer_proposals":self.config.combine_peer_proposals,
                     "durable_completion_priority":{"enabled":self.config.durable_completion_priority,
                         "prioritized_peer_batches":self.prioritized_peer_batches,

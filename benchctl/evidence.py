@@ -486,13 +486,31 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
     recorded = json.loads(receipt_path.read_text())
     declared_stages = manifest.get("native_snapshot_stage_observation")
     expected_stages = {"schema": 1, "required": True}
-    if declared_stages is not None and declared_stages != expected_stages:
+    expected_wal_stages = {"schema": 2, "required": True}
+    if declared_stages is not None and declared_stages not in (
+        expected_stages,
+        expected_wal_stages,
+    ):
         errors.append("unsupported native snapshot stage observation declaration")
     recorded_stage_requirement = (
         recorded.get("requirements", {}).get("native_snapshot_stage_activity") is True
     )
-    require_native_stages = declared_stages == expected_stages or recorded_stage_requirement
-    observe_native_stages = recorded.get("schema") in (3, 4) or require_native_stages
+    require_native_stages = declared_stages in (
+        expected_stages,
+        expected_wal_stages,
+    ) or recorded_stage_requirement
+    observe_native_stages = (
+        recorded.get("schema") in (3, 4, 5, 6, 7) or require_native_stages
+    )
+    recorded_wal_requirement = (
+        recorded.get("requirements", {}).get("wal_reclamation_stage_observation")
+        is True
+    )
+    observe_wal_stages = (
+        declared_stages == expected_wal_stages
+        or recorded_wal_requirement
+        or recorded.get("schema") == 7
+    )
     declared_application_stages = manifest.get("application_checkpoint_stage_observation")
     if (
         declared_application_stages is not None
@@ -505,7 +523,9 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
     require_application_stages = (
         declared_application_stages == expected_stages or recorded_application_requirement
     )
-    observe_application_stages = recorded.get("schema") == 4 or require_application_stages
+    observe_application_stages = (
+        recorded.get("schema") in (4, 5, 6, 7) or require_application_stages
+    )
     declared_retirement = manifest.get("retired_log_worker_observation")
     if declared_retirement is not None and declared_retirement != expected_stages:
         errors.append("unsupported retired-log worker observation declaration")
@@ -529,6 +549,7 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         required_snapshot_index=required_snapshot_index,
         native_snapshot_stages=observe_native_stages,
         require_native_snapshot_stage_activity=require_native_stages,
+        wal_reclamation_stages=observe_wal_stages,
         application_checkpoint_stages=observe_application_stages,
         require_application_checkpoint_stage_activity=require_application_stages,
         retired_log_worker=observe_retirement,

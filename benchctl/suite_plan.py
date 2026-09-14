@@ -1,6 +1,6 @@
 """Deterministic execution plans for sequential paired durable-service suites."""
 from __future__ import annotations
-from .cluster import DEFAULT_APPLICATION_CHECKPOINT_BYTES
+from .cluster import DEFAULT_APPLICATION_CHECKPOINT_BYTES, DEFAULT_WAL_RECLAMATION_BYTES
 
 
 MODES = ("inline", "worker", "messages", "pipeline")
@@ -81,6 +81,7 @@ def execution_plan(suite: dict) -> list[dict]:
                             "durable_completion_priority": priority,
                             "snapshot_interval_entries": snapshot_interval,
                             "application_checkpoint_bytes": DEFAULT_APPLICATION_CHECKPOINT_BYTES,
+                            "wal_reclamation_bytes": DEFAULT_WAL_RECLAMATION_BYTES,
                             "concurrency": 64,
                             "payload": 512,
                             "rate": rate,

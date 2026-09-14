@@ -9,6 +9,7 @@ from .reclamation_service import (
     APPLICATION_CHECKPOINT_STAGES,
     NATIVE_SNAPSHOT_BASE_STAGES,
     NATIVE_SNAPSHOT_STAGES,
+    NATIVE_WAL_RECLAMATION_STAGES,
 )
 from .storage_footprint import MANAGED_RAFT_CATEGORIES
 
@@ -225,14 +226,24 @@ def _native_snapshot_stages(case: dict) -> dict[str, dict[str, int | float | Non
         return {}
     if not isinstance(raw, dict):
         raise ValueError("native snapshot stage set changed")
-    if set(raw) not in (
+    allowed_stage_sets = (
         set(NATIVE_SNAPSHOT_BASE_STAGES),
         set(NATIVE_SNAPSHOT_STAGES),
-    ):
+        set(NATIVE_SNAPSHOT_STAGES + NATIVE_WAL_RECLAMATION_STAGES),
+    )
+    if set(raw) not in allowed_stage_sets:
         raise ValueError("native snapshot stage set changed")
-    stages = tuple(stage for stage in NATIVE_SNAPSHOT_STAGES if stage in raw)
-    if receipt.get("schema") in (5, 6) and set(stages) != set(NATIVE_SNAPSHOT_STAGES):
+    stages = tuple(
+        stage
+        for stage in NATIVE_SNAPSHOT_STAGES + NATIVE_WAL_RECLAMATION_STAGES
+        if stage in raw
+    )
+    if receipt.get("schema") in (5, 6) and set(stages) != set(
+        NATIVE_SNAPSHOT_STAGES
+    ):
         raise ValueError("schema 5 or 6 native snapshot kernel stages are missing")
+    if receipt.get("schema") == 7 and set(stages) != allowed_stage_sets[-1]:
+        raise ValueError("schema 7 native WAL reclamation stages are missing")
     result = {}
     for stage in stages:
         metric = raw[stage]
@@ -269,9 +280,9 @@ def _application_checkpoint_stages(
         raise ValueError("live reclamation totals are invalid")
     raw = totals.get("application_checkpoint_stages")
     if raw is None:
-        if receipt.get("schema") in (4, 5, 6):
+        if receipt.get("schema") in (4, 5, 6, 7):
             raise ValueError(
-                "application checkpoint stages are missing from schema 4, 5, or 6 receipt"
+                "application checkpoint stages are missing from schema 4, 5, 6, or 7 receipt"
             )
         return {}
     if not isinstance(raw, dict) or set(raw) != set(APPLICATION_CHECKPOINT_STAGES):
@@ -312,8 +323,10 @@ def _application_snapshot_encode(
         raise ValueError("live reclamation totals are invalid")
     metric = totals.get("application_snapshot_encode")
     if metric is None:
-        if receipt.get("schema") == 6:
-            raise ValueError("application snapshot encode timing is missing from schema 6 receipt")
+        if receipt.get("schema") in (6, 7):
+            raise ValueError(
+                "application snapshot encode timing is missing from schema 6 or 7 receipt"
+            )
         return {}
     if not isinstance(metric, dict):
         raise ValueError("invalid application snapshot encode metric")
@@ -814,14 +827,16 @@ def markdown(value: dict) -> str:
     if staged:
         lines += [
             "",
-            "## Native snapshot stage maxima",
+            "## Native snapshot and WAL stage maxima",
             "",
             "Log2 upper bounds across all three nodes in the separate diagnostic case; "
             "not timing-run percentiles.",
             "",
             "| Snapshot interval | Offered/s | Publication | Source + write | Data sync | "
-            "File publish | Manifest publish | Prune | Kernel prepare | Kernel commit |",
-            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "File publish | Manifest publish | Prune | Kernel prepare | Kernel commit | "
+            "WAL reclaim |",
+            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | "
+            "---: | ---: |",
         ]
         for row in staged:
             rate = (
@@ -845,7 +860,8 @@ def markdown(value: dict) -> str:
                 f"{maximum('snapshot_manifest_publish')} | "
                 f"{maximum('snapshot_prune')} | "
                 f"{maximum('snapshot_kernel_prepare')} | "
-                f"{maximum('snapshot_kernel_commit')} |"
+                f"{maximum('snapshot_kernel_commit')} | "
+                f"{maximum('wal_reclamation')} |"
             )
     application_staged = [
         row
@@ -860,8 +876,9 @@ def markdown(value: dict) -> str:
             "Log2 upper bounds across all three nodes in the separate diagnostic case; "
             "not timing-run percentiles.",
             "",
-            "| Snapshot interval | Offered/s | Encodes | Checkpoints | Encode max | Write max | Sync max | Publish max |",
-            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Snapshot interval | Offered/s | Encodes | WAL reclaims | Checkpoints | "
+            "Encode max | Write max | Sync max | Publish max |",
+            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
         for row in application_staged:
             rate = (
@@ -888,10 +905,15 @@ def markdown(value: dict) -> str:
                 .get("journal_checkpoint_sync_ns", {})
                 .get("samples", 0)
             )
+            wal_reclaims = (
+                row.get("native_snapshot_stages", {})
+                .get("wal_reclamation", {})
+                .get("samples", 0)
+            )
 
             lines.append(
                 f"| {row['snapshot_interval_entries']:,} | {rate} | "
-                f"{encodes:,} | {checkpoints:,} | {encode} | "
+                f"{encodes:,} | {wal_reclaims:,} | {checkpoints:,} | {encode} | "
                 f"{application_maximum('journal_checkpoint_write_ns')} | "
                 f"{application_maximum('journal_checkpoint_sync_ns')} | "
                 f"{application_maximum('journal_checkpoint_publish_ns')} |"

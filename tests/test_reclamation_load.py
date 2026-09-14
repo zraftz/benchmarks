@@ -6,6 +6,7 @@ from benchctl.reclamation_service import (
     APPLICATION_CHECKPOINT_STAGES,
     NATIVE_SNAPSHOT_BASE_STAGES,
     NATIVE_SNAPSHOT_STAGES,
+    NATIVE_WAL_RECLAMATION_STAGES,
 )
 
 
@@ -171,7 +172,19 @@ class ReclamationLoadTests(unittest.TestCase):
                     "max_upper_bound_ns": 511,
                 },
             }
-            item["snapshot_reclamation"]["schema"] = 6
+            item["snapshot_reclamation"]["totals"]["native_snapshot_stages"].update(
+                {
+                    stage: {
+                        "samples": 2 if stage == "wal_reclamation" else 1,
+                        "total_ns": 200 if stage == "wal_reclamation" else 100,
+                        "max_upper_bound_ns": (
+                            255 if stage == "wal_reclamation" else 127
+                        ),
+                    }
+                    for stage in NATIVE_WAL_RECLAMATION_STAGES
+                }
+            )
+            item["snapshot_reclamation"]["schema"] = 7
             data["cases"].append(item)
 
         value = assess(data)
@@ -184,7 +197,7 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertEqual(publication["samples"], 1)
         self.assertEqual(publication["total_ns"], 100)
         self.assertEqual(publication["max_upper_bound_ns"], 127)
-        self.assertIn("Native snapshot stage maxima", markdown(value))
+        self.assertIn("Native snapshot and WAL stage maxima", markdown(value))
         kernel_commit = saturated["native_snapshot_stages"][
             "snapshot_kernel_commit"
         ]
@@ -199,7 +212,11 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertEqual(application_encode["max_upper_bound_ns"], 511)
         rendered = markdown(value)
         self.assertIn("Application snapshot and checkpoint stage maxima", rendered)
-        self.assertIn("Encodes | Checkpoints", rendered)
+        self.assertEqual(
+            saturated["native_snapshot_stages"]["wal_reclamation"]["samples"],
+            2,
+        )
+        self.assertIn("Encodes | WAL reclaims | Checkpoints", rendered)
 
     def test_schema_four_native_stages_remain_replayable(self):
         data = suite()
