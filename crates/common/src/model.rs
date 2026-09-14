@@ -398,7 +398,10 @@ mod tests {
         let encoded = source.encode_snapshot().unwrap();
         assert_eq!(encoded.applied_index, owned.applied_index);
         assert_eq!(encoded.payload, owned.encode().unwrap());
-        assert_eq!(source.snapshot_payload_capacity.get(), encoded.payload.len());
+        assert_eq!(
+            source.snapshot_payload_capacity.get(),
+            encoded.payload.len()
+        );
         let repeated = source.encode_snapshot().unwrap();
         assert_eq!(repeated.payload, encoded.payload);
         assert!(repeated.payload.capacity() >= encoded.payload.len());
