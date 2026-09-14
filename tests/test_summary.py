@@ -157,6 +157,18 @@ def reclamation_under_load_assessment(*, status="passed"):
                     "snapshot_prune",
                 )
             },
+            "application_snapshot_encode": {
+                "samples": 9,
+                "max_upper_bound_ns": 2_097_151,
+            },
+            "application_checkpoint_stages": {
+                stage: {"samples": 3, "max_upper_bound_ns": 4_194_303}
+                for stage in (
+                    "journal_checkpoint_write_ns",
+                    "journal_checkpoint_sync_ns",
+                    "journal_checkpoint_publish_ns",
+                )
+            },
         }],
     }
 
@@ -825,6 +837,8 @@ class SummaryTests(unittest.TestCase):
             self.assertIn("Snapshot publication stage maxima", rendered)
             self.assertIn("Source + write", rendered)
             self.assertIn("1.049 ms", rendered)
+            self.assertIn("Snapshot encodes / journal checkpoints", rendered)
+            self.assertIn("9 / 3", rendered)
 
     def test_reclamation_under_load_failure_remains_visible(self):
         data = durable_data()

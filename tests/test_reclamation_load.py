@@ -197,7 +197,9 @@ class ReclamationLoadTests(unittest.TestCase):
         application_encode = saturated["application_snapshot_encode"]
         self.assertEqual(application_encode["samples"], 1)
         self.assertEqual(application_encode["max_upper_bound_ns"], 511)
-        self.assertIn("Application snapshot and checkpoint stage maxima", markdown(value))
+        rendered = markdown(value)
+        self.assertIn("Application snapshot and checkpoint stage maxima", rendered)
+        self.assertIn("Encodes | Checkpoints", rendered)
 
     def test_schema_four_native_stages_remain_replayable(self):
         data = suite()

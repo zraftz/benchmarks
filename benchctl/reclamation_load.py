@@ -860,8 +860,8 @@ def markdown(value: dict) -> str:
             "Log2 upper bounds across all three nodes in the separate diagnostic case; "
             "not timing-run percentiles.",
             "",
-            "| Snapshot interval | Offered/s | Encode | Write | Sync | Publish |",
-            "| ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Snapshot interval | Offered/s | Encodes | Checkpoints | Encode max | Write max | Sync max | Publish max |",
+            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
         for row in application_staged:
             rate = (
@@ -882,10 +882,16 @@ def markdown(value: dict) -> str:
                 "max_upper_bound_ns"
             )
             encode = "not observed" if encode_ns is None else f"{encode_ns / 1e6:.3f} ms"
+            encodes = row.get("application_snapshot_encode", {}).get("samples", 0)
+            checkpoints = (
+                row.get("application_checkpoint_stages", {})
+                .get("journal_checkpoint_sync_ns", {})
+                .get("samples", 0)
+            )
 
             lines.append(
                 f"| {row['snapshot_interval_entries']:,} | {rate} | "
-                f"{encode} | "
+                f"{encodes:,} | {checkpoints:,} | {encode} | "
                 f"{application_maximum('journal_checkpoint_write_ns')} | "
                 f"{application_maximum('journal_checkpoint_sync_ns')} | "
                 f"{application_maximum('journal_checkpoint_publish_ns')} |"

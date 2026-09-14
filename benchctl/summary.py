@@ -33,6 +33,11 @@ SNAPSHOT_STAGE_COLUMNS = (
     ("snapshot_kernel_prepare", "Kernel prepare"),
     ("snapshot_kernel_commit", "Kernel commit"),
 )
+APPLICATION_CHECKPOINT_STAGE_COLUMNS = (
+    ("journal_checkpoint_write_ns", "Write max"),
+    ("journal_checkpoint_sync_ns", "Sync max"),
+    ("journal_checkpoint_publish_ns", "Publish max"),
+)
 
 
 def _brief_version(value: str) -> str:
@@ -48,6 +53,28 @@ def _snapshot_stage_maximum(row: dict, stage: str) -> str:
         "max_upper_bound_ns"
     )
     return "not observed" if value is None else f"{value / 1e6:.3f} ms"
+
+
+def _application_stage_maximum(row: dict, stage: str) -> str:
+    value = row.get("application_checkpoint_stages", {}).get(stage, {}).get(
+        "max_upper_bound_ns"
+    )
+    return "not observed" if value is None else f"{value / 1e6:.3f} ms"
+
+
+def _application_encode_maximum(row: dict) -> str:
+    value = row.get("application_snapshot_encode", {}).get("max_upper_bound_ns")
+    return "not observed" if value is None else f"{value / 1e6:.3f} ms"
+
+
+def _application_maintenance_counts(row: dict) -> str:
+    encodes = row.get("application_snapshot_encode", {}).get("samples", 0)
+    checkpoints = (
+        row.get("application_checkpoint_stages", {})
+        .get("journal_checkpoint_sync_ns", {})
+        .get("samples", 0)
+    )
+    return f"{encodes:,} / {checkpoints:,}"
 
 
 def _consensus_section(micro: dict | None) -> dict:
@@ -1297,6 +1324,43 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                         f"| {row['snapshot_interval_entries']:,} | {rate} | {maxima} |"
                     )
                 lines.append("")
+            application_staged = [
+                row
+                for row in under_load["comparisons"]
+                if row.get("application_snapshot_encode")
+                or row.get("application_checkpoint_stages")
+            ]
+            if application_staged:
+                lines += [
+                    "Application maintenance from separate diagnostic cases "
+                    "(counts and log2 upper bounds, not timing-run percentiles):",
+                    "",
+                    "| Snapshot interval | Offered | Snapshot encodes / journal checkpoints | "
+                    "Encode max | "
+                    + " | ".join(
+                        label for _, label in APPLICATION_CHECKPOINT_STAGE_COLUMNS
+                    )
+                    + " |",
+                    "| ---: | ---: | ---: | ---: | "
+                    + " | ".join("---:" for _ in APPLICATION_CHECKPOINT_STAGE_COLUMNS)
+                    + " |",
+                ]
+                for row in application_staged:
+                    rate = (
+                        "saturation"
+                        if row["offered_per_second"] == 0
+                        else f"{row['offered_per_second']:,}/s"
+                    )
+                    maxima = " | ".join(
+                        _application_stage_maximum(row, stage)
+                        for stage, _ in APPLICATION_CHECKPOINT_STAGE_COLUMNS
+                    )
+                    lines.append(
+                        f"| {row['snapshot_interval_entries']:,} | {rate} | "
+                        f"{_application_maintenance_counts(row)} | "
+                        f"{_application_encode_maximum(row)} | {maxima} |"
+                    )
+                lines.append("")
             for name, verdict in under_load["verdicts"].items():
                 lines.append(f"- {name.replace('_', ' ')}: {verdict['status']}")
                 lines.extend(f"  - {error}" for error in verdict.get("errors", []))
@@ -1554,6 +1618,42 @@ def render_html(summary: dict, evidence: dict) -> str:
                     "<div class='table'><table><thead><tr><th>Snapshot interval</th>"
                     f"<th>Offered</th>{headings}</tr></thead>"
                     f"<tbody>{stage_body}</tbody></table></div>"
+                )
+            application_staged = [
+                row
+                for row in under_load["comparisons"]
+                if row.get("application_snapshot_encode")
+                or row.get("application_checkpoint_stages")
+            ]
+            if application_staged:
+                application_body = ""
+                for row in application_staged:
+                    rate = (
+                        "saturation"
+                        if row["offered_per_second"] == 0
+                        else f"{row['offered_per_second']:,}/s"
+                    )
+                    maxima = "".join(
+                        f"<td>{_application_stage_maximum(row, stage)}</td>"
+                        for stage, _ in APPLICATION_CHECKPOINT_STAGE_COLUMNS
+                    )
+                    application_body += (
+                        f"<tr><td>{row['snapshot_interval_entries']:,}</td>"
+                        f"<td>{rate}</td>"
+                        f"<td>{_application_maintenance_counts(row)}</td>"
+                        f"<td>{_application_encode_maximum(row)}</td>{maxima}</tr>"
+                    )
+                headings = "".join(
+                    f"<th>{html.escape(label)}</th>"
+                    for _, label in APPLICATION_CHECKPOINT_STAGE_COLUMNS
+                )
+                content.append(
+                    "<p>Application maintenance from separate diagnostic cases "
+                    "(counts and log2 upper bounds, not timing-run percentiles):</p>"
+                    "<div class='table'><table><thead><tr><th>Snapshot interval</th>"
+                    "<th>Offered</th><th>Snapshot encodes / journal checkpoints</th>"
+                    f"<th>Encode max</th>{headings}</tr></thead>"
+                    f"<tbody>{application_body}</tbody></table></div>"
                 )
             verdicts = "".join(
                 f"<li><strong>{html.escape(name.replace('_', ' '))}:</strong> "
