@@ -130,7 +130,7 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
         "binary_sha256": digest(Path(command[0])), "loadgen_sha256": digest(ROOT / "dist/raft-bench-load"),
         "build_receipt": receipt,
         "limitations": ["plaintext transport", "logged reads", "static three-voter group",
-                        ("application journal checkpoints with durable Raft snapshots; physical bounds require qualification"
+                        ("application journal checkpoints at a bounded size after durable Raft snapshots; physical bounds require qualification"
                          if getattr(options, "snapshot_interval_entries", 0)
                          else "retained logs; no snapshots"),
                         "adapter storage/codec costs differ and are disclosed", "not upstream-reviewed tuning"]}

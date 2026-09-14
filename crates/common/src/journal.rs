@@ -137,6 +137,10 @@ impl Journal {
         self.checkpoint_payload_inner(payload, CheckpointFailure::None)
     }
 
+    pub(crate) fn physical_len(&self) -> Result<u64> {
+        Ok(self.file.metadata()?.len())
+    }
+
     fn checkpoint_payload_inner(
         &mut self,
         payload: &[u8],

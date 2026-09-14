@@ -153,9 +153,10 @@ The WAL pipeline can also run the finite live-reclamation smoke directly:
 That scenario kills a follower before load, requires a newer leader snapshot,
 then proves snapshot installation and acknowledged canaries after restart. It
 does not qualify reclamation latency. After the matching Raft snapshot and WAL
-compaction are durable, snapshot-enabled Rafter atomically checkpoints the
-benchmark application journal to the same applied boundary. Default cases that
-do not enable snapshots remain append-only.
+compaction are durable, snapshot-enabled Rafter checkpoints the benchmark
+application journal to that applied boundary when its physical history exceeds
+64 MiB per node. Smaller durable journals remain append-only until the bound is
+crossed. Default cases that do not enable snapshots remain append-only.
 
 On a fixed machine, qualify the service cost and physical effect of reclamation
 without editing the suite after observing results:

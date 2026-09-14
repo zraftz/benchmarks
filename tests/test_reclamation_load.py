@@ -140,7 +140,7 @@ class ReclamationLoadTests(unittest.TestCase):
         self.assertAlmostEqual(saturated["median_throughput_ratio"], 0.97)
         self.assertEqual(saturated["measured_compactions"], 9)
         self.assertNotIn("native_snapshot_stages", saturated)
-        self.assertIn("atomic application-journal checkpointing", value["scope"])
+        self.assertIn("size-triggered application-journal checkpointing", value["scope"])
         self.assertIn("Verdict: passed", markdown(value))
 
     def test_native_snapshot_stage_maxima_are_imported_and_rendered(self):

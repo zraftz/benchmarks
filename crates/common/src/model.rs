@@ -56,6 +56,7 @@ pub struct Model {
 }
 
 const APPLICATION_SNAPSHOT_SCHEMA: u32 = 1;
+const APPLICATION_JOURNAL_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
 const RETAINED_SNAPSHOT_CAPACITY: usize = 8 * 1024 * 1024;
 
 /// Complete durable application state at one applied Raft-log boundary.
@@ -304,6 +305,22 @@ impl DurableModel {
         }
         self.journal.checkpoint_payload(&snapshot.payload)
     }
+    pub(crate) fn maintain_checkpoint_snapshot(
+        &mut self,
+        snapshot: &EncodedApplicationSnapshot,
+    ) -> Result<()> {
+        self.checkpoint_snapshot_if_larger_than(snapshot, APPLICATION_JOURNAL_CHECKPOINT_BYTES)
+    }
+    fn checkpoint_snapshot_if_larger_than(
+        &mut self,
+        snapshot: &EncodedApplicationSnapshot,
+        maximum_bytes: u64,
+    ) -> Result<()> {
+        if self.journal.physical_len()? > maximum_bytes {
+            self.checkpoint_snapshot(snapshot)?;
+        }
+        Ok(())
+    }
     /// Durably replaces application state with an authoritative Raft snapshot.
     pub fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
         snapshot.validate()?;
@@ -340,7 +357,9 @@ impl DurableModel {
     pub fn stats(&self) -> serde_json::Value {
         serde_json::json!({"applied_index":self.index,"keys":self.model.values.len(),
             "sessions":self.model.sessions(),"application_syncs":self.journal.syncs,
-            "application_bytes":self.journal.bytes,"diagnostics":self.journal.diagnostics.snapshot()})
+            "application_bytes":self.journal.bytes,
+            "application_checkpoint_bytes":APPLICATION_JOURNAL_CHECKPOINT_BYTES,
+            "diagnostics":self.journal.diagnostics.snapshot()})
     }
 }
 #[cfg(test)]
@@ -481,6 +500,65 @@ mod tests {
         let initial_capacity = model.snapshot_payload.borrow().capacity();
         model.recycle_snapshot_payload(Vec::with_capacity(RETAINED_SNAPSHOT_CAPACITY + 1));
         assert_eq!(model.snapshot_payload.borrow().capacity(), initial_capacity);
+        std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn maintenance_checkpoint_skips_small_durable_journal() {
+        let model_path = path("maintenance-checkpoint-small");
+        let mut model = DurableModel::open(&model_path).unwrap();
+        model
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "durable")),
+                metadata: None,
+            }])
+            .unwrap();
+        let snapshot = model.encode_snapshot().unwrap();
+        let before = std::fs::metadata(&model_path).unwrap().len();
+        model
+            .checkpoint_snapshot_if_larger_than(&snapshot, u64::MAX)
+            .unwrap();
+        assert_eq!(std::fs::metadata(&model_path).unwrap().len(), before);
+        drop(model);
+
+        let reopened = DurableModel::open(&model_path).unwrap();
+        assert_eq!(reopened.index, 1);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("durable")
+        );
+        std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn maintenance_checkpoint_replaces_oversized_history() {
+        let model_path = path("maintenance-checkpoint-large");
+        let mut model = DurableModel::open(&model_path).unwrap();
+        model
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "durable")),
+                metadata: None,
+            }])
+            .unwrap();
+        let snapshot = model.encode_snapshot().unwrap();
+        let checkpointed_len = 8 + snapshot.payload.len() as u64;
+        model
+            .checkpoint_snapshot_if_larger_than(&snapshot, 0)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&model_path).unwrap().len(),
+            checkpointed_len
+        );
+        drop(model);
+
+        let reopened = DurableModel::open(&model_path).unwrap();
+        assert_eq!(reopened.index, 1);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("durable")
+        );
         std::fs::remove_file(model_path).unwrap();
     }
 

@@ -72,14 +72,14 @@ impl Application {
         }
     }
 
-    pub fn checkpoint_snapshot(&mut self, snapshot: EncodedApplicationSnapshot) -> Result<()> {
+    pub fn maintain_snapshot(&mut self, snapshot: EncodedApplicationSnapshot) -> Result<()> {
         match self {
             Self::Inline(model) => {
-                model.checkpoint_snapshot(&snapshot)?;
+                model.maintain_checkpoint_snapshot(&snapshot)?;
                 model.recycle_snapshot_payload(snapshot.payload);
                 Ok(())
             }
-            Self::Worker(worker) => worker.checkpoint_snapshot(snapshot),
+            Self::Worker(worker) => worker.maintain_snapshot(snapshot),
         }
     }
 }
@@ -114,7 +114,7 @@ impl<E: Engine> State<E> {
         let started = Instant::now();
         self.engine
             .compact_snapshot(snapshot.applied_index, &snapshot.payload)?;
-        self.application.checkpoint_snapshot(snapshot)?;
+        self.application.maintain_snapshot(snapshot)?;
         if let Some(elapsed) = encode_elapsed {
             self.diagnostics
                 .observe("application_snapshot_encode_ns", elapsed);

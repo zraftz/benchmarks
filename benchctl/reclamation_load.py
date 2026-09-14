@@ -769,7 +769,7 @@ def assess(data: dict) -> dict[str, Any]:
             "retained-log suffix sizes. Managed Raft bytes include WAL data and metadata plus "
             "snapshot data and metadata. Reported maintenance maxima cover Raft snapshot "
             "publication, WAL compaction, bounded retired-log handoff, snapshot pruning, and "
-            "atomic application-journal checkpointing after application snapshot encoding; "
+            "bounded size-triggered application-journal checkpointing after application snapshot encoding; "
             "application snapshot encoding is reported separately, and accepted background log "
             "destruction is outside those maxima."
         ),
@@ -892,8 +892,9 @@ def markdown(value: dict) -> str:
             )
     lines += [
         "",
-        "The selected candidate atomically checkpoints the application journal after the "
-        "corresponding Raft snapshot is durable; the physical-reclamation verdict assesses its "
+        "The selected candidate atomically checkpoints an oversized application journal after "
+        "a corresponding Raft snapshot is durable; smaller durable histories remain append-only "
+        "until the 64 MiB per-node bound is crossed. The physical-reclamation verdict assesses the "
         "observed bound. Maintenance maxima are log2 upper bounds between the pre-load and "
         "post-load status watermarks. The adapter timer covers Raft snapshot publication, WAL "
         "compaction, bounded retired-log handoff, snapshot pruning, and the application-journal "
