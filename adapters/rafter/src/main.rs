@@ -1,6 +1,7 @@
 //! Rafter native durable stores + shared client/transport/application embedding.
 mod diagnostics;
 mod driver;
+mod retirement;
 
 use anyhow::Result;
 use bench_common::{
@@ -21,6 +22,7 @@ struct Rafter {
     node_id: NodeId,
     snapshot_group: SnapshotGroupId,
     ordered_apply: bool,
+    retirement: retirement::Retirement,
     empty_appends: diagnostics::EmptyAppends,
     replication_windows: diagnostics::ReplicationWindows,
 }
@@ -273,8 +275,12 @@ impl Engine for Rafter {
             snapshot: &snapshot,
             payload,
         };
-        node.compact_log_with_streamed_snapshot(snapshot.clone(), &source)?;
-        node.prune_snapshot_files(SnapshotRetention::CurrentOnly)?;
+        let retired =
+            node.compact_log_with_streamed_snapshot_deferred_drop(snapshot.clone(), &source)?;
+        self.retirement.retire(retired);
+        self.node
+            .ready_mut()
+            .prune_snapshot_files(SnapshotRetention::CurrentOnly)?;
         self.observe_replication_windows();
         Ok(())
     }
@@ -420,7 +426,7 @@ impl Engine for Rafter {
         serde_json::json!({"term":self.node.current_term().0,
         "commit_index":self.node.ready().commit_index().0,"last_log_index":self.node.ready().last_log_index().0,
         "empty_appends_by_reason":self.empty_appends.snapshot(),"replication_windows":self.replication_windows.snapshot(),
-        "persistence_pipeline":self.node.stats(),
+        "persistence_pipeline":self.node.stats(),"log_retirement":self.retirement.stats(),
         "persistence_diagnostics":persistence,"peer_group_commit_available":cfg!(feature = "peer-group-commit"),
         "storage":"rafter native file stores","hard_state_backend":HARD_STATE_BACKEND,"election_ticks":"50 + 7*(node_id-1)"})
     }
@@ -467,6 +473,7 @@ async fn main() -> Result<()> {
         config.diagnostics,
         config.max_speculative_proposals,
     )?;
+    let retirement = retirement::Retirement::start(config.snapshot_interval_entries != 0)?;
     let recovered_effects = effects(Some(driver.ready()), outputs, config.ordered_apply)?;
     let handler = Actor::start(
         config.clone(),
@@ -476,6 +483,7 @@ async fn main() -> Result<()> {
             node_id: NodeId(config.id),
             snapshot_group,
             ordered_apply: config.ordered_apply,
+            retirement,
             empty_appends: diagnostics::EmptyAppends::new(config.diagnostics),
             replication_windows: diagnostics::ReplicationWindows::new(config.diagnostics),
         },

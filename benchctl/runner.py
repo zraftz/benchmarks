@@ -117,6 +117,12 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
             and getattr(options, "snapshot_interval_entries", 0)
             else None
         ),
+        "retired_log_worker_observation": (
+            {"schema": 1, "required": True}
+            if implementation == "rafter"
+            and getattr(options, "snapshot_interval_entries", 0)
+            else None
+        ),
         "options": {k: str(v) if isinstance(v, Path) else v for k, v in vars(options).items()},
         "host": host_info(data),
         "source_digest": receipt.get("source_digest") if receipt else source_digest(),
@@ -350,6 +356,8 @@ def run_case(implementation: str, directory: Path, data: Path, options, *, comma
                 require_application_checkpoint_stage_activity=getattr(
                     options, "diagnostics", False
                 ),
+                retired_log_worker=True,
+                require_retired_log_worker_activity=True,
             )
             write_json(directory / "snapshot-compaction-activity.json", reclamation)
             if reclamation["status"] != "passed":

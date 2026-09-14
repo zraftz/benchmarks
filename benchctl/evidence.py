@@ -506,6 +506,19 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         declared_application_stages == expected_stages or recorded_application_requirement
     )
     observe_application_stages = recorded.get("schema") == 4 or require_application_stages
+    declared_retirement = manifest.get("retired_log_worker_observation")
+    if declared_retirement is not None and declared_retirement != expected_stages:
+        errors.append("unsupported retired-log worker observation declaration")
+    recorded_retirement_requirement = (
+        recorded.get("requirements", {}).get("retired_log_worker_activity") is True
+    )
+    require_retirement = (
+        declared_retirement == expected_stages or recorded_retirement_requirement
+    )
+    observe_retirement = (
+        recorded.get("totals", {}).get("log_retirement") is not None
+        or require_retirement
+    )
     actual = activity(
         json.loads((directory / "before.json").read_text()),
         json.loads(after_path.read_text()),
@@ -518,6 +531,8 @@ def snapshot_reclamation_errors(directory: Path, manifest: dict) -> list[str]:
         require_native_snapshot_stage_activity=require_native_stages,
         application_checkpoint_stages=observe_application_stages,
         require_application_checkpoint_stage_activity=require_application_stages,
+        retired_log_worker=observe_retirement,
+        require_retired_log_worker_activity=require_retirement,
     )
     if actual != recorded:
         errors.append("live snapshot/reclamation receipt differs from runtime status")

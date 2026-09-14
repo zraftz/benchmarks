@@ -727,8 +727,9 @@ def assess(data: dict) -> dict[str, Any]:
             "application-snapshot/WAL-reclamation interval changes. Snapshot intervals are not "
             "retained-log suffix sizes. Managed Raft bytes include WAL data and metadata plus "
             "snapshot data and metadata. Reported maintenance maxima cover Raft snapshot "
-            "publication, WAL compaction, snapshot pruning, and atomic application-journal "
-            "checkpointing after application snapshot encoding."
+            "publication, WAL compaction, bounded retired-log handoff, snapshot pruning, and "
+            "atomic application-journal checkpointing after application snapshot encoding; "
+            "accepted background log destruction is outside those maxima."
         ),
     }
 
@@ -843,8 +844,9 @@ def markdown(value: dict) -> str:
         "corresponding Raft snapshot is durable; the physical-reclamation verdict assesses its "
         "observed bound. Maintenance maxima are log2 upper bounds between the pre-load and "
         "post-load status watermarks. The adapter timer covers Raft snapshot publication, WAL "
-        "compaction, snapshot pruning, and the application-journal checkpoint; application "
-        "snapshot encoding happens before it.",
+        "compaction, bounded retired-log handoff, snapshot pruning, and the application-journal "
+        "checkpoint; application snapshot encoding happens before it and accepted background "
+        "log destruction finishes independently.",
         "",
     ]
     for name, verdict in value["verdicts"].items():

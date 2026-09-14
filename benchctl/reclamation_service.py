@@ -231,6 +231,54 @@ def _aggregate_application_stages(nodes: dict[str, dict]) -> dict[str, dict[str,
     return result
 
 
+def _retirement_delta(
+    before_info: dict, after_info: dict, restarted: bool, node: str
+) -> dict[str, int]:
+    first = before_info.get("engine", {}).get("log_retirement")
+    last = after_info.get("engine", {}).get("log_retirement")
+    expected = {
+        "enabled",
+        "max_inflight_entries",
+        "max_inflight_payload_bytes",
+        "accepted_batches",
+        "accepted_entries",
+        "inline_fallback_batches",
+        "inflight_entries",
+        "inflight_payload_bytes",
+    }
+    if not isinstance(first, dict) or not isinstance(last, dict):
+        raise ValueError(f"node {node} retired-log worker status is unavailable")
+    if set(first) != expected or set(last) != expected:
+        raise ValueError(f"node {node} retired-log worker status shape changed")
+    if first["enabled"] is not True or last["enabled"] is not True:
+        raise ValueError(f"node {node} retired-log worker is not enabled")
+    numeric = expected - {"enabled"}
+    if any(type(value[name]) is not int or value[name] < 0
+           for value in (first, last) for name in numeric):
+        raise ValueError(f"node {node} retired-log worker counters are invalid")
+    for limit, inflight in (
+        ("max_inflight_entries", "inflight_entries"),
+        ("max_inflight_payload_bytes", "inflight_payload_bytes"),
+    ):
+        if first[limit] == 0 or first[limit] != last[limit]:
+            raise ValueError(f"node {node} retired-log worker limit changed")
+        if first[inflight] > first[limit] or last[inflight] > last[limit]:
+            raise ValueError(f"node {node} retired-log worker exceeded its credits")
+    deltas = {}
+    for name in ("accepted_batches", "accepted_entries", "inline_fallback_batches"):
+        delta = last[name] if restarted else last[name] - first[name]
+        if delta < 0:
+            raise ValueError(f"node {node} retired-log worker counters regressed")
+        deltas[name] = delta
+    return {
+        **deltas,
+        "max_inflight_entries": last["max_inflight_entries"],
+        "max_inflight_payload_bytes": last["max_inflight_payload_bytes"],
+        "inflight_entries": last["inflight_entries"],
+        "inflight_payload_bytes": last["inflight_payload_bytes"],
+    }
+
+
 def activity(
     before: dict,
     after: dict,
@@ -244,6 +292,8 @@ def activity(
     require_native_snapshot_stage_activity: bool = False,
     application_checkpoint_stages: bool = False,
     require_application_checkpoint_stage_activity: bool = False,
+    retired_log_worker: bool = False,
+    require_retired_log_worker_activity: bool = False,
 ) -> dict[str, Any]:
     failures = []
     before_nodes = _nodes(before)
@@ -255,6 +305,7 @@ def activity(
     histogram_nodes = 0
     native_stage_nodes = 0
     application_stage_nodes = 0
+    retirement_worker_nodes = 0
     for node in ("1", "2", "3"):
         try:
             before_info = before_nodes[node]["info"]
@@ -346,6 +397,10 @@ def activity(
                 )
                 application_stage_nodes += 1
                 nodes[node]["application_checkpoint_stages"] = application_stages
+            if retired_log_worker:
+                retirement = _retirement_delta(before_info, after_info, restarted, node)
+                retirement_worker_nodes += 1
+                nodes[node]["log_retirement"] = retirement
         except (KeyError, TypeError, ValueError) as error:
             failures.append(f"node {node} snapshot activity is invalid: {error}")
 
@@ -359,6 +414,10 @@ def activity(
         failures.append("required application checkpoint stages were not selected")
     if application_checkpoint_stages and application_stage_nodes != 3:
         failures.append("application checkpoint stages are not available on all three nodes")
+    if require_retired_log_worker_activity and not retired_log_worker:
+        failures.append("required retired-log worker observation was not selected")
+    if retired_log_worker and retirement_worker_nodes != 3:
+        failures.append("retired-log worker status is not available on all three nodes")
 
     compactions = sum(node["compactions_since_before_status"] for node in nodes.values())
     installs = sum(node["application_installs_since_before_status"] for node in nodes.values())
@@ -407,6 +466,18 @@ def activity(
             failures.append(
                 "no application checkpoint stage activity observed: " + ", ".join(missing)
             )
+    if retirement_worker_nodes == 3:
+        retirement_totals = {
+            name: sum(node["log_retirement"][name] for node in nodes.values())
+            for name in ("accepted_batches", "accepted_entries", "inline_fallback_batches")
+        }
+        totals["log_retirement"] = retirement_totals
+        if require_retired_log_worker_activity and retirement_totals["accepted_batches"] == 0:
+            failures.append("no retired log prefix was accepted by the bounded worker")
+        if require_retired_log_worker_activity and retirement_totals["accepted_entries"] == 0:
+            failures.append("bounded retired-log work contained no entries")
+        if require_retired_log_worker_activity and retirement_totals["inline_fallback_batches"]:
+            failures.append("retired log prefixes fell back to owner-thread destruction")
     return {
         "schema": (
             5
@@ -448,6 +519,14 @@ def activity(
             **(
                 {"application_checkpoint_stage_activity": True}
                 if require_application_checkpoint_stage_activity
+                else {}
+            ),
+            **(
+                {
+                    "retired_log_worker_activity": True,
+                    "no_inline_retirement_fallback": True,
+                }
+                if require_retired_log_worker_activity
                 else {}
             ),
         },

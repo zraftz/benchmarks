@@ -66,6 +66,22 @@ def add_application_checkpoint_metrics(value: dict, bucket_counts: dict[int, int
         status["info"]["application"]["diagnostics"] = {"metrics": metrics}
 
 
+def add_log_retirement(
+    value: dict, accepted_batches: int, accepted_entries: int, fallbacks: int = 0
+) -> None:
+    for status in value.values():
+        status["info"]["engine"]["log_retirement"] = {
+            "enabled": True,
+            "max_inflight_entries": 262_144,
+            "max_inflight_payload_bytes": 128 * 1024 * 1024,
+            "accepted_batches": accepted_batches,
+            "accepted_entries": accepted_entries,
+            "inline_fallback_batches": fallbacks,
+            "inflight_entries": 0,
+            "inflight_payload_bytes": 0,
+        }
+
+
 class ReclamationServiceTests(unittest.TestCase):
     def test_follower_catchup_requires_compaction_and_application_install(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)
@@ -115,6 +131,8 @@ class ReclamationServiceTests(unittest.TestCase):
         add_native_snapshot_metrics(after, {6: 1, 7: 1})
         add_application_checkpoint_metrics(before, {6: 1})
         add_application_checkpoint_metrics(after, {6: 1, 7: 1})
+        add_log_retirement(before, 1, 64)
+        add_log_retirement(after, 2, 128)
         manifest = {
             "scenario": "snapshot-catchup",
             "options": {"snapshot_interval_entries": 64},
@@ -123,6 +141,7 @@ class ReclamationServiceTests(unittest.TestCase):
                 "schema": 1,
                 "required": True,
             },
+            "retired_log_worker_observation": {"schema": 1, "required": True},
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -150,6 +169,8 @@ class ReclamationServiceTests(unittest.TestCase):
                 require_native_snapshot_stage_activity=True,
                 application_checkpoint_stages=True,
                 require_application_checkpoint_stage_activity=True,
+                retired_log_worker=True,
+                require_retired_log_worker_activity=True,
             )
             (root / "snapshot-compaction-activity.json").write_text(json.dumps(receipt))
             self.assertEqual(snapshot_reclamation_errors(root, manifest), [])
@@ -160,6 +181,46 @@ class ReclamationServiceTests(unittest.TestCase):
                 snapshot_reclamation_errors(root, manifest),
                 ["live snapshot/reclamation receipt differs from runtime status"],
             )
+
+    def test_retired_log_worker_activity_is_bounded_and_has_no_inline_fallback(self):
+        before = statuses(completed=1, installs=(0, 0, 0), index=64)
+        after = statuses(completed=3, installs=(0, 0, 0), index=128)
+        add_log_retirement(before, 1, 64)
+        add_log_retirement(after, 3, 192)
+
+        receipt = activity(
+            before,
+            after,
+            64,
+            "durable-kv",
+            retired_log_worker=True,
+            require_retired_log_worker_activity=True,
+        )
+
+        self.assertEqual(receipt["status"], "passed")
+        self.assertEqual(
+            receipt["totals"]["log_retirement"],
+            {
+                "accepted_batches": 6,
+                "accepted_entries": 384,
+                "inline_fallback_batches": 0,
+            },
+        )
+
+        add_log_retirement(after, 3, 192, fallbacks=1)
+        failed = activity(
+            before,
+            after,
+            64,
+            "durable-kv",
+            retired_log_worker=True,
+            require_retired_log_worker_activity=True,
+        )
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn(
+            "retired log prefixes fell back to owner-thread destruction",
+            failed["failures"],
+        )
 
     def test_verifier_rejects_fault_action_drift(self):
         before = statuses(completed=1, installs=(0, 0, 0), index=64)
