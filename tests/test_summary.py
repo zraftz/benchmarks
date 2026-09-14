@@ -194,8 +194,10 @@ def storage_record(arm, backend, batch, throughput, p99):
     }
 
 
-def wal_reclamation_receipt(retained_entries, source="b" * 40):
+def wal_reclamation_receipt(retained_entries, source="b" * 40, *,
+                            batches_per_round=64, batch_size=8):
     managed_bytes = retained_entries * 98 + 188
+    appended_entries = batches_per_round * batch_size
 
     def inventory(generation):
         return {
@@ -210,11 +212,12 @@ def wal_reclamation_receipt(retained_entries, source="b" * 40):
 
     rounds = [{
         "round": number,
-        "appended_entries": 512,
-        "compacted_through": number * 512,
+        "appended_entries": appended_entries,
+        "compacted_through": number * appended_entries,
         "snapshot_ns": 100,
         "reclamation_pause_ns": 1_000 + number,
-        "write_latency": {"count": 64, "p50_ns": 10, "p99_ns": 20, "max_ns": 30},
+        "write_latency": {"count": batches_per_round, "p50_ns": 10,
+                          "p99_ns": 20, "max_ns": 30},
         "managed_wal": inventory(number),
     } for number in range(1, 4)]
     phase_metrics = [{
@@ -236,10 +239,12 @@ def wal_reclamation_receipt(retained_entries, source="b" * 40):
             "and cleanup fence"
         ),
         "config": {"retained_entries": retained_entries, "rounds": 3,
-                   "batches_per_round": 64, "batch_size": 8, "payload_bytes": 64},
+                   "batches_per_round": batches_per_round, "batch_size": batch_size,
+                   "payload_bytes": 64},
         "rounds": rounds,
         "aggregate": {
-            "write_latency": {"count": 192, "p50_ns": 10, "p99_ns": 20, "max_ns": 30},
+            "write_latency": {"count": 3 * batches_per_round, "p50_ns": 10,
+                              "p99_ns": 20, "max_ns": 30},
             "reclamation_pause": {"count": 3, "p50_ns": 1_001,
                                     "p99_ns": 1_003, "max_ns": 1_003},
             "reopen_ns": 2_000,
@@ -248,10 +253,10 @@ def wal_reclamation_receipt(retained_entries, source="b" * 40):
         },
         "phase_metrics": phase_metrics,
         "final": {
-            "hard_commit": retained_entries + 1_536,
-            "compacted_through": 1_536,
+            "hard_commit": retained_entries + 3 * appended_entries,
+            "compacted_through": 3 * appended_entries,
             "retained_entries": retained_entries,
-            "next_index": retained_entries + 1_537,
+            "next_index": retained_entries + 3 * appended_entries + 1,
             "recovery_verified": True,
             "physical_bound_verified": True,
             "managed_wal": inventory(3),
@@ -260,9 +265,18 @@ def wal_reclamation_receipt(retained_entries, source="b" * 40):
 
 
 def write_wal_reclamation(root):
-    for retained in (10_000, 100_000):
-        receipt_path = root / f"retained-{retained}.json"
-        receipt = wal_reclamation_receipt(retained)
+    cases = (
+        ("retired-102400", 512, 25, 4_096),
+        ("retained-10000", 10_000, 64, 8),
+        ("retained-100000", 100_000, 64, 8),
+    )
+    for stem, retained, batches_per_round, batch_size in cases:
+        receipt_path = root / f"{stem}.json"
+        receipt = wal_reclamation_receipt(
+            retained,
+            batches_per_round=batches_per_round,
+            batch_size=batch_size,
+        )
         receipt_path.write_text(json.dumps(receipt, sort_keys=True))
         aggregate = receipt["aggregate"]
         summary = {
@@ -276,7 +290,7 @@ def write_wal_reclamation(root):
             "qualified": True,
             "receipt_sha256": digest(receipt_path),
         }
-        (root / f"retained-{retained}-summary.json").write_text(json.dumps(summary))
+        (root / f"{stem}-summary.json").write_text(json.dumps(summary))
 
 
 class SummaryTests(unittest.TestCase):
@@ -427,7 +441,7 @@ class SummaryTests(unittest.TestCase):
             write_wal_reclamation(root)
             loaded = load_wal_reclamation(root)
             self.assertEqual(loaded["qualification"], "passed")
-            self.assertEqual(len(loaded["records"]), 2)
+            self.assertEqual(len(loaded["records"]), 3)
             self.assertTrue(all(record["measurement_mode"] == "diagnostic"
                                 for record in loaded["records"]))
             summary = build_summary(reclamation=loaded)
@@ -435,11 +449,13 @@ class SummaryTests(unittest.TestCase):
             sustained = summary["sections"][3]
             self.assertEqual(storage["status"], "mixed result")
             self.assertEqual(storage["wal_reclamation"]["status"], "passed")
-            self.assertEqual(storage["wal_reclamation"]["rows"][1]["managed_wal_bytes"],
+            self.assertEqual(storage["wal_reclamation"]["rows"][0]["managed_wal_bytes"],
+                             50_364)
+            self.assertEqual(storage["wal_reclamation"]["rows"][2]["managed_wal_bytes"],
                              9_800_188)
             self.assertEqual(summary["evidence_status"]["durable_replication"], "passed")
-            self.assertEqual(len(summary["normalized_results"]["durable_replication"]), 2)
-            self.assertEqual(sustained["checks"][0]["passed_cases"], 2)
+            self.assertEqual(len(summary["normalized_results"]["durable_replication"]), 3)
+            self.assertEqual(sustained["checks"][0]["passed_cases"], 3)
             storage_evidence = {
                 "qualification": "passed",
                 "qualification_errors": [],
@@ -454,6 +470,7 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual(combined["wal_reclamation"]["status"], "passed")
             for rendered in (render_markdown(summary, {}), render_html(summary, {})):
                 self.assertIn("WAL physical-reclamation component qualification", rendered)
+                self.assertIn("50,364 bytes", rendered)
                 self.assertIn("9,800,188 bytes", rendered)
                 self.assertIn("diagnostic only", rendered)
                 self.assertIn("not complete-service traffic", rendered)
@@ -475,6 +492,16 @@ class SummaryTests(unittest.TestCase):
             self.assertFalse(section["wal_reclamation"]["rows"])
 
             summary_path.unlink()
+            loaded = load_wal_reclamation(root)
+            self.assertEqual(loaded["qualification"], "failed")
+            self.assertTrue(any("file set changed" in error
+                                for error in loaded["qualification_errors"]))
+
+    def test_wal_reclamation_loader_rejects_unexpected_extra_receipt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_wal_reclamation(root)
+            (root / "retained-200000.json").write_text("{}")
             loaded = load_wal_reclamation(root)
             self.assertEqual(loaded["qualification"], "failed")
             self.assertTrue(any("file set changed" in error
@@ -840,6 +867,11 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(check["passed_cases"], 1)
         self.assertIn("functional smoke only, not performance", check["scope"])
         self.assertIn("snapshot catch-up smoke passed", section["result"])
+        summary = build_summary(durable=data)
+        self.assertIn("1 case passed", render_markdown(summary, {}))
+        self.assertIn("1 case passed", render_html(summary, {}))
+        self.assertNotIn("1 cases passed", render_markdown(summary, {}))
+        self.assertNotIn("1 cases passed", render_html(summary, {}))
         self.assertIn(
             "long-duration snapshot/compaction and WAL-reclamation soak performance",
             section["not_measured"],

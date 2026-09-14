@@ -674,7 +674,29 @@ def load_storage_comparison(directory: Path) -> dict:
     }
 
 
-_WAL_RECLAMATION_RETAINED = (10_000, 100_000)
+_WAL_RECLAMATION_CASES = (
+    ("retired-102400", {
+        "retained_entries": 512,
+        "rounds": 3,
+        "batches_per_round": 25,
+        "batch_size": 4_096,
+        "payload_bytes": 64,
+    }),
+    ("retained-10000", {
+        "retained_entries": 10_000,
+        "rounds": 3,
+        "batches_per_round": 64,
+        "batch_size": 8,
+        "payload_bytes": 64,
+    }),
+    ("retained-100000", {
+        "retained_entries": 100_000,
+        "rounds": 3,
+        "batches_per_round": 64,
+        "batch_size": 8,
+        "payload_bytes": 64,
+    }),
+)
 _WAL_RECLAMATION_PHASES = {
     "wal_reclamation",
     "wal_checkpoint_prepare",
@@ -732,7 +754,7 @@ def _check_wal_inventory(value: dict, generation: int, expected_bytes: int, name
                  f"{name} files do not select generation {generation}")
 
 
-def _normalize_wal_reclamation_receipt(raw: dict, retained_entries: int,
+def _normalize_wal_reclamation_receipt(raw: dict, expected_config: dict,
                                        source_cases: list[str]) -> tuple[dict, dict]:
     _require_wal(set(raw) == {
         "schema", "layer", "comparison_kind", "source_sha", "completion_boundary",
@@ -745,14 +767,8 @@ def _normalize_wal_reclamation_receipt(raw: dict, retained_entries: int,
     _require_wal(re.fullmatch(r"[0-9a-f]{40}", raw["source_sha"]) is not None,
                  "source identity is not a lowercase full SHA")
     config = raw["config"]
-    expected_config = {
-        "retained_entries": retained_entries,
-        "rounds": 3,
-        "batches_per_round": 64,
-        "batch_size": 8,
-        "payload_bytes": 64,
-    }
     _require_wal(config == expected_config, "reclamation qualification configuration changed")
+    retained_entries = expected_config["retained_entries"]
     rounds = raw["rounds"]
     _require_wal(isinstance(rounds, list) and len(rounds) == config["rounds"],
                  "round count disagrees")
@@ -887,7 +903,7 @@ def _normalize_wal_reclamation_receipt(raw: dict, retained_entries: int,
 
 
 def load_wal_reclamation(directory: Path) -> dict:
-    """Replay the exact 10k/100k component receipts without publishing runner timing."""
+    """Replay the exact predeclared component receipts without publishing runner timing."""
     original = directory.absolute()
     reasons = []
     if original.is_symlink() or not original.is_dir():
@@ -900,8 +916,8 @@ def load_wal_reclamation(directory: Path) -> dict:
         }
     directory = original.resolve()
     expected_names = {
-        f"retained-{retained}{suffix}"
-        for retained in _WAL_RECLAMATION_RETAINED
+        f"{stem}{suffix}"
+        for stem, _ in _WAL_RECLAMATION_CASES
         for suffix in (".json", "-summary.json")
     }
     entries = list(directory.iterdir())
@@ -909,34 +925,38 @@ def load_wal_reclamation(directory: Path) -> dict:
         reasons.append("symlink in WAL reclamation evidence")
     actual_names = {path.name for path in entries}
     if actual_names != expected_names:
-        reasons.append("WAL reclamation evidence file set changed from the exact 10k/100k receipts")
+        reasons.append(
+            "WAL reclamation evidence file set changed from the exact predeclared receipts"
+        )
 
     records = []
     source_shas = set()
-    for retained in _WAL_RECLAMATION_RETAINED:
-        receipt_path = directory / f"retained-{retained}.json"
-        summary_path = directory / f"retained-{retained}-summary.json"
+    for stem, expected_config in _WAL_RECLAMATION_CASES:
+        receipt_path = directory / f"{stem}.json"
+        summary_path = directory / f"{stem}-summary.json"
         if not receipt_path.is_file() or not summary_path.is_file():
             continue
         try:
             raw = _read(receipt_path)
             record, expected_summary = _normalize_wal_reclamation_receipt(
                 raw,
-                retained,
+                expected_config,
                 [receipt_path.name, summary_path.name],
             )
             expected_summary["receipt_sha256"] = digest(receipt_path)
             recorded_summary = _read(summary_path)
             _require_wal(recorded_summary == expected_summary,
-                         f"retained-{retained} verifier summary disagrees")
+                         f"{stem} verifier summary disagrees")
             records.append(record)
             source_shas.add(record["engine"]["version"])
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-            reasons.append(f"retained-{retained}: {error}")
+            reasons.append(f"{stem}: {error}")
     if len(source_shas) > 1:
         reasons.append("WAL reclamation receipts use different Rafter revisions")
-    if len(records) != len(_WAL_RECLAMATION_RETAINED):
-        reasons.append("WAL reclamation evidence did not normalize both retained-suffix shapes")
+    if len(records) != len(_WAL_RECLAMATION_CASES):
+        reasons.append(
+            "WAL reclamation evidence did not normalize all predeclared retained-suffix shapes"
+        )
     if reasons:
         for record in records:
             record["qualification"] = "failed"

@@ -300,7 +300,7 @@ def _storage_section(storage: dict | None, reclamation: dict | None) -> dict:
             if storage is None:
                 section.update(
                     status="mixed result",
-                    result=("Combined WAL physical reclamation passed its 10k/100k retained-suffix "
+                    result=("Combined WAL physical reclamation passed its 512/10k/100k retained-suffix "
                             "component qualification; comparative persistence performance was not selected."),
                     conditions=("Selected Rafter revision: "
                                 f"{_brief_version(records[0]['engine']['version'])}."),
@@ -990,7 +990,7 @@ def _failure_section(durable: dict | None, anomalies: list[dict],
                 "name": "WAL physical-reclamation component",
                 "passed_cases": len(reclamation["records"]),
                 "scope": (
-                    "10k and 100k retained suffixes across repeated writes, snapshots, compaction, "
+                    "512, 10k, and 100k retained suffixes across repeated writes, snapshots, compaction, "
                     "physical cleanup, and exact reopen; not complete-service traffic or latency evidence"
                 ),
             })
@@ -1273,7 +1273,9 @@ def render_markdown(summary: dict, evidence: dict) -> str:
         elif section_id == "failure-and-sustained-operation" and section["checks"]:
             for check in section["checks"]:
                 if "passed_cases" in check:
-                    lines.append(f"- {check['name']}: {check['passed_cases']} cases passed — {check['scope']}")
+                    count = check["passed_cases"]
+                    noun = "case" if count == 1 else "cases"
+                    lines.append(f"- {check['name']}: {count} {noun} passed — {check['scope']}")
                 else:
                     scenarios = ", ".join(f"{item['scenario']} {item['status']}" for item in check["scenarios"])
                     lines.append(f"- {check['name']}: {scenarios} — {check['scope']}")
@@ -1568,8 +1570,14 @@ def render_html(summary: dict, evidence: dict) -> str:
         elif section_id == "failure-and-sustained-operation" and section["checks"]:
             items = []
             for check in section["checks"]:
-                value = (f"{check['passed_cases']} cases passed" if "passed_cases" in check else
-                         ", ".join(f"{item['scenario']} {item['status']}" for item in check["scenarios"]))
+                if "passed_cases" in check:
+                    count = check["passed_cases"]
+                    noun = "case" if count == 1 else "cases"
+                    value = f"{count} {noun} passed"
+                else:
+                    value = ", ".join(
+                        f"{item['scenario']} {item['status']}" for item in check["scenarios"]
+                    )
                 items.append(f"<li><strong>{html.escape(check['name'])}:</strong> {html.escape(value)} — {html.escape(check['scope'])}</li>")
             content.append("<ul>" + "".join(items) + "</ul>")
         if section_id == "failure-and-sustained-operation" and section.get("reclamation_under_load"):

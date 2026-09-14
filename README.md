@@ -215,8 +215,9 @@ Generate or regenerate a layered report from immutable evidence with:
   --output /path/to/new-report
 ```
 
-The WAL reclamation importer expects the exact 10,000- and 100,000-entry
-component receipts plus their independently hashed summaries. It replays
+The WAL reclamation importer expects the exact 512-, 10,000-, and 100,000-entry
+retained-suffix component receipts plus their independently hashed summaries.
+The 512-entry shape retires 102,400 entries per round. The importer replays
 physical-file, accounting, phase, and reopen invariants. The report labels
 runner timings as diagnostics and does not promote this component check into
 complete-service or competitor performance evidence.
