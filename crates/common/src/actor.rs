@@ -2,14 +2,14 @@
 //! Durable engine effects precede application fsync and client acknowledgment.
 use crate::{
     diagnostics::Diagnostics,
-    model::{Applied, Command, DurableModel},
+    model::{ApplicationSnapshot, Applied, Command, DurableModel},
     net::{outbound::Outbound, Handler},
     Config, Reply, Request, CONTRACT,
 };
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{btree_map::Entry, BTreeMap, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc, Arc,
@@ -17,6 +17,31 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
+
+const DIAGNOSTIC_METRICS: &[&str] = &[
+    "application_batch_entries",
+    "application_dispatch_to_client_completion_ns",
+    "application_queue_ns",
+    "application_snapshot_encode_ns",
+    "journal_checkpoint_publish_ns",
+    "journal_checkpoint_sync_ns",
+    "journal_checkpoint_write_ns",
+    "journal_encode_ns",
+    "journal_sync_ns",
+    "journal_write_ns",
+    "owner_client_queue_ns",
+    "owner_peer_queue_ns",
+    "owner_persistence_blocked_ns",
+    "owner_replication_ack_queue_ns",
+    "peer_outbound_queue_ns",
+    "peer_receive_to_durable_outputs_ns",
+    "sampled_application_dispatched_to_durable_ns",
+    "sampled_application_durable_to_client_completion_ns",
+    "sampled_client_ingress_to_client_completion_ns",
+    "sampled_client_ingress_to_raft_commit_observed_ns",
+    "sampled_raft_commit_observed_to_application_dispatched_ns",
+    "sampled_raft_commit_observed_to_client_completion_ns",
+];
 
 pub enum Effect {
     Send {
@@ -26,6 +51,9 @@ pub enum Effect {
     Apply {
         index: u64,
         command: Option<Command>,
+    },
+    InstallSnapshot {
+        snapshot: ApplicationSnapshot,
     },
 }
 pub trait Engine: Send + 'static {
@@ -52,13 +80,51 @@ pub trait Engine: Send + 'static {
     fn last_index(&self) -> u64 {
         0
     }
+    fn snapshot_compaction_supported(&self) -> bool {
+        false
+    }
+    fn snapshot_index(&self) -> u64 {
+        0
+    }
+    fn compact_snapshot(&mut self, _applied_index: u64, _payload: &[u8]) -> Result<()> {
+        bail!("snapshot compaction is unsupported by this engine")
+    }
     fn committed_entries(&self, _after: u64, _count: usize, _bytes: usize) -> Result<Vec<Applied>> {
         bail!("ordered application is unsupported by this build")
     }
     fn decode_peer(&self, from: u64, data: &[u8]) -> Result<Self::Peer>;
+    /// Optional queue-delay metric for one decoded peer input.
+    fn peer_queue_metric(_peer: &Self::Peer) -> Option<&'static str> {
+        None
+    }
     fn peer_gate(&self, max_events: usize, max_bytes: usize) -> Self::Gate;
     fn admit_peer(gate: &mut Self::Gate, peer: &Self::Peer) -> bool;
     fn peer_batch(&mut self, peers: Vec<Self::Peer>) -> Result<Vec<Effect>>;
+    /// Whether this peer batch can safely share one durable step with ready client proposals.
+    fn can_batch_proposals_with_peer(&self, _peers: &[Self::Peer]) -> bool {
+        false
+    }
+    /// Whether this peer batch can safely run before already-collected proposals and a bounded
+    /// prefix of ready, unsubmitted execute requests.
+    fn can_prioritize_peer_before_proposals(&self, _peers: &[Self::Peer]) -> bool {
+        false
+    }
+    /// Processes a peer batch followed by client proposals in their observed order.
+    fn peer_batch_and_propose(
+        &mut self,
+        _peers: Vec<Self::Peer>,
+        _commands: Vec<Command>,
+    ) -> Result<Vec<Effect>> {
+        bail!("engine declared combined peer/proposal batching without implementing it")
+    }
+    /// Processes client proposals followed by a peer batch in their observed order.
+    fn propose_and_peer_batch(
+        &mut self,
+        _commands: Vec<Command>,
+        _peers: Vec<Self::Peer>,
+    ) -> Result<Vec<Effect>> {
+        bail!("engine declared combined proposal/peer batching without implementing it")
+    }
     fn leader(&self) -> Option<u64>;
     fn is_leader(&self) -> bool;
     fn tick(&mut self) -> Result<Vec<Effect>>;
@@ -120,6 +186,10 @@ impl Actor {
             .max(1);
         let client_slots = Arc::new(tokio::sync::Semaphore::new(client_limit));
         let diagnostics = Diagnostics::new(config.diagnostics);
+        for metric in DIAGNOSTIC_METRICS {
+            diagnostics.declare(metric);
+        }
+        model.set_application_checkpoint_bytes(config.application_checkpoint_bytes);
         model.set_diagnostics(diagnostics.clone());
         let (tx, rx) = mpsc::sync_channel(config.capacity);
         let tx = Arc::new(tx);
@@ -173,9 +243,28 @@ impl Actor {
                 peer_batches: 0,
                 peer_events: 0,
                 peer_batch_sizes: BTreeMap::new(),
+                prioritized_peer_batches: 0,
+                prioritized_peer_events: 0,
+                prioritized_client_inputs_bypassed: 0,
+                pre_persistence_client_completions: 0,
+                snapshot_compactions: 0,
+                snapshot_compaction_total_ns: 0,
+                snapshot_compaction_max_ns: 0,
+                snapshot_compaction_buckets_log2: vec![0; 64],
+                snapshot_payload_bytes: 0,
+                application_snapshots_installed: 0,
             };
             state.engine.start(state.config.diagnostics);
-            if let Err(e) = state.effects(recovered).and_then(|_| state.run(rx)) {
+            let supported = state.config.snapshot_interval_entries == 0
+                || state.engine.snapshot_compaction_supported();
+            let result = if supported {
+                state.effects(recovered).and_then(|_| state.run(rx))
+            } else {
+                Err(anyhow::anyhow!(
+                    "snapshot compaction was configured for an unsupported engine"
+                ))
+            };
+            if let Err(e) = result {
                 eprintln!("fatal benchmark node error: {e:#}");
                 std::process::exit(1);
             }
@@ -194,6 +283,8 @@ mod persistence;
 type OutboundPeers = BTreeMap<u64, Outbound>;
 
 type PendingCommands = BTreeMap<(String, u64), (Command, Vec<oneshot::Sender<Reply>>)>;
+type ArrivalTimes = Option<Vec<Option<Instant>>>;
+type ReadyPeers<P> = (Vec<P>, ArrivalTimes);
 
 struct State<E> {
     diagnostics: Diagnostics,
@@ -211,6 +302,16 @@ struct State<E> {
     peer_batches: u64,
     peer_events: u64,
     peer_batch_sizes: BTreeMap<usize, u64>,
+    prioritized_peer_batches: u64,
+    prioritized_peer_events: u64,
+    prioritized_client_inputs_bypassed: u64,
+    pre_persistence_client_completions: u64,
+    snapshot_compactions: u64,
+    snapshot_compaction_total_ns: u64,
+    snapshot_compaction_max_ns: u64,
+    snapshot_compaction_buckets_log2: Vec<u64>,
+    snapshot_payload_bytes: u64,
+    application_snapshots_installed: u64,
 }
 impl<E: Engine> State<E> {
     fn run(&mut self, rx: mpsc::Receiver<Input>) -> Result<()> {
@@ -218,8 +319,16 @@ impl<E: Engine> State<E> {
         let mut next = Instant::now() + tick;
         let mut deferred = VecDeque::new();
         loop {
+            if self.config.durable_completion_priority && self.engine.persistence_pending() {
+                let pending_before = self.pending_count;
+                self.complete_applies()?;
+                self.pre_persistence_client_completions = self
+                    .pre_persistence_client_completions
+                    .saturating_add(pending_before.saturating_sub(self.pending_count) as u64);
+            }
             self.complete_persistence()?;
             self.complete_applies()?;
+            self.maybe_compact_snapshot()?;
             self.dispatch_applies()?;
             if Instant::now() >= next {
                 let e = self.engine.tick()?;
@@ -254,7 +363,7 @@ impl<E: Engine> State<E> {
                 Input::Wake => continue,
                 Input::Peer(from, data, queued) => {
                     self.diagnostics.elapsed("owner_peer_queue_ns", queued);
-                    let mut arrivals = vec![queued];
+                    let mut arrivals = self.diagnostics.enabled().then(|| vec![queued]);
                     let peers = peer::collect(
                         &self.engine,
                         from,
@@ -263,15 +372,35 @@ impl<E: Engine> State<E> {
                         &rx,
                         &mut deferred,
                         &self.diagnostics,
-                        &mut arrivals,
+                        arrivals.as_mut(),
                     )?;
                     self.peer_batches += 1;
                     self.peer_events += peers.len() as u64;
                     *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
-                    let e = self.engine.peer_batch(peers)?;
-                    for queued in arrivals {
-                        self.diagnostics
-                            .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                    if let Some(arrivals) = &arrivals {
+                        for (peer, queued) in peers.iter().zip(arrivals) {
+                            if let Some(metric) = E::peer_queue_metric(peer) {
+                                self.diagnostics.elapsed(metric, *queued);
+                            }
+                        }
+                    }
+                    let mut commands = Vec::new();
+                    if self.config.combine_peer_proposals
+                        && self.engine.can_batch_proposals_with_peer(&peers)
+                    {
+                        self.collect_ready_execute_clients(&rx, &mut deferred, &mut commands)?;
+                    }
+                    let e = if commands.is_empty() {
+                        self.engine.peer_batch(peers)?
+                    } else {
+                        self.diagnostics.proposals_submitted(&commands);
+                        self.engine.peer_batch_and_propose(peers, commands)?
+                    };
+                    if let Some(arrivals) = arrivals {
+                        for queued in arrivals {
+                            self.diagnostics
+                                .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                        }
                     }
                     self.effects(e)?;
                 }
@@ -279,24 +408,217 @@ impl<E: Engine> State<E> {
                     self.diagnostics.elapsed("owner_client_queue_ns", queued);
                     let mut commands = Vec::new();
                     self.client(request, reply, queued, &mut commands)?;
-                    while commands.len() < self.config.batch_size {
-                        match deferred.pop_front().or_else(|| rx.try_recv().ok()) {
-                            Some(Input::Client(q, r, queued)) => {
-                                self.diagnostics.elapsed("owner_client_queue_ns", queued);
-                                self.client(q, r, queued, &mut commands)?;
-                            }
-                            Some(i) => {
-                                deferred.push_back(i);
-                                break;
-                            }
-                            None => break,
-                        }
-                    }
+                    self.collect_ready_clients(&rx, &mut deferred, &mut commands, false)?;
                     if !commands.is_empty() {
-                        self.diagnostics.proposals_submitted(&commands);
-                        let e = self.engine.propose(commands)?;
+                        let combined = if self.config.combine_peer_proposals {
+                            self.take_ready_combinable_peers(&rx, &mut deferred)?
+                        } else {
+                            None
+                        };
+                        let e = if let Some((peers, arrivals)) = combined {
+                            self.diagnostics.proposals_submitted(&commands);
+                            self.peer_batches = self.peer_batches.saturating_add(1);
+                            self.peer_events = self.peer_events.saturating_add(peers.len() as u64);
+                            *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
+                            if let Some(arrivals) = &arrivals {
+                                for (peer, queued) in peers.iter().zip(arrivals) {
+                                    if let Some(metric) = E::peer_queue_metric(peer) {
+                                        self.diagnostics.elapsed(metric, *queued);
+                                    }
+                                }
+                            }
+                            let outputs = self.engine.propose_and_peer_batch(commands, peers)?;
+                            if let Some(arrivals) = arrivals {
+                                for queued in arrivals {
+                                    self.diagnostics
+                                        .elapsed("peer_receive_to_durable_outputs_ns", queued);
+                                }
+                            }
+                            outputs
+                        } else {
+                            // Keep latency-oriented proposal batches on the speculative path.
+                            // Larger batches persist synchronously, so clearing safe replication
+                            // acknowledgments first cannot delay a speculative send.
+                            if self.config.durable_completion_priority
+                                && commands.len() > self.config.max_speculative_proposals
+                            {
+                                if let Some((peers, arrivals)) =
+                                    self.take_ready_prioritizable_peers(&rx, &mut deferred)?
+                                {
+                                    self.observe_peer_batch(&peers, arrivals.as_deref());
+                                    self.prioritized_peer_batches =
+                                        self.prioritized_peer_batches.saturating_add(1);
+                                    self.prioritized_peer_events = self
+                                        .prioritized_peer_events
+                                        .saturating_add(peers.len() as u64);
+                                    let outputs = self.engine.peer_batch(peers)?;
+                                    if let Some(arrivals) = arrivals {
+                                        for queued in arrivals {
+                                            self.diagnostics.elapsed(
+                                                "peer_receive_to_durable_outputs_ns",
+                                                queued,
+                                            );
+                                        }
+                                    }
+                                    self.effects(outputs)?;
+                                }
+                            }
+                            self.diagnostics.proposals_submitted(&commands);
+                            self.engine.propose(commands)?
+                        };
                         self.effects(e)?;
                     }
+                }
+            }
+        }
+    }
+    fn collect_ready_execute_clients(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+        commands: &mut Vec<Command>,
+    ) -> Result<()> {
+        self.collect_ready_clients(rx, deferred, commands, true)
+    }
+    fn collect_ready_clients(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+        commands: &mut Vec<Command>,
+        execute_only: bool,
+    ) -> Result<()> {
+        while commands.len() < self.config.batch_size {
+            let Some(input) = deferred.pop_front().or_else(|| rx.try_recv().ok()) else {
+                break;
+            };
+            match input {
+                Input::Client(q, r, queued) if !execute_only || q.op == "execute" => {
+                    self.diagnostics.elapsed("owner_client_queue_ns", queued);
+                    self.client(q, r, queued, commands)?;
+                }
+                other => {
+                    deferred.push_front(other);
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+    fn take_ready_combinable_peers(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+    ) -> Result<Option<ReadyPeers<E::Peer>>> {
+        self.take_ready_peers(rx, deferred, false)
+    }
+    fn take_ready_prioritizable_peers(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+    ) -> Result<Option<ReadyPeers<E::Peer>>> {
+        // This is a no-wait lookahead. It restores the original client order at the first
+        // non-execute or unsafe consensus boundary and never retains more than one batch.
+        self.take_ready_peers(rx, deferred, true)
+    }
+    fn take_ready_peers(
+        &mut self,
+        rx: &mpsc::Receiver<Input>,
+        deferred: &mut VecDeque<Input>,
+        prioritize: bool,
+    ) -> Result<Option<ReadyPeers<E::Peer>>> {
+        let mut bypassed = Vec::new();
+        let (from, data, queued) = loop {
+            let Some(input) =
+                deferred
+                    .pop_front()
+                    .or_else(|| if prioritize { rx.try_recv().ok() } else { None })
+            else {
+                Self::restore_deferred(deferred, bypassed);
+                return Ok(None);
+            };
+            match input {
+                Input::Peer(from, data, queued) => break (from, data, queued),
+                Input::Client(request, reply, queued)
+                    if prioritize
+                        && request.op == "execute"
+                        && bypassed.len() < self.config.batch_size =>
+                {
+                    bypassed.push(Input::Client(request, reply, queued));
+                }
+                boundary => {
+                    deferred.push_front(boundary);
+                    Self::restore_deferred(deferred, bypassed);
+                    return Ok(None);
+                }
+            }
+        };
+        let first = self.engine.decode_peer(from, &data)?;
+        let eligible = if prioritize {
+            self.engine
+                .can_prioritize_peer_before_proposals(std::slice::from_ref(&first))
+        } else {
+            self.engine
+                .can_batch_proposals_with_peer(std::slice::from_ref(&first))
+        };
+        if !eligible {
+            deferred.push_front(Input::Peer(from, data, queued));
+            Self::restore_deferred(deferred, bypassed);
+            return Ok(None);
+        }
+        self.diagnostics.elapsed("owner_peer_queue_ns", queued);
+        let mut gate = self
+            .engine
+            .peer_gate(self.config.peer_batch_size, 256 * 1024);
+        let admitted = E::admit_peer(&mut gate, &first);
+        let mut peers = vec![first];
+        let mut arrivals = self.diagnostics.enabled().then(|| vec![queued]);
+        if admitted {
+            while peers.len() < self.config.peer_batch_size {
+                let Some(input) = deferred.pop_front().or_else(|| rx.try_recv().ok()) else {
+                    break;
+                };
+                if let Input::Peer(from, data, queued) = &input {
+                    let peer = self.engine.decode_peer(*from, data)?;
+                    if E::admit_peer(&mut gate, &peer) {
+                        peers.push(peer);
+                        let eligible = if prioritize {
+                            self.engine.can_prioritize_peer_before_proposals(&peers)
+                        } else {
+                            self.engine.can_batch_proposals_with_peer(&peers)
+                        };
+                        if eligible {
+                            self.diagnostics.elapsed("owner_peer_queue_ns", *queued);
+                            if let Some(arrivals) = &mut arrivals {
+                                arrivals.push(*queued);
+                            }
+                            continue;
+                        }
+                        peers.pop();
+                    }
+                }
+                deferred.push_front(input);
+                break;
+            }
+        }
+        self.prioritized_client_inputs_bypassed = self
+            .prioritized_client_inputs_bypassed
+            .saturating_add(bypassed.len() as u64);
+        Self::restore_deferred(deferred, bypassed);
+        Ok(Some((peers, arrivals)))
+    }
+    fn restore_deferred(deferred: &mut VecDeque<Input>, inputs: Vec<Input>) {
+        for input in inputs.into_iter().rev() {
+            deferred.push_front(input);
+        }
+    }
+    fn observe_peer_batch(&mut self, peers: &[E::Peer], arrivals: Option<&[Option<Instant>]>) {
+        self.peer_batches = self.peer_batches.saturating_add(1);
+        self.peer_events = self.peer_events.saturating_add(peers.len() as u64);
+        *self.peer_batch_sizes.entry(peers.len()).or_default() += 1;
+        if let Some(arrivals) = arrivals {
+            for (peer, queued) in peers.iter().zip(arrivals) {
+                if let Some(metric) = E::peer_queue_metric(peer) {
+                    self.diagnostics.elapsed(metric, *queued);
                 }
             }
         }
@@ -316,6 +638,22 @@ impl<E: Engine> State<E> {
                     "diagnostics":self.diagnostics.status_snapshot(),"peer_batches":self.peer_batches,"peer_events":self.peer_events,
                     "peer_batch_sizes":self.peer_batch_sizes,
                     "peer_message_stream":self.config.peer_message_stream,
+                    "wal_reclamation_bytes":self.config.wal_reclamation_bytes,
+                    "combine_peer_proposals":self.config.combine_peer_proposals,
+                    "durable_completion_priority":{"enabled":self.config.durable_completion_priority,
+                        "prioritized_peer_batches":self.prioritized_peer_batches,
+                        "prioritized_peer_events":self.prioritized_peer_events,
+                        "prioritized_client_inputs_bypassed":self.prioritized_client_inputs_bypassed,
+                        "pre_persistence_client_completions":self.pre_persistence_client_completions},
+                    "snapshot_compaction":{"interval_entries":self.config.snapshot_interval_entries,
+                        "completed":self.snapshot_compactions,
+                        "current_index":self.engine.snapshot_index(),
+                        "timing_scope":"Raft snapshot publication, WAL compaction, bounded retired-log handoff, snapshot pruning, and size-triggered atomic application-journal checkpointing; application snapshot encoding is reported separately as application_snapshot_encode_ns; excludes accepted background destruction",
+                        "total_ns":self.snapshot_compaction_total_ns,
+                        "max_ns":self.snapshot_compaction_max_ns,
+                        "buckets_log2":self.snapshot_compaction_buckets_log2,
+                        "latest_payload_bytes":self.snapshot_payload_bytes,
+                        "application_installs":self.application_snapshots_installed},
                     "transport":self.outbound.iter().map(|(id,peer)|(id.to_string(),peer.stats())).collect::<BTreeMap<_,_>>(),
                     "peer_drops":self.dropped.load(Ordering::Relaxed)});
                 self.application.query(crate::apply_worker::Query {
@@ -362,23 +700,22 @@ impl<E: Engine> State<E> {
                     return Ok(());
                 }
                 let identity = c.identity();
-                if let Some((prior, _)) = self.pending.get(&identity) {
-                    if prior != &c {
-                        let _ = reply.send(Reply::applied(crate::model::Outcome {
-                            error: Some("identity_conflict".into()),
-                            ..Default::default()
-                        }));
-                        return Ok(());
+                match self.pending.entry(identity) {
+                    Entry::Occupied(mut pending) => {
+                        if pending.get().0 != c {
+                            let _ = reply.send(Reply::applied(crate::model::Outcome {
+                                error: Some("identity_conflict".into()),
+                                ..Default::default()
+                            }));
+                            return Ok(());
+                        }
+                        pending.get_mut().1.push(reply);
+                    }
+                    Entry::Vacant(pending) => {
+                        self.diagnostics.admit_operation(&c, queued);
+                        pending.insert((c.clone(), vec![reply]));
                     }
                 }
-                if !self.pending.contains_key(&identity) {
-                    self.diagnostics.admit_operation(&c, queued);
-                }
-                self.pending
-                    .entry(identity)
-                    .or_insert_with(|| (c.clone(), Vec::new()))
-                    .1
-                    .push(reply);
                 self.pending_count += 1;
                 commands.push(c);
             }
@@ -390,9 +727,12 @@ impl<E: Engine> State<E> {
     }
     fn effects(&mut self, effects: Vec<Effect>) -> Result<()> {
         if self.engine.persistence_pending()
-            && effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::Apply { .. }))
+            && effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::Apply { .. } | Effect::InstallSnapshot { .. }
+                )
+            })
         {
             bail!("application effect escaped pending Raft persistence")
         }
@@ -424,9 +764,22 @@ impl<E: Engine> State<E> {
                         metadata: None,
                     });
                 }
+                Effect::InstallSnapshot { snapshot } => {
+                    if !applies.is_empty() {
+                        bail!("application entries preceded a snapshot install in one Raft output batch")
+                    }
+                    self.install_application_snapshot(snapshot)?;
+                }
             }
         }
         if self.engine.persistence_pending() {
+            return Ok(());
+        }
+        self.apply_effect_entries(applies)
+    }
+
+    fn apply_effect_entries(&mut self, applies: Vec<Applied>) -> Result<()> {
+        if applies.is_empty() {
             return Ok(());
         }
         match &mut self.application {
@@ -442,7 +795,7 @@ impl<E: Engine> State<E> {
                     self.dispatched = last.index;
                     self.engine.applied(last.index);
                 }
-                let queued = vec![started; applies.len()];
+                let queued = started.map(|started| vec![Some(started); applies.len()]);
                 self.resolve_applies(applies, outcomes, queued);
             }
             application::Application::Worker(_) => self.dispatch_applies()?,

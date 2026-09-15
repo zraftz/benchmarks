@@ -5,14 +5,43 @@ from collections import defaultdict
 import json
 import math
 from pathlib import Path
+import re
 from statistics import median
 from typing import Any
 
-from .evidence import CONTRACT, verify
+from .cluster import DEFAULT_APPLICATION_CHECKPOINT_BYTES
+from .evidence import CONTRACT, digest, verify
+from .feature_coverage import verdict as feature_coverage_verdict
+from .suite_plan import execution_plan, load_window_plan
 
 
 def _read(path: Path) -> Any:
     return json.loads(path.read_text())
+
+
+def _final_snapshot_indexes(case: Path) -> Any:
+    path = case / "after-final-restart.json"
+    if not path.exists():
+        return None
+    statuses = _read(path)
+    if not isinstance(statuses, dict):
+        return statuses
+    result = {}
+    for node, status in statuses.items():
+        try:
+            result[node] = status["info"]["snapshot_compaction"]["current_index"]
+        except (KeyError, TypeError):
+            result[node] = None
+    return result
+
+
+def _is_feature_coverage_failure(item: dict) -> bool:
+    error = item.get("error", "")
+    return item.get("case", "").startswith("suite:") and (
+        "completion priority" in error
+        or "completion-priority" in error
+        or "combined peer/proposal" in error
+    )
 
 
 def _mode(options: dict) -> str:
@@ -66,13 +95,19 @@ def _engine(manifest: dict) -> dict:
 def _display_name(manifest: dict) -> str:
     engine = manifest["implementation"]
     if engine != "rafter":
-        return {"openraft": "OpenRaft", "raft-rs": "raft-rs"}.get(engine, engine)
+        if engine == "openraft":
+            return ("OpenRaft async flusher" if manifest.get("options", {}).get("openraft_async_flush")
+                    else "OpenRaft synchronous")
+        return {"raft-rs": "raft-rs"}.get(engine, engine)
+    mode = _mode(manifest.get("options", {}))
+    if mode == "pipeline":
+        priority = manifest.get("options", {}).get("durable_completion_priority", False)
+        return "Rafter pipeline + completion priority" if priority else "Rafter pipeline FIFO"
     return {
-        "pipeline": "Rafter pipeline",
         "messages": "Rafter synchronous messages",
         "worker": "Rafter ordered worker",
         "inline": "Rafter inline",
-    }[_mode(manifest.get("options", {}))]
+    }[mode]
 
 
 def _workload(manifest: dict, measurement: dict | None) -> dict:
@@ -88,6 +123,7 @@ def _workload(manifest: dict, measurement: dict | None) -> dict:
         "duration_seconds": config.get("duration_seconds", options.get("duration")),
         "warmup_seconds": options.get("warmup"),
         "network_delay_ms": options.get("network_delay_ms", 0),
+        "snapshot_interval_entries": options.get("snapshot_interval_entries", 0),
     }
 
 
@@ -106,11 +142,21 @@ def _normalize_case(case: Path, root: Path) -> dict:
         metrics = {
             "throughput_ops_s": measurement.get("successful_ops_per_second"),
             "client_p99_ms": measurement.get("success_latency", {}).get("p99_ms"),
+            "client_p999_ms": measurement.get("success_latency", {}).get("p999_ms"),
             "execution_p99_ms": measurement.get("success_execution_latency", {}).get("p99_ms"),
+            "execution_p999_ms": measurement.get("success_execution_latency", {}).get("p999_ms"),
+            "client_start_p99_ms": measurement.get("worker_start_lateness", {}).get("p99_ms"),
+            "scheduler_dispatch_p99_ms": measurement.get("scheduler_lateness", {}).get("p99_ms"),
+            "scheduler_dispatch_p999_ms": measurement.get("scheduler_lateness", {}).get("p999_ms"),
         }
         accounting = {key: measurement.get(key) for key in
-                      ("offered", "attempted", "ok", "errors", "unknown", "not_issued")}
+                      ("offered", "attempted", "ok", "completed_in_window", "errors", "unknown", "not_issued")}
     receipt = manifest.get("build_receipt") or {}
+    load_environment = (
+        _read(case / "load-environment.json")
+        if (case / "load-environment.json").exists()
+        else None
+    )
     return {
         "layer": "complete_service",
         "source_case": case.relative_to(root).as_posix(),
@@ -122,6 +168,19 @@ def _normalize_case(case: Path, root: Path) -> dict:
             "hard_state": receipt.get("rafter_hard_state_backend") if manifest["implementation"] == "rafter" else "adapter_journal",
             "peer_batch_size": options.get("peer_batch_size", 1),
             "client_batch_size": options.get("batch_size"),
+            "max_speculative_proposals": options.get("max_speculative_proposals", 1),
+            "max_inflight_appends": options.get("max_inflight_appends", 8),
+            "combine_peer_proposals": bool(options.get("combine_peer_proposals", False)),
+            "durable_completion_priority": bool(options.get("durable_completion_priority", False)),
+            "openraft_async_flush": bool(options.get("openraft_async_flush", False)),
+            "snapshot_interval_entries": options.get("snapshot_interval_entries", 0),
+            "application_checkpoint_bytes": options.get(
+                "application_checkpoint_bytes", DEFAULT_APPLICATION_CHECKPOINT_BYTES
+            ),
+            # Absence is preserved for evidence produced before this control
+            # existed; assigning today's default would misdescribe the old
+            # binary's immediate-reclamation behavior.
+            "wal_reclamation_bytes": options.get("wal_reclamation_bytes"),
         },
         "workload": _workload(manifest, measurement),
         "completion_boundary": (measurement or {}).get("contract", CONTRACT),
@@ -130,17 +189,38 @@ def _normalize_case(case: Path, root: Path) -> dict:
         "metric_definitions": {
             "throughput_ops_s": "successful logical operations completed inside the measurement window per second",
             "client_p99_ms": "scheduled arrival to successful client completion; upper-bound histogram p99",
+            "client_p999_ms": "scheduled arrival to successful client completion; upper-bound histogram p99.9",
             "execution_p99_ms": "client request start to successful completion; upper-bound histogram p99",
+            "execution_p999_ms": "client request start to successful completion; upper-bound histogram p99.9",
+            "client_start_p99_ms": "scheduled arrival to client request start; upper-bound histogram p99",
+            "scheduler_dispatch_p99_ms": "scheduled arrival to load-generator dispatch attempt; upper-bound histogram p99",
+            "scheduler_dispatch_p999_ms": "scheduled arrival to load-generator dispatch attempt; upper-bound histogram p99.9",
             "aggregate": "median of per-repetition values; percentiles are not pooled",
         },
         "repetition": options.get("seed"),
         "smoke": bool(manifest.get("smoke")),
         "qualification": qualification,
         "qualification_errors": errors,
+        "verdicts": checked.get("verdicts", {
+            "evidence_integrity": {"status": qualification, "errors": errors},
+            "correctness_checks": {"status": qualification, "errors": errors},
+        }),
         "metrics": metrics,
         "accounting": accounting,
+        "load_environment": load_environment,
         "recovery": _read(case / "recovery.json") if (case / "recovery.json").exists() else None,
+        "final_snapshot_indexes": _final_snapshot_indexes(case),
         "history_check": _read(case / "qualification.json") if (case / "qualification.json").exists() else None,
+        "snapshot_reclamation": (
+            _read(case / "snapshot-compaction-activity.json")
+            if (case / "snapshot-compaction-activity.json").exists()
+            else None
+        ),
+        "storage_footprint": (
+            _read(case / "storage-footprint.json")
+            if (case / "storage-footprint.json").exists()
+            else None
+        ),
     }
 
 
@@ -148,24 +228,140 @@ def _expected_durable_cases(suite: dict) -> int:
     if "arms" in suite:
         delays = len(suite.get("network_delays_ms", [0]))
         timing = delays * len(suite["arms"]) * len(suite["rates"]) * suite["runs"]
-        diagnostic_arms = min(3, len(suite["arms"]))
-        diagnostics = delays * diagnostic_arms * len(suite["rates"])
+        diagnostic_arms = len(suite.get("diagnostic_arms", [])) or min(3, len(suite["arms"]))
+        diagnostic_rates = len(suite.get("diagnostic_rates", suite["rates"]))
+        diagnostics = delays * diagnostic_arms * diagnostic_rates
         return timing + diagnostics
     return len(suite["implementations"]) * len(suite["rates"]) * suite["runs"]
 
 
-def load_durable_suite(directory: Path) -> dict:
+def _execution_plan_errors(directory: Path, suite: dict) -> list[str]:
+    recorded = suite.get("execution_plan")
+    schema = suite.get("schema", 1)
+    if type(schema) is not int or schema not in (1, 2, 3, 4, 5):
+        return ["unsupported durable suite schema"]
+    if schema < 3:
+        return ["unexpected execution plan on legacy suite"] if recorded is not None else []
+    errors = []
+    try:
+        expected = execution_plan(suite)
+    except (KeyError, TypeError, ValueError) as error:
+        return [f"execution plan could not be derived: {error}"]
+    if recorded != expected:
+        errors.append("recorded execution plan differs from suite declaration")
+    if schema >= 5 and suite.get("load_window_plan") != load_window_plan(expected):
+        errors.append("recorded load-window plan differs from execution plan")
+    benchmark_repository = suite.get("benchmark_repository")
+    if schema >= 5:
+        exact_commit = (
+            isinstance(benchmark_repository, dict)
+            and set(benchmark_repository) == {"commit", "status"}
+            and isinstance(benchmark_repository.get("commit"), str)
+            and len(benchmark_repository["commit"]) == 40
+            and all(
+                character in "0123456789abcdef"
+                for character in benchmark_repository["commit"]
+            )
+            and benchmark_repository.get("status") == "clean"
+        )
+        if not exact_commit:
+            errors.append("benchmark repository identity is not an exact clean commit")
+    manifests = {path.parent.name: path for path in directory.glob("*/manifest.json")}
+    expected_names = {item["name"] for item in expected}
+    if set(manifests) != expected_names:
+        errors.append("primary case inventory differs from execution plan")
+        return errors
+    for item in expected:
+        manifest = _read(manifests[item["name"]])
+        if manifest.get("implementation") != item["implementation"]:
+            errors.append(f"case implementation differs from plan: {item['name']}")
+        if manifest.get("scenario") != "durable-kv" or manifest.get("smoke") is not False:
+            errors.append(f"case classification differs from plan: {item['name']}")
+        if manifest.get("options") != item["options"]:
+            errors.append(f"case options differ from plan: {item['name']}")
+        if schema >= 5 and isinstance(benchmark_repository, dict):
+            git = manifest.get("host", {}).get("git", {})
+            if (
+                git.get("returncode") != 0
+                or git.get("stdout", "").lower()
+                != benchmark_repository.get("commit")
+            ):
+                errors.append(
+                    f"case benchmark repository differs from suite: {item['name']}"
+                )
+    return errors
+
+
+def _load_machine_qualification(directory: Path, suite: dict) -> tuple[dict | None, list[str]]:
+    declared = suite.get("machine_qualification")
+    receipt_path = directory / "machine-qualification.json"
+    if declared is None:
+        return (None, ["undeclared machine qualification receipt"] if receipt_path.exists() else [])
+    errors = []
+    receipt = None
+    try:
+        receipt = _read(receipt_path)
+        if receipt != declared:
+            errors.append("suite machine qualification differs from its receipt")
+        if not isinstance(receipt, dict):
+            return receipt, errors + ["machine qualification receipt is not an object"]
+        expected_keys = {"schema", "status", "profile", "seal_sha256", "data_root", "verification"}
+        if set(receipt) != expected_keys or receipt.get("schema") != 1:
+            errors.append("unsupported machine qualification receipt")
+        profile_name = receipt.get("profile")
+        if profile_name != "machine-profile":
+            errors.append("machine profile path is not the fixed suite-local directory")
+        else:
+            profile = directory / profile_name
+            checked = verify(profile)
+            if not isinstance(checked, dict):
+                return receipt, errors + ["machine profile replay verdict is not an object"]
+            if checked.get("status") != "passed" or receipt.get("status") != "passed":
+                errors.append("machine qualification did not pass replay")
+            if receipt.get("verification") != checked.get("verdicts"):
+                errors.append("machine qualification verification differs from replay")
+            if receipt.get("seal_sha256") != digest(profile / "SHA256SUMS.json"):
+                errors.append("machine profile seal digest differs")
+        data_root = suite.get("data_root")
+        if not isinstance(data_root, str) or receipt.get("data_root") != str(Path(data_root).parent):
+            errors.append("machine qualification data root differs from case storage root")
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        errors.append(f"machine qualification could not be replayed: {error}")
+    return receipt, errors
+
+
+def load_durable_suite(directory: Path, *, require_derived: bool = True) -> dict:
     directory = directory.resolve()
     suite = _read(directory / "suite.json")
     completion = _read(directory / "completion.json")
     cases = [_normalize_case(path.parent, directory) for path in sorted(directory.glob("*/manifest.json"))]
-    reasons = [f"runner failure: {item}" for item in completion.get("failures", [])]
+    legacy_coverage_messages = []
+    runner_failures = []
+    for item in completion.get("failures", []):
+        if _is_feature_coverage_failure(item):
+            legacy_coverage_messages.append(item)
+        else:
+            runner_failures.append(item)
+    integrity_reasons = [f"runner failure: {item}" for item in runner_failures]
+    correctness_reasons = []
+    integrity_reasons.extend(_execution_plan_errors(directory, suite))
+    machine_qualification, machine_errors = _load_machine_qualification(directory, suite)
+    integrity_reasons.extend(machine_errors)
     expected = _expected_durable_cases(suite)
     if len(cases) != expected:
-        reasons.append(f"expected {expected} primary cases, found {len(cases)}")
-    failed = [case["source_case"] for case in cases if case["qualification"] != "passed"]
-    if failed:
-        reasons.append(f"failed or incomplete cases: {', '.join(failed)}")
+        integrity_reasons.append(f"expected {expected} primary cases, found {len(cases)}")
+    priority_variants = {case["configuration"]["variant"] for case in cases
+                         if case["configuration"]["durable_completion_priority"]}
+    combined_variants = {case["configuration"]["variant"] for case in cases
+                         if case["configuration"]["combine_peer_proposals"]}
+    feature_coverage = feature_coverage_verdict(
+        directory, completion_priority=priority_variants, combined=combined_variants
+    )
+    if legacy_coverage_messages:
+        feature_coverage["historical_runner_messages"] = legacy_coverage_messages
+    recorded_coverage = completion.get("feature_coverage")
+    if recorded_coverage is not None and recorded_coverage != feature_coverage:
+        integrity_reasons.append("recorded feature-coverage verdict differs from retained receipts")
     smokes = []
     for smoke_suite in sorted(directory.glob("worker-smoke-*")):
         smoke_completion = _read(smoke_suite / "completion.json")
@@ -180,15 +376,73 @@ def load_durable_suite(directory: Path) -> dict:
             "failures": smoke_completion.get("failures", []),
         })
         cases.extend(smoke_cases)
-    return {
+    integrity_failed = [case["source_case"] for case in cases
+                        if case["verdicts"]["evidence_integrity"]["status"] != "passed"]
+    if integrity_failed:
+        integrity_reasons.append(f"evidence-integrity failures: {', '.join(integrity_failed)}")
+    correctness_failed = [case["source_case"] for case in cases
+                          if case["verdicts"]["correctness_checks"]["status"] != "passed"]
+    if correctness_failed:
+        correctness_reasons.append(f"correctness-check failures: {', '.join(correctness_failed)}")
+    failed_smokes = [smoke["scenario"] for smoke in smokes if smoke["status"] != "passed"]
+    if failed_smokes:
+        correctness_reasons.append(f"failed recovery smoke: {', '.join(failed_smokes)}")
+    reasons = integrity_reasons + correctness_reasons
+    result = {
         "kind": "durable_service",
         "directory": str(directory),
         "suite": suite,
         "qualification": "passed" if not reasons else "failed",
         "qualification_errors": reasons,
+        "verdicts": {
+            "evidence_integrity": {
+                "status": "passed" if not integrity_reasons else "failed",
+                "errors": integrity_reasons,
+                "scope": "expected cases, seals, identities, receipts, and accounting",
+            },
+            "correctness_checks": {
+                "status": "passed" if not correctness_reasons else "failed",
+                "errors": correctness_reasons,
+                "scope": "finite history, restart, and smoke checks; not exhaustive proof",
+            },
+            "feature_coverage": feature_coverage,
+            "environment_qualification": {
+                "status": ("not measured" if machine_qualification is None else
+                           "failed" if machine_errors else "passed"),
+                "errors": machine_errors,
+                "scope": "sealed idle/storage profile immediately after builds; per-case pressure remains separate",
+            },
+        },
         "cases": cases,
         "smokes": smokes,
+        "machine_qualification": machine_qualification,
     }
+    if suite.get("kind") == "reclamation-under-load" and require_derived:
+        from .reclamation_load import assess
+
+        assessment_path = directory / "reclamation-under-load.json"
+        try:
+            recorded_assessment = _read(assessment_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            recorded_assessment = None
+        try:
+            assessment_schema = (
+                recorded_assessment.get("schema", 1)
+                if isinstance(recorded_assessment, dict)
+                else 2
+            )
+            expected_assessment = assess(result, schema=assessment_schema)
+        except ValueError:
+            expected_assessment = None
+        result["reclamation_under_load"] = recorded_assessment
+        if recorded_assessment != expected_assessment:
+            error = "reclamation-under-load assessment is missing or differs from sealed cases"
+            result["qualification"] = "failed"
+            result["qualification_errors"].append(error)
+            evidence = result["verdicts"]["evidence_integrity"]
+            evidence["status"] = "failed"
+            evidence["errors"].append(error)
+    return result
 
 
 def _median_metric(samples: list[dict], name: str) -> dict:
@@ -196,6 +450,15 @@ def _median_metric(samples: list[dict], name: str) -> dict:
     if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in values):
         raise ValueError(f"invalid durable metric: {name}")
     return {"median": median(values), "min": min(values), "max": max(values)}
+
+
+def _optional_median_metric(samples: list[dict], name: str) -> tuple[dict, str | None]:
+    values = [sample["metrics"].get(name) for sample in samples]
+    if all(value is None for value in values):
+        return {"median": None, "min": None, "max": None}, None
+    if any(value is None for value in values):
+        return {}, f"optional metric changed availability between repetitions: {name}"
+    return _median_metric(samples, name), None
 
 
 def aggregate_durable(data: dict) -> list[dict]:
@@ -229,10 +492,23 @@ def aggregate_durable(data: dict) -> list[dict]:
             "accounting": {},
         }
         if not reasons:
-            row["metrics"] = {name: _median_metric(samples, name) for name in
-                              ("throughput_ops_s", "client_p99_ms", "execution_p99_ms")}
-            row["accounting"] = {key: sum(sample["accounting"][key] for sample in samples)
-                                 for key in ("offered", "attempted", "ok", "errors", "unknown", "not_issued")}
+            metrics = {name: _median_metric(samples, name) for name in
+                       ("throughput_ops_s", "client_p99_ms", "client_p999_ms",
+                        "execution_p99_ms", "execution_p999_ms", "client_start_p99_ms")}
+            for name in ("scheduler_dispatch_p99_ms", "scheduler_dispatch_p999_ms"):
+                summary, error = _optional_median_metric(samples, name)
+                if error:
+                    reasons.append(error)
+                else:
+                    metrics[name] = summary
+            if not reasons:
+                row["metrics"] = metrics
+                row["accounting"] = {key: sum(sample["accounting"][key] for sample in samples)
+                                     for key in ("offered", "attempted", "ok", "completed_in_window",
+                                                 "errors", "unknown", "not_issued")}
+            else:
+                row["qualification"] = "failed"
+                row["qualification_errors"] = reasons
         rows.append(row)
     return rows
 
@@ -275,7 +551,7 @@ def load_microbench(directory: Path) -> dict:
             "measurement_mode": "timing",
             "metric_definitions": {
                 "throughput_ops_s": "proposals completed per elapsed benchmark second",
-                "client_p99_us": "submission to the adapter-specific completion boundary; median per-run p99",
+                "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
                 "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
             },
             "repetitions": row["runs"],
@@ -395,4 +671,301 @@ def load_storage_comparison(directory: Path) -> dict:
         "qualification_errors": reasons,
         "records": records,
         "sync_probes": probes,
+    }
+
+
+_WAL_RECLAMATION_CASES = (
+    ("retired-102400", {
+        "retained_entries": 512,
+        "rounds": 3,
+        "batches_per_round": 25,
+        "batch_size": 4_096,
+        "payload_bytes": 64,
+    }),
+    ("retained-10000", {
+        "retained_entries": 10_000,
+        "rounds": 3,
+        "batches_per_round": 64,
+        "batch_size": 8,
+        "payload_bytes": 64,
+    }),
+    ("retained-100000", {
+        "retained_entries": 100_000,
+        "rounds": 3,
+        "batches_per_round": 64,
+        "batch_size": 8,
+        "payload_bytes": 64,
+    }),
+)
+_WAL_RECLAMATION_PHASES = {
+    "wal_reclamation",
+    "wal_checkpoint_prepare",
+    "wal_manifest_publish",
+    "wal_cleanup",
+}
+_WAL_RECLAMATION_GENERATION = re.compile(
+    r"^raft-wal-(checkpoint|segment)-(\d{20})\.(rfwc|rfwb)$"
+)
+
+
+def _require_wal(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def _check_wal_latency(value: dict, expected_count: int, name: str) -> None:
+    _require_wal(
+        isinstance(value, dict) and set(value) == {"count", "p50_ns", "p99_ns", "max_ns"},
+        f"{name} latency shape changed",
+    )
+    _require_wal(value["count"] == expected_count, f"{name} latency count disagrees")
+    _require_wal(
+        0 <= value["p50_ns"] <= value["p99_ns"] <= value["max_ns"],
+        f"{name} latency ordering disagrees",
+    )
+
+
+def _check_wal_inventory(value: dict, generation: int, expected_bytes: int, name: str) -> None:
+    _require_wal(
+        isinstance(value, dict) and set(value) == {"file_count", "bytes", "names"},
+        f"{name} inventory shape changed",
+    )
+    _require_wal(
+        value["file_count"] == 3 and len(value["names"]) == 3,
+        f"{name} did not retain exactly three managed WAL files",
+    )
+    _require_wal(value["bytes"] == expected_bytes and expected_bytes > 0,
+                 f"{name} managed WAL bytes disagree")
+    _require_wal(value["names"] == sorted(value["names"]), f"{name} names are not sorted")
+    _require_wal(value["names"].count("raft-wal-current") == 1,
+                 f"{name} has no unique authoritative manifest")
+    generations = []
+    kinds = []
+    for filename in value["names"]:
+        if filename == "raft-wal-current":
+            continue
+        match = _WAL_RECLAMATION_GENERATION.fullmatch(filename)
+        _require_wal(match is not None, f"{name} has an unexpected managed filename")
+        kinds.append(match.group(1))
+        generations.append(int(match.group(2)))
+    _require_wal(sorted(kinds) == ["checkpoint", "segment"],
+                 f"{name} does not contain one checkpoint and one segment")
+    _require_wal(generations == [generation, generation],
+                 f"{name} files do not select generation {generation}")
+
+
+def _normalize_wal_reclamation_receipt(raw: dict, expected_config: dict,
+                                       source_cases: list[str]) -> tuple[dict, dict]:
+    _require_wal(set(raw) == {
+        "schema", "layer", "comparison_kind", "source_sha", "completion_boundary",
+        "config", "rounds", "aggregate", "phase_metrics", "final",
+    }, "top-level receipt shape changed")
+    _require_wal(raw["schema"] == 1, "unsupported reclamation receipt schema")
+    _require_wal(raw["layer"] == "durable_replication", "wrong evidence layer")
+    _require_wal(raw["comparison_kind"] == "rafter_component_qualification",
+                 "reclamation evidence was mislabeled as a competitor comparison")
+    _require_wal(re.fullmatch(r"[0-9a-f]{40}", raw["source_sha"]) is not None,
+                 "source identity is not a lowercase full SHA")
+    config = raw["config"]
+    _require_wal(config == expected_config, "reclamation qualification configuration changed")
+    retained_entries = expected_config["retained_entries"]
+    rounds = raw["rounds"]
+    _require_wal(isinstance(rounds, list) and len(rounds) == config["rounds"],
+                 "round count disagrees")
+    expected_appended = config["batches_per_round"] * config["batch_size"]
+    aggregate = raw["aggregate"]
+    _require_wal(set(aggregate) == {
+        "write_latency", "reclamation_pause", "reopen_ns", "managed_wal_bytes",
+        "managed_wal_files",
+    }, "aggregate shape changed")
+    expected_bytes = aggregate["managed_wal_bytes"]
+    pauses = []
+    for number, value in enumerate(rounds, 1):
+        _require_wal(set(value) == {
+            "round", "appended_entries", "compacted_through", "snapshot_ns",
+            "reclamation_pause_ns", "write_latency", "managed_wal",
+        }, f"round {number} shape changed")
+        _require_wal(value["round"] == number, f"round {number} sequence disagrees")
+        _require_wal(value["appended_entries"] == expected_appended,
+                     f"round {number} append accounting disagrees")
+        _require_wal(value["compacted_through"] == number * expected_appended,
+                     f"round {number} compaction boundary disagrees")
+        _require_wal(value["snapshot_ns"] > 0 and value["reclamation_pause_ns"] > 0,
+                     f"round {number} timing is absent")
+        _check_wal_latency(value["write_latency"], config["batches_per_round"],
+                           f"round {number} writes")
+        _check_wal_inventory(value["managed_wal"], number, expected_bytes, f"round {number}")
+        pauses.append(value["reclamation_pause_ns"])
+    _check_wal_latency(
+        aggregate["write_latency"],
+        config["rounds"] * config["batches_per_round"],
+        "aggregate writes",
+    )
+    _check_wal_latency(aggregate["reclamation_pause"], config["rounds"],
+                       "aggregate reclamation")
+    _require_wal(aggregate["reopen_ns"] > 0, "reopen timing is absent")
+    _require_wal(aggregate["managed_wal_files"] == 3 and expected_bytes > 0,
+                 "aggregate physical WAL bound disagrees")
+
+    metrics = raw["phase_metrics"]
+    _require_wal(
+        isinstance(metrics, list) and len(metrics) == 4
+        and {metric.get("name") for metric in metrics} == _WAL_RECLAMATION_PHASES,
+        "reclamation phase inventory disagrees",
+    )
+    by_name = {}
+    for metric in metrics:
+        _require_wal(set(metric) == {"name", "calls", "total_ns", "max_ns", "buckets"},
+                     "phase metric shape changed")
+        _require_wal(metric["calls"] == config["rounds"],
+                     f"{metric['name']} call count disagrees")
+        _require_wal(0 < metric["max_ns"] <= metric["total_ns"],
+                     f"{metric['name']} timing is incoherent")
+        _require_wal(sum(metric["buckets"]) == metric["calls"],
+                     f"{metric['name']} histogram accounting disagrees")
+        by_name[metric["name"]] = metric
+    overall = by_name["wal_reclamation"]["total_ns"]
+    _require_wal(
+        sum(by_name[name]["total_ns"] for name in
+            _WAL_RECLAMATION_PHASES - {"wal_reclamation"}) <= overall,
+        "nested reclamation phases exceed the overall timer",
+    )
+    _require_wal(overall <= sum(pauses),
+                 "reclamation telemetry exceeds synchronous pauses")
+
+    final = raw["final"]
+    _require_wal(set(final) == {
+        "hard_commit", "compacted_through", "retained_entries", "next_index",
+        "recovery_verified", "physical_bound_verified", "managed_wal",
+    }, "final verification shape changed")
+    expected_total = retained_entries + config["rounds"] * expected_appended
+    _require_wal(final["hard_commit"] == expected_total
+                 and final["next_index"] == expected_total + 1,
+                 "final hard state or log boundary disagrees")
+    _require_wal(final["compacted_through"] == config["rounds"] * expected_appended,
+                 "final compaction boundary disagrees")
+    _require_wal(final["retained_entries"] == retained_entries,
+                 "final retained suffix length disagrees")
+    _require_wal(final["recovery_verified"] is True
+                 and final["physical_bound_verified"] is True,
+                 "final recovery or physical bound was not verified")
+    _check_wal_inventory(final["managed_wal"], config["rounds"], expected_bytes, "reopen")
+
+    derived_summary = {
+        "schema": 1,
+        "source_sha": raw["source_sha"],
+        "retained_entries": retained_entries,
+        "rounds": config["rounds"],
+        "managed_wal_bytes": expected_bytes,
+        "reclamation_pause_p99_ns": aggregate["reclamation_pause"]["p99_ns"],
+        "reopen_ns": aggregate["reopen_ns"],
+        "qualified": True,
+    }
+    record = {
+        "layer": "durable_replication",
+        "comparison_kind": "rafter_component_qualification",
+        "engine": {"name": "rafter", "version": raw["source_sha"]},
+        "display_name": "Combined WAL physical reclamation",
+        "configuration": dict(config),
+        "workload": {
+            "kind": "repeated_write_snapshot_compaction_reopen",
+            "appended_entries_per_round": expected_appended,
+        },
+        "completion_boundary": raw["completion_boundary"],
+        "environment": {
+            "qualification": "not recorded by component receipt",
+            "timings_publishable": False,
+        },
+        "measurement_mode": "diagnostic",
+        "metric_definitions": {
+            "managed_wal_bytes": "bytes in the authoritative manifest, checkpoint, and segment",
+            "reclamation_pause_p99_ms": "diagnostic p99 across three synchronous component cycles",
+            "reopen_ms": "diagnostic exact-suffix reopen duration",
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "metrics": {
+            "managed_wal_bytes": expected_bytes,
+            "managed_wal_files": aggregate["managed_wal_files"],
+            "reclamation_pause_p99_ms": aggregate["reclamation_pause"]["p99_ns"] / 1_000_000,
+            "reopen_ms": aggregate["reopen_ns"] / 1_000_000,
+        },
+        "verification": {
+            "recovery_verified": True,
+            "physical_bound_verified": True,
+            "final_hard_commit": final["hard_commit"],
+            "final_compacted_through": final["compacted_through"],
+            "final_next_index": final["next_index"],
+        },
+        "source_cases": source_cases,
+    }
+    return record, derived_summary
+
+
+def load_wal_reclamation(directory: Path) -> dict:
+    """Replay the exact predeclared component receipts without publishing runner timing."""
+    original = directory.absolute()
+    reasons = []
+    if original.is_symlink() or not original.is_dir():
+        return {
+            "kind": "wal_reclamation",
+            "directory": str(original),
+            "qualification": "failed",
+            "qualification_errors": ["WAL reclamation evidence is not a plain directory"],
+            "records": [],
+        }
+    directory = original.resolve()
+    expected_names = {
+        f"{stem}{suffix}"
+        for stem, _ in _WAL_RECLAMATION_CASES
+        for suffix in (".json", "-summary.json")
+    }
+    entries = list(directory.iterdir())
+    if any(path.is_symlink() for path in entries):
+        reasons.append("symlink in WAL reclamation evidence")
+    actual_names = {path.name for path in entries}
+    if actual_names != expected_names:
+        reasons.append(
+            "WAL reclamation evidence file set changed from the exact predeclared receipts"
+        )
+
+    records = []
+    source_shas = set()
+    for stem, expected_config in _WAL_RECLAMATION_CASES:
+        receipt_path = directory / f"{stem}.json"
+        summary_path = directory / f"{stem}-summary.json"
+        if not receipt_path.is_file() or not summary_path.is_file():
+            continue
+        try:
+            raw = _read(receipt_path)
+            record, expected_summary = _normalize_wal_reclamation_receipt(
+                raw,
+                expected_config,
+                [receipt_path.name, summary_path.name],
+            )
+            expected_summary["receipt_sha256"] = digest(receipt_path)
+            recorded_summary = _read(summary_path)
+            _require_wal(recorded_summary == expected_summary,
+                         f"{stem} verifier summary disagrees")
+            records.append(record)
+            source_shas.add(record["engine"]["version"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            reasons.append(f"{stem}: {error}")
+    if len(source_shas) > 1:
+        reasons.append("WAL reclamation receipts use different Rafter revisions")
+    if len(records) != len(_WAL_RECLAMATION_CASES):
+        reasons.append(
+            "WAL reclamation evidence did not normalize all predeclared retained-suffix shapes"
+        )
+    if reasons:
+        for record in records:
+            record["qualification"] = "failed"
+            record["qualification_errors"] = reasons
+    return {
+        "kind": "wal_reclamation",
+        "directory": str(directory),
+        "qualification": "failed" if reasons else "passed",
+        "qualification_errors": reasons,
+        "source_sha": next(iter(source_shas)) if len(source_shas) == 1 else None,
+        "records": records,
     }

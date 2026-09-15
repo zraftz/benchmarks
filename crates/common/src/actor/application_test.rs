@@ -29,6 +29,17 @@ struct EngineProbe {
     peer_seen: mpsc::Sender<()>,
     entry: Applied,
 }
+
+#[test]
+fn first_snapshot_boundaries_are_log_staggered_without_time_delay() {
+    assert!(snapshot_due(96, 0, 96, 1));
+    assert!(!snapshot_due(96, 0, 96, 2));
+    assert!(snapshot_due(128, 0, 96, 2));
+    assert!(!snapshot_due(159, 0, 96, 3));
+    assert!(snapshot_due(160, 0, 96, 3));
+    assert!(!snapshot_due(255, 160, 96, 3));
+    assert!(snapshot_due(256, 160, 96, 3));
+}
 impl Engine for EngineProbe {
     type Peer = ();
     type Gate = ();
@@ -110,8 +121,9 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
     worker.try_submit(vec![entry.clone()]).unwrap();
     waiting.recv_timeout(Duration::from_secs(1)).unwrap();
     let (reply, mut response) = oneshot::channel();
+    let (retry_reply, mut retry_response) = oneshot::channel();
     let mut pending = BTreeMap::new();
-    pending.insert(c.identity(), (c, vec![reply]));
+    pending.insert(c.identity(), (c, vec![reply, retry_reply]));
     let (peer_seen, observed) = mpsc::channel();
     let config = Config {
         id: 1,
@@ -128,6 +140,14 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         ordered_apply: true,
         peer_message_stream: false,
         pipelined_durability: false,
+        max_speculative_proposals: 1,
+        max_inflight_appends: 8,
+        combine_peer_proposals: false,
+        durable_completion_priority: false,
+        openraft_async_flush: false,
+        snapshot_interval_entries: 0,
+        application_checkpoint_bytes: 64 * 1024 * 1024,
+        wal_reclamation_bytes: 64 * 1024 * 1024,
     };
     let mut state = State {
         diagnostics: Diagnostics::default(),
@@ -141,10 +161,20 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
         transport_generation: 0,
         dropped: Arc::new(AtomicU64::new(0)),
         pending,
-        pending_count: 1,
+        pending_count: 2,
         peer_batches: 0,
         peer_events: 0,
         peer_batch_sizes: BTreeMap::new(),
+        prioritized_peer_batches: 0,
+        prioritized_peer_events: 0,
+        prioritized_client_inputs_bypassed: 0,
+        pre_persistence_client_completions: 0,
+        snapshot_compactions: 0,
+        snapshot_compaction_total_ns: 0,
+        snapshot_compaction_max_ns: 0,
+        snapshot_compaction_buckets_log2: vec![0; 64],
+        snapshot_payload_bytes: 0,
+        application_snapshots_installed: 0,
     };
     let owner = std::thread::spawn(move || state.run(rx));
     tx.send(Input::Peer(2, vec![], None)).unwrap();
@@ -165,6 +195,18 @@ fn peers_progress_during_ten_ms_apply_delay_but_client_waits_for_durable_complet
     };
     assert_eq!(result.status, "ok");
     assert_eq!(result.result.unwrap().value.as_deref(), Some("durable"));
+    let retry_result = loop {
+        if let Ok(result) = retry_response.try_recv() {
+            break result;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(retry_result.status, "ok");
+    assert_eq!(
+        retry_result.result.unwrap().value.as_deref(),
+        Some("durable")
+    );
     drop(tx);
     owner.join().unwrap().unwrap();
     let reopened = DurableModel::open(&path).unwrap();

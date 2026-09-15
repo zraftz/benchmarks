@@ -4,22 +4,54 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from benchctl.evidence import seal
-from benchctl.results import load_microbench, load_storage_comparison
+from benchctl.evidence import digest, seal
+from benchctl.results import (
+    _display_name,
+    _environment,
+    _is_feature_coverage_failure,
+    aggregate_durable,
+    load_microbench,
+    load_storage_comparison,
+    load_wal_reclamation,
+)
 from benchctl.summary import build_summary, render_html, render_markdown
 
 
 ENVIRONMENT = {"topology": "three processes on one host", "runner": "same"}
 COMPLETION = "durable-log+durable-application-v1/logged-reads"
+MEMORY_COMPLETION = "proposal submitted -> reference application operation completes on leader"
 
 
-def service_case(variant, engine, delay, rate, throughput, p99, *, unsent=0):
+def memory_record(engine, throughput, p99, *, completion=MEMORY_COMPLETION, repetitions=7):
+    return {
+        "layer": "consensus_in_memory",
+        "engine": {"name": engine, "version": "selected"},
+        "display_name": engine,
+        "configuration": {"storage": "memory", "transport": "in_process"},
+        "workload": {"workload": "serial", "proposals": 2000,
+                     "payload_bytes": 512, "max_in_flight": 1},
+        "completion_boundary": completion,
+        "environment": {"topology": "three voters in one process", "machine": "same"},
+        "measurement_mode": "timing",
+        "metric_definitions": {"throughput_ops_s": "ops", "client_p99_us": "p99",
+                               "aggregate": "median"},
+        "repetitions": repetitions,
+        "qualification": "passed",
+        "qualification_errors": [],
+        "metrics": {"throughput_ops_s": {"median": throughput},
+                    "client_p99_us": {"median": p99}},
+        "source_cases": [f"run-{run}-{engine}.json" for run in range(1, repetitions + 1)],
+    }
+
+
+def service_case(variant, engine, delay, rate, throughput, p99, *, p999=None, unsent=0):
+    p999 = p99 * 1.25 if p999 is None else p999
     mode = "pipeline" if variant.startswith("candidate") else ("messages" if variant == "prior" else "public_api")
     return {
         "layer": "complete_service",
         "source_case": f"n{delay}-{variant}-q{rate}",
-        "engine": {"name": engine, "version": "r" * 40 if engine == "rafter" else "0.9.24"},
-        "display_name": "Rafter pipeline" if variant.startswith("candidate") else ("Rafter synchronous messages" if variant == "prior" else "OpenRaft"),
+        "engine": {"name": engine, "version": "a" * 40 if engine == "rafter" else "0.9.24"},
+        "display_name": "Rafter pipeline FIFO" if variant.startswith("candidate") else ("Rafter synchronous messages" if variant == "prior" else "OpenRaft"),
         "configuration": {"variant": variant, "mode": mode,
                           "hard_state": "wal" if engine == "rafter" else "adapter_journal",
                           "peer_batch_size": 32 if engine == "rafter" else 1, "client_batch_size": 64},
@@ -31,14 +63,22 @@ def service_case(variant, engine, delay, rate, throughput, p99, *, unsent=0):
         "environment": ENVIRONMENT,
         "measurement_mode": "timing",
         "metric_definitions": {"throughput_ops_s": "ops", "client_p99_ms": "p99",
-                               "execution_p99_ms": "execution", "aggregate": "median"},
+                               "client_p999_ms": "p99.9", "execution_p99_ms": "execution p99",
+                               "execution_p999_ms": "execution p99.9", "client_start_p99_ms": "start p99",
+                               "scheduler_dispatch_p99_ms": "dispatch p99",
+                               "scheduler_dispatch_p999_ms": "dispatch p99.9",
+                               "aggregate": "median"},
         "repetition": 1,
         "smoke": False,
         "qualification": "passed",
         "qualification_errors": [],
         "metrics": {"throughput_ops_s": throughput, "client_p99_ms": p99,
-                    "execution_p99_ms": p99},
+                    "client_p999_ms": p999, "execution_p99_ms": p99,
+                    "execution_p999_ms": p999, "client_start_p99_ms": 0.1,
+                    "scheduler_dispatch_p99_ms": 0.01,
+                    "scheduler_dispatch_p999_ms": 0.02},
         "accounting": {"offered": 1000, "attempted": 1000 - unsent, "ok": 1000 - unsent,
+                       "completed_in_window": 1000 - unsent,
                        "errors": 0, "unknown": 0, "not_issued": unsent},
         "recovery": {"status": "passed"},
         "history_check": {"status": "passed"},
@@ -76,10 +116,67 @@ def durable_data():
     }
 
 
+def reclamation_under_load_assessment(*, status="passed"):
+    errors = [] if status == "passed" else ["snap10k p99 exceeded the equal-load budget"]
+    return {
+        "schema": 1,
+        "kind": "reclamation-under-load",
+        "status": status,
+        "scope": (
+            "Same exact Rafter service; only the snapshot and WAL-reclamation interval changes. "
+            "Application-journal physical reclamation is not tested."
+        ),
+        "verdicts": {
+            "evidence_and_correctness": {"status": "passed", "errors": []},
+            "service_objective": {"status": status, "errors": errors},
+            "reclamation_activity": {"status": "passed", "errors": []},
+            "physical_reclamation": {"status": "passed", "errors": []},
+        },
+        "comparisons": [{
+            "variant": "snap10k",
+            "snapshot_interval_entries": 10_000,
+            "offered_per_second": 3_000,
+            "median_throughput_ratio": 0.98,
+            "worst_p99_regression_ms": 0.5,
+            "worst_p999_regression_ms": 1.0,
+            "measured_compactions": 9,
+            "max_compaction_upper_bound_ns": 2_000_000,
+            "median_candidate_managed_raft_allocated_bytes": 2 * 2**20,
+            "median_control_managed_raft_allocated_bytes": 20 * 2**20,
+            "median_candidate_final_managed_raft_allocated_bytes": 2 * 2**20,
+            "median_control_final_managed_raft_allocated_bytes": 20 * 2**20,
+            "max_candidate_process_restart_ns": 250_000_000,
+            "native_snapshot_stages": {
+                stage: {"max_upper_bound_ns": 1_048_575}
+                for stage in (
+                    "snapshot_publication",
+                    "snapshot_data_write",
+                    "snapshot_data_sync",
+                    "snapshot_file_publish",
+                    "snapshot_manifest_publish",
+                    "snapshot_prune",
+                )
+            },
+            "application_snapshot_encode": {
+                "samples": 9,
+                "max_upper_bound_ns": 2_097_151,
+            },
+            "application_checkpoint_stages": {
+                stage: {"samples": 3, "max_upper_bound_ns": 4_194_303}
+                for stage in (
+                    "journal_checkpoint_write_ns",
+                    "journal_checkpoint_sync_ns",
+                    "journal_checkpoint_publish_ns",
+                )
+            },
+        }],
+    }
+
+
 def storage_record(arm, backend, batch, throughput, p99):
     return {
         "layer": "durable_replication",
-        "engine": {"name": "rafter", "version": "r" * 40},
+        "engine": {"name": "rafter", "version": "a" * 40},
         "display_name": backend,
         "configuration": {"hard_state": backend, "arm": arm},
         "workload": {"kind": "proposal_batches", "batch_size": batch, "payload_bytes": 256, "batches": 1000},
@@ -97,7 +194,351 @@ def storage_record(arm, backend, batch, throughput, p99):
     }
 
 
+def wal_reclamation_receipt(retained_entries, source="b" * 40, *,
+                            batches_per_round=64, batch_size=8):
+    managed_bytes = retained_entries * 98 + 188
+    appended_entries = batches_per_round * batch_size
+
+    def inventory(generation):
+        return {
+            "file_count": 3,
+            "bytes": managed_bytes,
+            "names": [
+                f"raft-wal-checkpoint-{generation:020d}.rfwc",
+                "raft-wal-current",
+                f"raft-wal-segment-{generation:020d}.rfwb",
+            ],
+        }
+
+    rounds = [{
+        "round": number,
+        "appended_entries": appended_entries,
+        "compacted_through": number * appended_entries,
+        "snapshot_ns": 100,
+        "reclamation_pause_ns": 1_000 + number,
+        "write_latency": {"count": batches_per_round, "p50_ns": 10,
+                          "p99_ns": 20, "max_ns": 30},
+        "managed_wal": inventory(number),
+    } for number in range(1, 4)]
+    phase_metrics = [{
+        "name": name,
+        "calls": 3,
+        "total_ns": 300 if name == "wal_reclamation" else 100,
+        "max_ns": 100,
+        "buckets": [3],
+    } for name in (
+        "wal_reclamation", "wal_checkpoint_prepare", "wal_manifest_publish", "wal_cleanup"
+    )]
+    return {
+        "schema": 1,
+        "layer": "durable_replication",
+        "comparison_kind": "rafter_component_qualification",
+        "source_sha": source,
+        "completion_boundary": (
+            "durable WAL batch receipt; reclamation pause ends after manifest publication "
+            "and cleanup fence"
+        ),
+        "config": {"retained_entries": retained_entries, "rounds": 3,
+                   "batches_per_round": batches_per_round, "batch_size": batch_size,
+                   "payload_bytes": 64},
+        "rounds": rounds,
+        "aggregate": {
+            "write_latency": {"count": 3 * batches_per_round, "p50_ns": 10,
+                              "p99_ns": 20, "max_ns": 30},
+            "reclamation_pause": {"count": 3, "p50_ns": 1_001,
+                                    "p99_ns": 1_003, "max_ns": 1_003},
+            "reopen_ns": 2_000,
+            "managed_wal_bytes": managed_bytes,
+            "managed_wal_files": 3,
+        },
+        "phase_metrics": phase_metrics,
+        "final": {
+            "hard_commit": retained_entries + 3 * appended_entries,
+            "compacted_through": 3 * appended_entries,
+            "retained_entries": retained_entries,
+            "next_index": retained_entries + 3 * appended_entries + 1,
+            "recovery_verified": True,
+            "physical_bound_verified": True,
+            "managed_wal": inventory(3),
+        },
+    }
+
+
+def write_wal_reclamation(root):
+    cases = (
+        ("retired-102400", 512, 25, 4_096),
+        ("retained-10000", 10_000, 64, 8),
+        ("retained-100000", 100_000, 64, 8),
+    )
+    for stem, retained, batches_per_round, batch_size in cases:
+        receipt_path = root / f"{stem}.json"
+        receipt = wal_reclamation_receipt(
+            retained,
+            batches_per_round=batches_per_round,
+            batch_size=batch_size,
+        )
+        receipt_path.write_text(json.dumps(receipt, sort_keys=True))
+        aggregate = receipt["aggregate"]
+        summary = {
+            "schema": 1,
+            "source_sha": receipt["source_sha"],
+            "retained_entries": retained,
+            "rounds": 3,
+            "managed_wal_bytes": aggregate["managed_wal_bytes"],
+            "reclamation_pause_p99_ns": aggregate["reclamation_pause"]["p99_ns"],
+            "reopen_ns": aggregate["reopen_ns"],
+            "qualified": True,
+            "receipt_sha256": digest(receipt_path),
+        }
+        (root / f"{stem}-summary.json").write_text(json.dumps(summary))
+
+
 class SummaryTests(unittest.TestCase):
+    def test_volatile_filesystem_space_does_not_split_repetitions(self):
+        manifest = {
+            "topology": "three processes on one host",
+            "source_digest": "a" * 64,
+            "loadgen_sha256": "b" * 64,
+            "host": {
+                "platform": "linux",
+                "machine": "x86_64",
+                "logical_cpus": 4,
+                "cpu": {"stdout": "Model name: Example CPU\n"},
+                "filesystem": {
+                    "stdout": json.dumps({
+                        "filesystems": [{
+                            "source": "/dev/sda1",
+                            "fstype": "ext4",
+                            "options": "rw,relatime",
+                        }],
+                    }),
+                },
+                "filesystem_space": {
+                    "total_bytes": 100_000,
+                    "free_bytes": 60_000,
+                    "available_bytes": 50_000,
+                },
+            },
+        }
+        later = copy.deepcopy(manifest)
+        later["host"]["filesystem_space"].update({
+            "free_bytes": 40_000,
+            "available_bytes": 30_000,
+        })
+        first = service_case("candidate-b32", "rafter", 0, 1000, 1000, 5)
+        second = copy.deepcopy(first)
+        first["environment"] = _environment(manifest)
+        second["environment"] = _environment(later)
+        second["source_case"] = "second"
+        second["repetition"] = 2
+        data = {
+            "suite": {"runs": 2},
+            "qualification": "passed",
+            "qualification_errors": [],
+            "cases": [first, second],
+        }
+
+        rows = aggregate_durable(data)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["repetitions"], 2)
+        self.assertEqual(rows[0]["qualification"], "passed")
+        self.assertNotIn("filesystem_space", rows[0]["environment"])
+
+        later["host"]["filesystem"]["stdout"] = json.dumps({
+            "filesystems": [{
+                "source": "/dev/sda1",
+                "fstype": "xfs",
+                "options": "rw,relatime",
+            }],
+        })
+        second["environment"] = _environment(later)
+        rows = aggregate_durable(data)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row["qualification"] == "failed" for row in rows))
+        self.assertTrue(all(
+            "expected 2 repetitions, found 1" in row["qualification_errors"]
+            for row in rows
+        ))
+
+    def test_legacy_service_evidence_retains_unmeasured_scheduler_latency(self):
+        data = durable_data()
+        for case in data["cases"]:
+            case["metrics"].pop("scheduler_dispatch_p99_ms")
+            case["metrics"].pop("scheduler_dispatch_p999_ms")
+        rows = aggregate_durable(data)
+        self.assertTrue(rows)
+        self.assertTrue(all(row["qualification"] == "passed" for row in rows))
+        self.assertTrue(all(
+            row["metrics"]["scheduler_dispatch_p99_ms"]["max"] is None
+            for row in rows
+        ))
+        rendered = render_markdown(build_summary(durable=data), {})
+        self.assertIn("not measured / not measured", rendered)
+
+    def test_scheduler_latency_cannot_change_availability_within_an_aggregate(self):
+        first = service_case("candidate-b32", "rafter", 0, 1000, 1000, 5)
+        second = copy.deepcopy(first)
+        second["source_case"] = "second"
+        second["repetition"] = 2
+        first["metrics"].pop("scheduler_dispatch_p99_ms")
+        data = {
+            "suite": {"runs": 2},
+            "qualification": "passed",
+            "qualification_errors": [],
+            "cases": [first, second],
+        }
+        rows = aggregate_durable(data)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["qualification"], "failed")
+        self.assertIn(
+            "optional metric changed availability between repetitions: "
+            "scheduler_dispatch_p99_ms",
+            rows[0]["qualification_errors"],
+        )
+
+    def test_measured_load_context_is_visible_but_not_a_qualification_filter(self):
+        data = durable_data()
+        for index, case in enumerate(data["cases"]):
+            case["load_environment"] = {
+                "coverage": {"status": "passed"},
+                "summary": {
+                    "maximum_sample_gap_seconds": 1.1,
+                    "cpu": {
+                        "busy_percent": 50 + index,
+                        "iowait_percent": 2 + index / 10,
+                        "steal_percent": 0,
+                    },
+                    "cgroup_cpu": {"throttled_percent_of_wall": 0},
+                    "pressure": {
+                        "io": {
+                            "some": {"percent_of_wall": 80 + index},
+                            "full": {"percent_of_wall": 20 + index},
+                        },
+                        "memory": {"full": {"percent_of_wall": 0}},
+                    },
+                    "hardware_throttling": {"maximum_counter_delta": 0},
+                    "filesystem": {"minimum_available_bytes": 30 * 1024**3},
+                },
+            }
+        summary = build_summary(
+            durable=data,
+            headline_variant="candidate-b32",
+            headline_control_variant="openraft",
+        )
+        section = summary["sections"][2]
+        context = section["measured_load_context"]
+        self.assertEqual(context["status"], "observed")
+        self.assertEqual(context["observed_cases"], len(data["cases"]))
+        self.assertGreater(context["metrics"]["maximum_io_pressure_some_percent"], 90)
+        self.assertEqual(section["status"], "measured lead")
+        self.assertIn("Measured-load host context", render_markdown(summary, {}))
+        self.assertIn("Measured-load host context", render_html(summary, {}))
+
+    def test_wal_reclamation_loader_and_report_replay_component_bounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_wal_reclamation(root)
+            loaded = load_wal_reclamation(root)
+            self.assertEqual(loaded["qualification"], "passed")
+            self.assertEqual(len(loaded["records"]), 3)
+            self.assertTrue(all(record["measurement_mode"] == "diagnostic"
+                                for record in loaded["records"]))
+            summary = build_summary(reclamation=loaded)
+            storage = summary["sections"][1]
+            sustained = summary["sections"][3]
+            self.assertEqual(storage["status"], "mixed result")
+            self.assertEqual(storage["wal_reclamation"]["status"], "passed")
+            self.assertEqual(storage["wal_reclamation"]["rows"][0]["managed_wal_bytes"],
+                             50_364)
+            self.assertEqual(storage["wal_reclamation"]["rows"][2]["managed_wal_bytes"],
+                             9_800_188)
+            self.assertEqual(summary["evidence_status"]["durable_replication"], "passed")
+            self.assertEqual(len(summary["normalized_results"]["durable_replication"]), 3)
+            self.assertEqual(sustained["checks"][0]["passed_cases"], 3)
+            storage_evidence = {
+                "qualification": "passed",
+                "qualification_errors": [],
+                "sync_probes": {},
+                "records": [
+                    storage_record("baseline", "replace", 1, 100.0, 2.0),
+                    storage_record("candidate", "journal", 1, 150.0, 1.0),
+                ],
+            }
+            combined = build_summary(storage=storage_evidence, reclamation=loaded)["sections"][1]
+            self.assertEqual(combined["status"], "measured lead")
+            self.assertEqual(combined["wal_reclamation"]["status"], "passed")
+            for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+                self.assertIn("WAL physical-reclamation component qualification", rendered)
+                self.assertIn("50,364 bytes", rendered)
+                self.assertIn("9,800,188 bytes", rendered)
+                self.assertIn("diagnostic only", rendered)
+                self.assertIn("not complete-service traffic", rendered)
+
+    def test_wal_reclamation_loader_fails_closed_on_receipt_or_summary_drift(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_wal_reclamation(root)
+            summary_path = root / "retained-10000-summary.json"
+            recorded = json.loads(summary_path.read_text())
+            recorded["managed_wal_bytes"] += 1
+            summary_path.write_text(json.dumps(recorded))
+            loaded = load_wal_reclamation(root)
+            self.assertEqual(loaded["qualification"], "failed")
+            self.assertTrue(any("summary disagrees" in error
+                                for error in loaded["qualification_errors"]))
+            section = build_summary(reclamation=loaded)["sections"][1]
+            self.assertEqual(section["wal_reclamation"]["status"], "failed")
+            self.assertFalse(section["wal_reclamation"]["rows"])
+
+            summary_path.unlink()
+            loaded = load_wal_reclamation(root)
+            self.assertEqual(loaded["qualification"], "failed")
+            self.assertTrue(any("file set changed" in error
+                                for error in loaded["qualification_errors"]))
+
+    def test_wal_reclamation_loader_rejects_unexpected_extra_receipt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_wal_reclamation(root)
+            (root / "retained-200000.json").write_text("{}")
+            loaded = load_wal_reclamation(root)
+            self.assertEqual(loaded["qualification"], "failed")
+            self.assertTrue(any("file set changed" in error
+                                for error in loaded["qualification_errors"]))
+
+    def test_qualified_in_memory_evidence_publishes_one_fair_leaderboard(self):
+        micro = {"qualification": "passed", "records": [
+            memory_record("rafter", 120, 1.0),
+            memory_record("raft-rs", 100, 1.5),
+            memory_record("openraft", 80, 2.0),
+        ]}
+        section = build_summary(micro=micro)["sections"][0]
+        self.assertEqual(section["status"], "measured lead")
+        self.assertEqual(len(section["rows"]), 1)
+        self.assertEqual(section["rows"][0]["throughput_vs_openraft"]["label"], "measured lead")
+        self.assertIn("4 of 4", section["result"])
+        rendered = render_markdown(build_summary(micro=micro), {})
+        self.assertIn("reference application operation", rendered)
+        self.assertIn("Selected identities: rafter selected; raft-rs selected; openraft selected.", rendered)
+        self.assertIn("120/s", rendered)
+
+    def test_in_memory_evidence_fails_closed_on_boundary_or_repetition_mismatch(self):
+        records = [
+            memory_record("rafter", 120, 1.0),
+            memory_record("raft-rs", 100, 1.5),
+            memory_record("openraft", 80, 2.0, completion="different"),
+        ]
+        section = build_summary(micro={"qualification": "passed", "records": records})["sections"][0]
+        self.assertEqual(section["status"], "pending qualification")
+        self.assertFalse(section["rows"])
+        for record in records:
+            record["completion_boundary"] = MEMORY_COMPLETION
+            record["repetitions"] = 6
+        section = build_summary(micro={"qualification": "passed", "records": records})["sections"][0]
+        self.assertEqual(section["status"], "pending qualification")
+        self.assertIn("requires at least 7", section["details"][0])
+
     def test_service_headline_is_one_named_variant_and_outputs_agree(self):
         storage = {"qualification": "passed", "qualification_errors": [], "sync_probes": {}, "records": [
             storage_record("baseline", "replace", 1, 354.102, 4.140),
@@ -111,8 +552,10 @@ class SummaryTests(unittest.TestCase):
         summary = build_summary(durable=durable_data(), storage=storage, histories=[history])
         sections = {section["id"]: section for section in summary["sections"]}
         service = sections["complete-durable-service"]
-        self.assertEqual(service["selected_configuration"]["name"], "Rafter pipeline")
+        self.assertTrue(service["headline_qualified"])
+        self.assertEqual(service["selected_configuration"]["name"], "Rafter pipeline FIFO")
         self.assertAlmostEqual(service["rows"][0]["throughput_ratio"], 8025 / 2116)
+        self.assertAlmostEqual(service["rows"][0]["rafter_p999_at_1000_ms"], 12.714 * 1.25)
         self.assertEqual(service["accounting"]["rafter"], {"errors": 0, "unknown": 0, "not_issued": 0})
         self.assertEqual(service["accounting"]["openraft"]["not_issued"], 9)
         self.assertEqual(len(summary["normalized_results"]["complete_durable_service"]), 18)
@@ -126,7 +569,11 @@ class SummaryTests(unittest.TestCase):
         for rendered in (markdown, page):
             self.assertIn("8,025", rendered)
             self.assertIn("3.79", rendered)
-            self.assertIn("567 unsent", rendered)
+            self.assertIn("p99.9", rendered)
+            self.assertIn("576 unsent", rendered)
+            self.assertIn("2 affected cases", rendered)
+            self.assertIn("Individual cases remain in", rendered)
+            self.assertIn("Selected identities: Rafter aaaaaaaaaaaa; OpenRaft 0.9.24.", rendered)
         self.assertIn('"rafter_throughput_ops_s": 8025', json.dumps(summary, sort_keys=True))
 
     def test_multiple_candidates_require_explicit_selection(self):
@@ -140,10 +587,242 @@ class SummaryTests(unittest.TestCase):
                 extras.append(other)
         data["cases"].extend(extras)
         data["suite"]["arms"].append(["candidate-b64", "rafter", 64, "candidate"])
-        section = build_summary(durable=data)["sections"][2]
+        summary = build_summary(durable=data)
+        section = summary["sections"][2]
         self.assertEqual(section["status"], "not comparable")
         selected = build_summary(durable=data, headline_variant="candidate-b32")["sections"][2]
         self.assertEqual(selected["status"], "measured lead")
+
+    def test_multiple_openraft_controls_require_explicit_selection(self):
+        data = durable_data()
+        extras = []
+        for case in data["cases"]:
+            if case["configuration"]["variant"] == "openraft":
+                other = copy.deepcopy(case)
+                other["configuration"]["variant"] = "openraft-async"
+                other["configuration"]["openraft_async_flush"] = True
+                other["display_name"] = "OpenRaft async flusher"
+                other["source_case"] += "-async"
+                extras.append(other)
+        data["cases"].extend(extras)
+        data["suite"]["arms"].append(["openraft-async", "openraft", 1, "candidate"])
+        section = build_summary(durable=data)["sections"][2]
+        self.assertEqual(section["status"], "not comparable")
+        selected = build_summary(
+            durable=data, headline_control_variant="openraft-async"
+        )["sections"][2]
+        self.assertEqual(selected["status"], "measured lead")
+        self.assertEqual(selected["selected_configuration"]["openraft_variant"], "openraft-async")
+
+    def test_pipeline_names_distinguish_fifo_from_completion_priority(self):
+        manifest = {"implementation": "rafter", "options": {"pipelined_durability": True}}
+        self.assertEqual(_display_name(manifest), "Rafter pipeline FIFO")
+        manifest["options"]["durable_completion_priority"] = True
+        self.assertEqual(_display_name(manifest), "Rafter pipeline + completion priority")
+
+        data = durable_data()
+        for case in data["cases"]:
+            if case["configuration"]["variant"] == "candidate-b32":
+                case["display_name"] = "Rafter pipeline + completion priority"
+            elif case["configuration"]["variant"] == "prior":
+                case["configuration"]["mode"] = "pipeline"
+                case["display_name"] = "Rafter pipeline FIFO"
+        summary = build_summary(durable=data)
+        internal = summary["sections"][2]["internal_comparisons"][0]
+        self.assertEqual(internal["candidate_name"], "Rafter pipeline + completion priority")
+        self.assertEqual(internal["prior_name"], "Rafter pipeline FIFO")
+        for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+            self.assertIn(
+                "Rafter pipeline + completion priority versus same-code Rafter pipeline FIFO",
+                rendered,
+            )
+            self.assertNotIn("same-code synchronous Rafter", rendered)
+
+    def test_capacity_curve_uses_declared_objective(self):
+        data = durable_data()
+        data["machine_qualification"] = {"status": "passed", "seal_sha256": "a" * 64}
+        data["verdicts"] = {
+            "environment_qualification": {
+                "status": "passed",
+                "scope": "sealed idle/storage profile",
+            }
+        }
+        data["cases"] = []
+        for rate in (2000, 4000):
+            data["cases"].append(service_case(
+                "candidate-b32", "rafter", 0, rate,
+                1995 if rate == 2000 else 3980, 8 if rate == 2000 else 18,
+                p999=15 if rate == 2000 else 40,
+            ))
+            data["cases"].append(service_case(
+                "openraft", "openraft", 0, rate,
+                1990 if rate == 2000 else 3900, 12 if rate == 2000 else 25,
+                p999=30 if rate == 2000 else 60,
+            ))
+        summary = build_summary(durable=data)
+        section = summary["sections"][2]
+        self.assertEqual(section["status"], "measured lead")
+        self.assertEqual(section["verdicts"]["environment_qualification"]["status"], "passed")
+        self.assertIn("profile passed sealed replay", section["conditions"])
+        self.assertEqual(section["rows"], [])
+        self.assertEqual(section["capacity"]["boundaries"], [{
+            "network_delay_ms": 0,
+            "maximum_tested_rate": 4000,
+            "rafter_highest_qualifying_rate": 4000,
+            "rafter_reached_tested_ceiling": True,
+            "openraft_highest_qualifying_rate": 2000,
+            "openraft_reached_tested_ceiling": False,
+        }])
+        rendered = render_markdown(summary, {})
+        self.assertIn("Useful-capacity objective", rendered)
+        self.assertIn("| Environment qualification | passed |", rendered)
+        self.assertIn("Execution p99/p99.9", rendered)
+        self.assertIn("Useful-capacity objective", render_html(summary, {}))
+
+    def test_capacity_curve_separates_coverage_from_service_failure(self):
+        data = durable_data()
+        data["suite"]["benchmark_repository"] = {
+            "commit": "b" * 40,
+            "status": "clean",
+        }
+        data["cases"] = [
+            service_case("candidate-b32", "rafter", 0, 1000, 940, 247, p999=705, unsent=60),
+            service_case("openraft", "openraft", 0, 1000, 900, 300, p999=800, unsent=100),
+        ]
+        data["verdicts"] = {
+            "evidence_integrity": {
+                "status": "passed",
+                "scope": "expected cases, seals, identities, receipts, and accounting",
+            },
+            "correctness_checks": {
+                "status": "passed",
+                "scope": "finite history and restart checks",
+            },
+            "feature_coverage": {
+                "status": "incomplete",
+                "checks": [
+                    {
+                        "status": "incomplete",
+                        "detail": "bounded completion-priority lookahead was not observed in any completed case",
+                    },
+                    {
+                        "status": "incomplete",
+                        "detail": "bounded completion-priority lookahead was not observed in any completed case",
+                    },
+                ],
+            },
+        }
+        section = build_summary(durable=data)["sections"][2]
+        self.assertEqual(section["status"], "mixed result")
+        self.assertEqual(section["verdicts"]["evidence_integrity"]["status"], "passed")
+        self.assertEqual(section["verdicts"]["correctness_checks"]["status"], "passed")
+        self.assertEqual(section["verdicts"]["feature_coverage"]["status"], "incomplete")
+        self.assertEqual(section["verdicts"]["service_objective"]["status"], "failed")
+        self.assertTrue(section["capacity"]["rows"])
+        rendered = render_markdown(build_summary(durable=data), {})
+        self.assertIn(f"Benchmark source: `{'b' * 40}` (clean at preflight).", rendered)
+        self.assertIn(
+            f"<code>{'b' * 40}</code> (clean at preflight)",
+            render_html(build_summary(durable=data), {}),
+        )
+        self.assertIn("| Feature coverage | incomplete | bounded completion-priority", rendered)
+        self.assertEqual(rendered.count("bounded completion-priority lookahead"), 1)
+        self.assertIn("| Service objective | failed |", rendered)
+
+    def test_feature_coverage_detail_names_only_incomplete_variants(self):
+        data = durable_data()
+        data["verdicts"] = {
+            "feature_coverage": {
+                "status": "incomplete",
+                "checks": [
+                    {
+                        "variant": "candidate-snapshot10k",
+                        "status": "incomplete",
+                        "detail": (
+                            "bounded completion-priority lookahead was not observed "
+                            "in any completed case"
+                        ),
+                    },
+                    {
+                        "variant": "candidate-snapshot100k",
+                        "status": "passed",
+                        "detail": (
+                            "completion-priority and bounded-lookahead activity were both observed"
+                        ),
+                    },
+                ],
+            },
+        }
+
+        rendered = render_markdown(build_summary(durable=data), {})
+        self.assertIn(
+            "candidate-snapshot10k: bounded completion-priority lookahead",
+            rendered,
+        )
+        self.assertNotIn("candidate-snapshot100k:", rendered)
+        self.assertNotIn(
+            "completion-priority and bounded-lookahead activity were both observed",
+            rendered,
+        )
+
+    def test_legacy_suite_activation_failure_is_feature_coverage(self):
+        self.assertTrue(_is_feature_coverage_failure({
+            "case": "suite:candidate-commit-first",
+            "error": "selected durable completion priority executed no required prioritized work in any completed case",
+        }))
+        self.assertTrue(_is_feature_coverage_failure({
+            "case": "suite:candidate-b32",
+            "error": "selected combined peer/proposal mode executed no combined steps in any completed case",
+        }))
+        self.assertFalse(_is_feature_coverage_failure({
+            "case": "candidate-b32-n0-q1000-r1",
+            "error": "benchmark process exited 1",
+        }))
+
+    def test_capacity_report_retains_every_named_variant_boundary(self):
+        data = durable_data()
+        data["cases"] = []
+        for rate in (1000, 2000):
+            data["cases"].append(service_case(
+                "candidate-b32", "rafter", 0, rate, rate,
+                8 if rate == 1000 else 21, p999=15 if rate == 1000 else 45,
+            ))
+            data["cases"].append(service_case(
+                "prior", "rafter", 0, rate, rate, 10, p999=18,
+            ))
+            data["cases"].append(service_case(
+                "openraft", "openraft", 0, rate, rate,
+                12 if rate == 1000 else 25, p999=30 if rate == 1000 else 60,
+            ))
+        summary = build_summary(durable=data)
+        capacity = summary["sections"][2]["capacity"]
+        boundaries = {row["variant"]: row for row in capacity["variant_boundaries"]}
+        self.assertEqual(boundaries["prior"]["highest_qualifying_rate"], 2000)
+        self.assertEqual(boundaries["candidate-b32"]["highest_qualifying_rate"], 1000)
+        self.assertEqual(boundaries["openraft"]["highest_qualifying_rate"], 1000)
+        for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+            self.assertIn("Rafter synchronous messages", rendered)
+            self.assertIn("at least 2,000/s", rendered)
+
+    def test_capacity_does_not_skip_a_failed_lower_rate(self):
+        data = durable_data()
+        data["cases"] = []
+        for rate, p99 in ((1000, 10), (2000, 21), (3000, 10)):
+            data["cases"].append(service_case(
+                "candidate-b32", "rafter", 0, rate, rate, p99, p999=30,
+            ))
+            data["cases"].append(service_case(
+                "openraft", "openraft", 0, rate, rate, 10, p999=30,
+            ))
+        capacity = build_summary(durable=data)["sections"][2]["capacity"]
+        candidate = next(
+            boundary for boundary in capacity["variant_boundaries"]
+            if boundary["variant"] == "candidate-b32"
+        )
+        self.assertEqual(candidate["highest_qualifying_rate"], 1000)
+        self.assertTrue(next(
+            row for row in capacity["rows"] if row["offered_per_second"] == 3000
+        )["rafter"]["qualifies"])
 
     def test_incomplete_suite_suppresses_headline(self):
         data = durable_data()
@@ -153,6 +832,100 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(section["status"], "mixed result")
         self.assertEqual(section["rows"], [])
 
+    def test_incomplete_case_does_not_crash_failure_summary(self):
+        data = durable_data()
+        data["qualification"] = "failed"
+        data["qualification_errors"] = ["one incomplete case"]
+        data["cases"][0]["recovery"] = None
+        data["cases"][0]["history_check"] = None
+        section = build_summary(durable=data)["sections"][3]
+        self.assertEqual(section["status"], "mixed result")
+        self.assertEqual(section["checks"][0]["passed_cases"], len(data["cases"]) - 1)
+
+    def test_snapshot_catchup_smoke_is_reported_as_functional_not_performance_evidence(self):
+        data = durable_data()
+        snapshot = service_case(
+            "candidate-b32", "rafter", 0, 0, 100, 1.0
+        )
+        snapshot["source_case"] = "worker-smoke-snapshot-catchup/001-rafter-r1-q0"
+        snapshot["workload"]["scenario"] = "snapshot-catchup"
+        snapshot["smoke"] = True
+        snapshot["snapshot_reclamation"] = {"status": "passed"}
+        data["cases"].append(snapshot)
+        data["smokes"].append({
+            "scenario": "snapshot-catchup",
+            "status": "passed",
+            "source_cases": [snapshot["source_case"]],
+            "failures": [],
+        })
+
+        section = build_summary(durable=data)["sections"][3]
+        check = next(
+            item for item in section["checks"]
+            if item["name"] == "complete-service snapshot catch-up smoke"
+        )
+        self.assertEqual(check["passed_cases"], 1)
+        self.assertIn("functional smoke only, not performance", check["scope"])
+        self.assertIn("snapshot catch-up smoke passed", section["result"])
+        summary = build_summary(durable=data)
+        self.assertIn("1 case passed", render_markdown(summary, {}))
+        self.assertIn("1 case passed", render_html(summary, {}))
+        self.assertNotIn("1 cases passed", render_markdown(summary, {}))
+        self.assertNotIn("1 cases passed", render_html(summary, {}))
+        self.assertIn(
+            "long-duration snapshot/compaction and WAL-reclamation soak performance",
+            section["not_measured"],
+        )
+
+    def test_reclamation_under_load_is_reported_as_same_code_sustained_evidence(self):
+        data = durable_data()
+        data["suite"]["kind"] = "reclamation-under-load"
+        data["reclamation_under_load"] = reclamation_under_load_assessment()
+
+        summary = build_summary(durable=data)
+        service = summary["sections"][2]
+        sustained = summary["sections"][3]
+        self.assertNotIn(
+            "WAL reclamation under complete service traffic",
+            summary["sections"][1]["not_measured"],
+        )
+        self.assertEqual(service["status"], "internal qualification")
+        self.assertEqual(service["comparison_kind"], "internal optimization")
+        self.assertFalse(service["rows"])
+        self.assertEqual(
+            service["verdicts"]["service_objective"]["status"], "passed"
+        )
+        self.assertEqual(sustained["reclamation_under_load"]["status"], "passed")
+        self.assertIn("met its predeclared objectives", sustained["result"])
+        for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+            self.assertIn("WAL reclamation under load", rendered)
+            self.assertIn("98.0%", rendered)
+            self.assertIn("2.00 MiB / 20.00 MiB", rendered)
+            self.assertIn("Application-journal physical reclamation is not tested", rendered)
+            self.assertIn(
+                "Snapshot publication and WAL reclamation stage maxima", rendered
+            )
+            self.assertIn("Source + write", rendered)
+            self.assertIn("1.049 ms", rendered)
+            self.assertIn(
+                "Snapshot encodes / WAL reclaims / journal checkpoints", rendered
+            )
+            self.assertIn("9 / 0 / 3", rendered)
+
+    def test_reclamation_under_load_failure_remains_visible(self):
+        data = durable_data()
+        data["suite"]["kind"] = "reclamation-under-load"
+        data["reclamation_under_load"] = reclamation_under_load_assessment(status="failed")
+
+        summary = build_summary(durable=data)
+        self.assertEqual(summary["sections"][2]["status"], "mixed result")
+        self.assertIn(
+            "missed at least one predeclared objective",
+            summary["sections"][3]["result"],
+        )
+        for rendered in (render_markdown(summary, {}), render_html(summary, {})):
+            self.assertIn("snap10k p99 exceeded the equal-load budget", rendered)
+
     def test_candidate_accounting_loss_labels_result_mixed(self):
         data = durable_data()
         candidate = next(case for case in data["cases"]
@@ -160,7 +933,28 @@ class SummaryTests(unittest.TestCase):
         candidate["accounting"]["not_issued"] = 1
         section = build_summary(durable=data)["sections"][2]
         self.assertEqual(section["status"], "mixed result")
+        self.assertFalse(section["headline_qualified"])
+        self.assertIn("is not qualified", section["result"])
+        self.assertIn("1 unsent requests", section["result"])
+        self.assertNotIn("3.79×", section["result"])
         self.assertEqual(section["accounting"]["rafter"]["not_issued"], 1)
+
+    def test_saturated_tail_regression_labels_result_mixed(self):
+        data = durable_data()
+        candidate = next(case for case in data["cases"]
+                         if case["configuration"]["variant"] == "candidate-b32"
+                         and case["workload"]["network_delay_ms"] == 0
+                         and case["workload"]["offered_per_second"] == 0)
+        control = next(case for case in data["cases"]
+                       if case["configuration"]["variant"] == "openraft"
+                       and case["workload"]["network_delay_ms"] == 0
+                       and case["workload"]["offered_per_second"] == 0)
+        candidate["metrics"]["client_p99_ms"] = control["metrics"]["client_p99_ms"] * 1.2
+        section = build_summary(durable=data)["sections"][2]
+        self.assertEqual(section["status"], "mixed result")
+        self.assertFalse(section["headline_qualified"])
+        self.assertEqual(section["rows"][0]["saturated_p99_interpretation"], "measured regression")
+        self.assertIn("1 of 12", section["result"])
 
     def test_storage_loader_recomputes_raw_receipts(self):
         with tempfile.TemporaryDirectory() as temp:

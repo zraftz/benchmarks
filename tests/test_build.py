@@ -84,6 +84,10 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(receipt["pipelined_durability"], pipeline)
             self.assertEqual(receipt["peer_group_commit"], pipeline)
             self.assertEqual(receipt["ordered_apply"], pipeline)
+            self.assertEqual(
+                receipt["rafter_application_worker"],
+                "rafter-runtime/ApplicationWorker" if pipeline else None,
+            )
             for name in IMPLEMENTATIONS:
                 binary = root / "dist" / f"raft-bench-{name}"
                 self.assertEqual(binary.read_text(), name)

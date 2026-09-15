@@ -6,18 +6,30 @@ import os
 import signal
 import socket
 import subprocess
+import threading
 import time
 from typing import Any
 from . import protocol
 from .evidence import write_json, CONTRACT
 
+DEFAULT_APPLICATION_CHECKPOINT_BYTES = 64 * 1024 * 1024
+DEFAULT_WAL_RECLAMATION_BYTES = 64 * 1024 * 1024
+
 
 class Cluster:
     def __init__(self, implementation: str, command: list[str], directory: Path,
-                 data: Path, cluster_id: str, batch_size: int = 64, peer_batch_size: int = 1, diagnostics: bool = False, ordered_apply: bool = False, peer_message_stream: bool = False, pipelined_durability: bool = False):
+                 data: Path, cluster_id: str, batch_size: int = 64, peer_batch_size: int = 1,
+                 diagnostics: bool = False, ordered_apply: bool = False,
+                 peer_message_stream: bool = False, pipelined_durability: bool = False,
+                 max_speculative_proposals: int = 1, combine_peer_proposals: bool = False,
+                 max_inflight_appends: int = 8, durable_completion_priority: bool = False,
+                 openraft_async_flush: bool = False, snapshot_interval_entries: int = 0,
+                 application_checkpoint_bytes: int = DEFAULT_APPLICATION_CHECKPOINT_BYTES,
+                 wal_reclamation_bytes: int = DEFAULT_WAL_RECLAMATION_BYTES):
         self.implementation, self.command = implementation, command
         self.directory, self.data = directory, data
         self.processes: dict[int, subprocess.Popen] = {}
+        self._processes_lock = threading.Lock()
         self.logs: list[Any] = []
         self.paused: set[int] = set()
         self.configs: dict[int, Path] = {}
@@ -39,7 +51,16 @@ class Cluster:
                     "client": self.nodes[node], "peer": peers[node], "peers": peers,
                     "data_dir": str((data / f"node-{node}").resolve()),
                     "tick_ms": 20, "capacity": 4096, "batch_size": batch_size,
-                    "peer_batch_size": peer_batch_size, "diagnostics": diagnostics, "ordered_apply": ordered_apply, "peer_message_stream": peer_message_stream, "pipelined_durability": pipelined_durability})
+                    "peer_batch_size": peer_batch_size, "diagnostics": diagnostics, "ordered_apply": ordered_apply,
+                    "peer_message_stream": peer_message_stream, "pipelined_durability": pipelined_durability,
+                    "max_speculative_proposals": max_speculative_proposals,
+                    "combine_peer_proposals": combine_peer_proposals,
+                    "max_inflight_appends": max_inflight_appends,
+                    "durable_completion_priority": durable_completion_priority,
+                    "openraft_async_flush": openraft_async_flush,
+                    "snapshot_interval_entries": snapshot_interval_entries,
+                    "application_checkpoint_bytes": application_checkpoint_bytes,
+                    "wal_reclamation_bytes": wal_reclamation_bytes})
         finally:
             for sock in reserved:
                 sock.close()
@@ -47,13 +68,21 @@ class Cluster:
         # can still win this small race; startup fails rather than attaching to it.
 
     def start_node(self, node: int) -> None:
-        if node in self.processes and self.processes[node].poll() is None:
+        with self._processes_lock:
+            current = self.processes.get(node)
+        if current is not None and current.poll() is None:
             raise RuntimeError("node already running")
         generation = len(list(self.directory.glob(f"node-{node}-*.log")))
         log = (self.directory / f"node-{node}-{generation}.log").open("xb")
         self.logs.append(log)
-        self.processes[node] = subprocess.Popen(self.command + ["--config", str(self.configs[node])],
+        process = subprocess.Popen(self.command + ["--config", str(self.configs[node])],
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        with self._processes_lock:
+            self.processes[node] = process
+
+    def process_snapshot(self) -> dict[int, subprocess.Popen]:
+        with self._processes_lock:
+            return dict(self.processes)
 
     def start(self, *, initialize: bool = True) -> None:
         for node in self.nodes:

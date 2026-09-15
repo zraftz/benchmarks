@@ -13,6 +13,28 @@ use tokio::{
     time::timeout,
 };
 
+// One buffer per remote peer; ordinary frames reuse it and large frames release it.
+const RETAINED_PEER_FRAME_BYTES: usize = 256 * 1024;
+
+fn prepare_peer_frame(frame: &mut Vec<u8>, from: u64, bytes: &[u8]) -> Result<()> {
+    let body_len = 8usize
+        .checked_add(bytes.len())
+        .filter(|body_len| *body_len <= FRAME_LIMIT)
+        .ok_or_else(|| anyhow::anyhow!("peer frame exceeds transport budget"))?;
+    frame.clear();
+    frame.reserve_exact(4 + body_len);
+    frame.extend_from_slice(&(body_len as u32).to_be_bytes());
+    frame.extend_from_slice(&from.to_be_bytes());
+    frame.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn release_oversized_peer_frame(frame: &mut Vec<u8>) {
+    if frame.capacity() > RETAINED_PEER_FRAME_BYTES {
+        *frame = Vec::new();
+    }
+}
+
 #[async_trait]
 pub trait Handler: Clone + Send + Sync + 'static {
     fn message_oriented(&self) -> bool {
@@ -30,6 +52,20 @@ pub async fn read_frame(s: &mut TcpStream) -> Result<Vec<u8>> {
     s.read_exact(&mut data).await?;
     Ok(data)
 }
+async fn read_peer_frame(s: &mut TcpStream) -> Result<(u64, Vec<u8>)> {
+    let size = s.read_u32().await? as usize;
+    if size > FRAME_LIMIT {
+        bail!("frame limit exceeded");
+    }
+    if size < 8 {
+        bail!("peer identity missing");
+    }
+    let mut sender = [0; 8];
+    s.read_exact(&mut sender).await?;
+    let mut data = vec![0; size - sender.len()];
+    s.read_exact(&mut data).await?;
+    Ok((u64::from_be_bytes(sender), data))
+}
 pub async fn write_frame(s: &mut TcpStream, data: &[u8]) -> Result<()> {
     if data.len() > FRAME_LIMIT {
         bail!("frame limit exceeded");
@@ -44,40 +80,47 @@ pub async fn write_frame(s: &mut TcpStream, data: &[u8]) -> Result<()> {
 pub struct Rpc {
     address: String,
     from: u64,
-    connection: Arc<Mutex<Option<TcpStream>>>,
+    connection: Arc<Mutex<RpcConnection>>,
+}
+struct RpcConnection {
+    stream: Option<TcpStream>,
+    frame: Vec<u8>,
 }
 impl Rpc {
     pub fn new(address: String, from: u64) -> Self {
         Self {
             address,
             from,
-            connection: Arc::new(Mutex::new(None)),
+            connection: Arc::new(Mutex::new(RpcConnection {
+                stream: None,
+                frame: Vec::new(),
+            })),
         }
     }
     pub async fn call(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         let mut slot = self.connection.lock().await;
+        prepare_peer_frame(&mut slot.frame, self.from, bytes)?;
         let result = timeout(Duration::from_secs(2), async {
-            if slot.is_none() {
+            if slot.stream.is_none() {
                 let stream = TcpStream::connect(&self.address).await?;
                 stream.set_nodelay(true)?;
-                *slot = Some(stream);
+                slot.stream = Some(stream);
             }
-            let mut packet = Vec::with_capacity(8 + bytes.len());
-            packet.extend_from_slice(&self.from.to_be_bytes());
-            packet.extend_from_slice(bytes);
-            let stream = slot.as_mut().unwrap();
-            write_frame(stream, &packet).await?;
+            let RpcConnection { stream, frame } = &mut *slot;
+            let stream = stream.as_mut().unwrap();
+            stream.write_all(frame).await?;
             read_frame(stream).await
         })
         .await;
+        release_oversized_peer_frame(&mut slot.frame);
         match result {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(e)) => {
-                *slot = None;
+                slot.stream = None;
                 Err(e)
             }
             Err(e) => {
-                *slot = None;
+                slot.stream = None;
                 Err(e.into())
             }
         }
@@ -130,15 +173,11 @@ async fn serve_peer<H: Handler>(
     message_stream: bool,
 ) -> Result<()> {
     loop {
-        let data = timeout(Duration::from_secs(30), read_frame(&mut stream)).await??;
-        if data.len() < 8 {
-            bail!("peer identity missing")
-        }
-        let from = u64::from_be_bytes(data[..8].try_into().unwrap());
+        let (from, data) = timeout(Duration::from_secs(30), read_peer_frame(&mut stream)).await??;
         if from == own || !voters.contains_key(&from) {
             bail!("unknown peer")
         }
-        let response = handler.peer(from, data[8..].to_vec()).await?;
+        let response = handler.peer(from, data).await?;
         if message_stream {
             if !response.is_empty() {
                 bail!("message handler returned an RPC response")

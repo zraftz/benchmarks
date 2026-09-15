@@ -146,6 +146,8 @@ dependencies = [
  "async-trait",
  "crc32fast",
  "fs2",
+ "rafter",
+ "rafter-runtime",
  "serde",
  "serde_json",
  "tokio",
@@ -359,7 +361,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1016,12 +1018,12 @@ dependencies = [
 [[package]]
 name = "rafter"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=518aefd767dc0ef2c1f1ccc5f970c96456cfd109#518aefd767dc0ef2c1f1ccc5f970c96456cfd109"
+source = "git+https://github.com/zsumz/rafter?rev=8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc#8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc"
 
 [[package]]
 name = "rafter-codec"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=518aefd767dc0ef2c1f1ccc5f970c96456cfd109#518aefd767dc0ef2c1f1ccc5f970c96456cfd109"
+source = "git+https://github.com/zsumz/rafter?rev=8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc#8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc"
 dependencies = [
  "rafter",
  "rafter-crc32",
@@ -1030,12 +1032,12 @@ dependencies = [
 [[package]]
 name = "rafter-crc32"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=518aefd767dc0ef2c1f1ccc5f970c96456cfd109#518aefd767dc0ef2c1f1ccc5f970c96456cfd109"
+source = "git+https://github.com/zsumz/rafter?rev=8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc#8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc"
 
 [[package]]
 name = "rafter-runtime"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=518aefd767dc0ef2c1f1ccc5f970c96456cfd109#518aefd767dc0ef2c1f1ccc5f970c96456cfd109"
+source = "git+https://github.com/zsumz/rafter?rev=8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc#8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc"
 dependencies = [
  "rafter",
  "rafter-runtime-api",
@@ -1045,7 +1047,7 @@ dependencies = [
 [[package]]
 name = "rafter-runtime-api"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=518aefd767dc0ef2c1f1ccc5f970c96456cfd109#518aefd767dc0ef2c1f1ccc5f970c96456cfd109"
+source = "git+https://github.com/zsumz/rafter?rev=8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc#8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc"
 dependencies = [
  "rafter",
 ]
@@ -1053,7 +1055,7 @@ dependencies = [
 [[package]]
 name = "rafter-storage"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=518aefd767dc0ef2c1f1ccc5f970c96456cfd109#518aefd767dc0ef2c1f1ccc5f970c96456cfd109"
+source = "git+https://github.com/zsumz/rafter?rev=8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc#8c3dc15df070da12fd9b23ae0ce2734d8ea76bfc"
 dependencies = [
  "fs4",
  "rafter",
@@ -1214,7 +1216,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1366,7 +1368,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

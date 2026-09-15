@@ -11,8 +11,8 @@ use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
 use bench_compare::{
-    payload_of_size, report_json, ServiceShapeMetrics, WorkloadMetrics, PAYLOAD_BYTES,
-    SERVICE_TRACKED_PROPOSALS, SERVICE_WRITE_BATCH_DEPTH,
+    payload_of_size, report_json, selected_rafter_revision, ServiceShapeMetrics, WorkloadMetrics,
+    PAYLOAD_BYTES, SERVICE_TRACKED_PROPOSALS, SERVICE_WRITE_BATCH_DEPTH,
 };
 use rafter::{
     ClientProposalInput, Input as RaftInput, LogIndex, MembershipConfig, NodeConfig, NodeId,
@@ -35,7 +35,7 @@ fn main() {
         "{}",
         report_json(
             "rafter-service",
-            "path:../crates (workspace @ HEAD)",
+            selected_rafter_revision(),
             "write_batch submitted to in-memory service -> every tracked write applies",
             &[tracked_write],
         )

@@ -21,6 +21,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+mod log_io;
+
 fn failure(e: impl ToString) -> StorageError<u64> {
     StorageError::from_io_error(
         ErrorSubject::Store,
@@ -31,7 +33,7 @@ fn failure(e: impl ToString) -> StorageError<u64> {
 fn unsupported() -> StorageError<u64> {
     failure("snapshot/compaction unsupported: this is a retained-log benchmark")
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 enum Record {
     Append(Vec<Entry<Types>>),
     Vote(Vote<u64>),
@@ -40,7 +42,7 @@ enum Record {
 }
 #[derive(Debug)]
 struct LogInner {
-    journal: Journal,
+    io: log_io::LogIo,
     logs: BTreeMap<u64, Entry<Types>>,
     vote: Option<Vote<u64>>,
     committed: Option<LogId<u64>>,
@@ -60,21 +62,16 @@ impl LogInner {
             }
         }
     }
-    fn write(&mut self, r: Record) -> Result<()> {
-        self.journal.append(&r)?;
-        self.replay(r);
-        Ok(())
-    }
 }
 #[derive(Clone, Debug)]
 pub struct LogStore {
     inner: Arc<Mutex<LogInner>>,
 }
 impl LogStore {
-    pub fn open(path: &Path) -> Result<Self> {
+    pub fn open(path: &Path, asynchronous_flush: bool) -> Result<Self> {
         let (journal, records) = Journal::open::<Record>(path)?;
         let mut inner = LogInner {
-            journal,
+            io: log_io::LogIo::new(journal, asynchronous_flush)?,
             logs: BTreeMap::new(),
             vote: None,
             committed: None,
@@ -88,8 +85,35 @@ impl LogStore {
     }
     pub fn stats(&self) -> serde_json::Value {
         let i = self.inner.lock().unwrap();
-        serde_json::json!({"raft_syncs":i.journal.syncs,
-            "raft_bytes":i.journal.bytes,"retained_entries":i.logs.len(),"storage":"benchmark journal + BTreeMap"})
+        i.io.stats(i.logs.len())
+    }
+    #[cfg(test)]
+    fn fail_next_before_recording(&self) -> log_io::FailureControl {
+        self.inner.lock().unwrap().io.fail_next_before_recording()
+    }
+    #[cfg(test)]
+    fn pause_next_admission_after_failure_check(&self) -> log_io::AdmissionControl {
+        self.inner
+            .lock()
+            .unwrap()
+            .io
+            .pause_next_admission_after_failure_check()
+    }
+    async fn write_fenced(&self, record: Record) -> std::result::Result<(), StorageError<u64>> {
+        let fence = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.io.asynchronous() {
+                let replay = record.clone();
+                let fence = inner.io.submit_fence(record).map_err(failure)?;
+                inner.replay(replay);
+                fence
+            } else {
+                inner.io.write_synchronous(&record).map_err(failure)?;
+                inner.replay(record);
+                log_io::Fence::Durable
+            }
+        };
+        fence.wait().await.map_err(failure)
     }
 }
 impl RaftLogReader<Types> for LogStore {
@@ -120,11 +144,7 @@ impl RaftLogStorage<Types> for LogStore {
         self.clone()
     }
     async fn save_vote(&mut self, v: &Vote<u64>) -> std::result::Result<(), StorageError<u64>> {
-        self.inner
-            .lock()
-            .unwrap()
-            .write(Record::Vote(*v))
-            .map_err(failure)
+        self.write_fenced(Record::Vote(*v)).await
     }
     async fn read_vote(&mut self) -> std::result::Result<Option<Vote<u64>>, StorageError<u64>> {
         Ok(self.inner.lock().unwrap().vote)
@@ -133,11 +153,7 @@ impl RaftLogStorage<Types> for LogStore {
         &mut self,
         c: Option<LogId<u64>>,
     ) -> std::result::Result<(), StorageError<u64>> {
-        self.inner
-            .lock()
-            .unwrap()
-            .write(Record::Committed(c))
-            .map_err(failure)
+        self.write_fenced(Record::Committed(c)).await
     }
     async fn read_committed(
         &mut self,
@@ -153,25 +169,29 @@ impl RaftLogStorage<Types> for LogStore {
         I: IntoIterator<Item = Entry<Types>> + OptionalSend,
         I::IntoIter: OptionalSend,
     {
-        let entries = entries.into_iter().collect();
-        let result = self.inner.lock().unwrap().write(Record::Append(entries));
-        match result {
-            Ok(()) => {
-                callback.log_io_completed(Ok(()));
-                Ok(())
+        let record = Record::Append(entries.into_iter().collect());
+        let mut inner = self.inner.lock().unwrap();
+        if inner.io.asynchronous() {
+            let replay = record.clone();
+            inner.io.submit_append(record, callback).map_err(failure)?;
+            inner.replay(replay);
+            Ok(())
+        } else {
+            let result = inner.io.write_synchronous(&record);
+            if result.is_ok() {
+                inner.replay(record);
             }
-            Err(e) => {
-                callback.log_io_completed(Err(io::Error::other(e.to_string())));
-                Err(failure(e))
-            }
+            callback.log_io_completed(
+                result
+                    .as_ref()
+                    .copied()
+                    .map_err(|error| io::Error::other(error.clone())),
+            );
+            result.map_err(failure)
         }
     }
     async fn truncate(&mut self, id: LogId<u64>) -> std::result::Result<(), StorageError<u64>> {
-        self.inner
-            .lock()
-            .unwrap()
-            .write(Record::Truncate(id))
-            .map_err(failure)
+        self.write_fenced(Record::Truncate(id)).await
     }
     async fn purge(&mut self, _id: LogId<u64>) -> std::result::Result<(), StorageError<u64>> {
         Err(unsupported())
@@ -289,3 +309,7 @@ impl RaftStateMachine<Types> for StateMachine {
         Ok(None)
     }
 }
+
+#[cfg(test)]
+#[path = "storage_test.rs"]
+mod tests;

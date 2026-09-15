@@ -4,8 +4,6 @@ use anyhow::{bail, Result};
 use rafter::{Input, NodeId, Output, Role, Term};
 #[cfg(feature = "pipelined-durability")]
 mod pipeline;
-#[cfg(feature = "pipelined-durability")]
-mod worker;
 
 pub enum Driver {
     Direct(Box<Node>),
@@ -13,15 +11,21 @@ pub enum Driver {
     Pipeline(Box<pipeline::Pipeline>),
 }
 impl Driver {
-    pub fn new(node: Node, enabled: bool, diagnostics: bool) -> Result<Self> {
+    pub fn new(
+        node: Node,
+        enabled: bool,
+        diagnostics: bool,
+        max_speculative_proposals: usize,
+    ) -> Result<Self> {
         #[cfg(feature = "pipelined-durability")]
         if enabled {
             return Ok(Self::Pipeline(Box::new(pipeline::Pipeline::new(
                 node,
                 diagnostics,
+                max_speculative_proposals,
             )?)));
         }
-        let _ = diagnostics;
+        let _ = (diagnostics, max_speculative_proposals);
         if enabled {
             bail!("pipelined durability is unavailable in this build")
         }
@@ -34,6 +38,16 @@ impl Driver {
             Self::Pipeline(state) => state
                 .node
                 .ready_node()
+                .expect("actor completed persistence before consensus access"),
+        }
+    }
+    pub fn ready_mut(&mut self) -> &mut Node {
+        match self {
+            Self::Direct(node) => node,
+            #[cfg(feature = "pipelined-durability")]
+            Self::Pipeline(state) => state
+                .node
+                .ready_node_mut()
                 .expect("actor completed persistence before consensus access"),
         }
     }
@@ -69,7 +83,7 @@ impl Driver {
         match self {
             Self::Direct(_) => false,
             #[cfg(feature = "pipelined-durability")]
-            Self::Pipeline(state) => state.node.pending_operation().is_some(),
+            Self::Pipeline(state) => state.node.persistence_pending(),
         }
     }
     pub fn complete(&mut self) -> Result<Option<Vec<Output>>> {
@@ -89,9 +103,17 @@ impl Driver {
                     "submitted_index":p.submitted.0,"durable_index":p.durable.0,
                     "durable_commit_index":p.committed.0,"submitted_operations":state.submitted,
                     "completed_operations":state.completed,"max_outstanding_operations":1,
-                    "max_speculative_proposals":pipeline::MAX_SPECULATIVE_PROPOSALS,
+                    "max_speculative_proposals":state.max_speculative_proposals,
                     "synchronous_proposal_batches":state.synchronous_proposal_batches,
-                    "synchronous_proposals":state.synchronous_proposals})
+                    "synchronous_proposals":state.synchronous_proposals,
+                    "speculative_proposal_batches":state.speculative_proposal_batches,
+                    "speculative_proposals":state.speculative_proposals,
+                    "combined_peer_proposal_batches":state.combined_peer_proposal_batches,
+                    "combined_peer_first_batches":state.combined_peer_first_batches,
+                    "combined_proposal_first_batches":state.combined_proposal_first_batches,
+                    "combined_peer_events":state.combined_peer_events,
+                    "combined_peer_proposals":state.combined_peer_proposals,
+                    "proposal_batch_sizes":state.proposal_batch_sizes})
             }
         }
     }

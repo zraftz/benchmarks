@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bench_compare::{
-    payload_of_size, report_json, MultiRaftShapeMetrics, WorkloadMetrics, MULTIRAFT_BATCH_DEPTH,
-    MULTIRAFT_GROUPS, MULTIRAFT_ROUNDS, PAYLOAD_BYTES,
+    payload_of_size, report_json, selected_rafter_revision, MultiRaftShapeMetrics, WorkloadMetrics,
+    MULTIRAFT_BATCH_DEPTH, MULTIRAFT_GROUPS, MULTIRAFT_ROUNDS, PAYLOAD_BYTES,
 };
 use rafter::{
     ClientProposalInput, Input as RaftInput, LocalProposalId, LogIndex, MembershipConfig,
@@ -37,7 +37,7 @@ fn main() {
         "{}",
         report_json(
             "rafter-multiraft",
-            "path:../crates (workspace @ HEAD)",
+            selected_rafter_revision(),
             "proposal batch submitted through TypedMultiRaftHost -> every tracked write applies",
             &[round_robin],
         )

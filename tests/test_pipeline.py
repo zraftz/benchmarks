@@ -1,6 +1,6 @@
 import copy
 import unittest
-from benchctl.pipeline import activity
+from benchctl.pipeline import activity, recorded_activity_matches
 
 
 def snapshot(counts):
@@ -8,11 +8,35 @@ def snapshot(counts):
         "enabled": True, "completed_operations": count}}}} for i, count in enumerate(counts)}
 
 
+def instrumented(counts, speculative, synchronous, sizes, threshold=2):
+    result = snapshot(counts)
+    for node, status in result.items():
+        pipeline = status["info"]["engine"]["persistence_pipeline"]
+        pipeline.update({"submitted_operations": counts[int(node) - 1],
+                         "synchronous_proposal_batches": synchronous[int(node) - 1],
+                         "synchronous_proposals": synchronous[int(node) - 1],
+                         "speculative_proposal_batches": speculative[int(node) - 1],
+                         "speculative_proposals": speculative[int(node) - 1],
+                         "combined_peer_proposal_batches": synchronous[int(node) - 1],
+                         "combined_peer_first_batches": synchronous[int(node) - 1],
+                         "combined_proposal_first_batches": 0,
+                         "combined_peer_events": synchronous[int(node) - 1] * 2,
+                         "combined_peer_proposals": synchronous[int(node) - 1],
+                         "proposal_batch_sizes": sizes[int(node) - 1],
+                         "max_speculative_proposals": threshold})
+    return result
+
+
 class PipelineActivityTests(unittest.TestCase):
     def test_counts_are_deltas_across_nodes_without_claiming_latency(self):
         result = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))
+        self.assertEqual(result["schema"], 3)
         self.assertEqual(result["completed_by_node"], {"1": 5, "2": 3, "3": 0})
         self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["combined_mode"], {
+            "required_by_configuration": False,
+            "observed_during_load": False,
+        })
 
     def test_fallback_or_restart_cannot_masquerade_as_exercised_pipeline(self):
         before = snapshot([7, 0, 0])
@@ -35,3 +59,51 @@ class PipelineActivityTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case), self.assertRaises(ValueError):
                 activity(before, case)
+
+    def test_threshold_and_batch_geometry_are_counter_deltas(self):
+        before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3, "4": 1}, {}, {}])
+        after = instrumented([9, 0, 0], [7, 0, 0], [2, 0, 0], [{"1": 7, "4": 2}, {}, {}])
+        result = activity(before, after, require_combined=True)
+        self.assertEqual(result["max_speculative_proposals_by_node"], {"1": 2, "2": 2, "3": 2})
+        self.assertEqual(result["speculative_proposal_batches_by_node"]["1"], 4)
+        self.assertEqual(result["combined_peer_proposal_batches_by_node"]["1"], 1)
+        self.assertEqual(result["combined_peer_first_batches_by_node"]["1"], 1)
+        self.assertEqual(result["combined_proposal_first_batches_by_node"]["1"], 0)
+        self.assertEqual(result["combined_peer_events_by_node"]["1"], 2)
+        self.assertEqual(result["proposal_batch_sizes_by_node"]["1"], {"1": 4, "4": 1})
+
+    def test_selected_combined_mode_records_when_no_combined_step_was_available(self):
+        before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3}, {}, {}])
+        after = instrumented([9, 0, 0], [7, 0, 0], [1, 0, 0], [{"1": 7}, {}, {}])
+        result = activity(before, after, require_combined=True)
+        self.assertEqual(result["combined_mode"], {
+            "required_by_configuration": True,
+            "observed_during_load": False,
+        })
+
+    def test_malformed_combined_direction_or_content_counters_fail_closed(self):
+        before = instrumented([4, 0, 0], [3, 0, 0], [1, 0, 0], [{"1": 3}, {}, {}])
+        for field, value, message in (
+            ("combined_proposal_first_batches", 1, "direction counters disagree"),
+            ("combined_peer_events", 0, "contents are incomplete"),
+            ("combined_peer_proposals", 0, "contents are incomplete"),
+        ):
+            changed = copy.deepcopy(before)
+            changed["1"]["info"]["engine"]["persistence_pipeline"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
+                activity(changed, instrumented(
+                    [9, 0, 0], [7, 0, 0], [2, 0, 0], [{"1": 7}, {}, {}]))
+
+    def test_sealed_activity_compatibility_is_explicit_and_fail_closed(self):
+        current = activity(snapshot([7, 0, 0]), snapshot([12, 3, 0]))
+        schema_two = {key: value for key, value in current.items()
+                      if key != "combined_mode"}
+        schema_two["schema"] = 2
+        transitional = {key: value for key, value in schema_two.items() if key != "schema"}
+        legacy = {key: transitional[key] for key in ("status", "completed_by_node", "scope")}
+        self.assertTrue(recorded_activity_matches(current, current))
+        self.assertTrue(recorded_activity_matches(current, schema_two))
+        self.assertTrue(recorded_activity_matches(current, transitional))
+        self.assertTrue(recorded_activity_matches(current, legacy))
+        self.assertFalse(recorded_activity_matches(current, {"status": "passed"}))
+        self.assertFalse(recorded_activity_matches(current, {**current, "schema": 1}))

@@ -4,7 +4,7 @@
 use crate::journal::Journal;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::{cell::RefCell, collections::BTreeMap, path::Path};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -43,16 +43,79 @@ pub struct Outcome {
     pub swapped: Option<bool>,
     pub error: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Session {
     sequence: u64,
     command: Command,
     outcome: Outcome,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Model {
     pub values: BTreeMap<String, String>,
     sessions: BTreeMap<String, Session>,
+}
+
+const APPLICATION_SNAPSHOT_SCHEMA: u32 = 1;
+pub const DEFAULT_APPLICATION_JOURNAL_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
+const RETAINED_SNAPSHOT_CAPACITY: usize = 8 * 1024 * 1024;
+
+/// Complete durable application state at one applied Raft-log boundary.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationSnapshot {
+    snapshot_schema: u32,
+    pub applied_index: u64,
+    model: Model,
+    metadata: Option<serde_json::Value>,
+}
+
+/// Encoded application snapshot plus the Raft boundary it represents.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EncodedApplicationSnapshot {
+    pub applied_index: u64,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct BorrowedApplicationSnapshot<'a> {
+    snapshot_schema: u32,
+    applied_index: u64,
+    model: &'a Model,
+    metadata: &'a Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ApplicationRecord {
+    // Ordinary records retain the legacy JSON-array representation so old
+    // application journals reopen without migration.
+    Entries(Vec<Applied>),
+    Snapshot(ApplicationSnapshot),
+}
+
+impl ApplicationSnapshot {
+    fn validate(&self) -> Result<()> {
+        if self.snapshot_schema != APPLICATION_SNAPSHOT_SCHEMA {
+            bail!(
+                "unsupported application snapshot schema {}",
+                self.snapshot_schema
+            );
+        }
+        if self.applied_index == 0 {
+            bail!("application snapshot boundary must be nonzero");
+        }
+        Ok(())
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        Ok(serde_json::to_vec(self)?)
+    }
+
+    pub fn decode(payload: &[u8]) -> Result<Self> {
+        let snapshot: Self = serde_json::from_slice(payload)?;
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
 }
 impl Model {
     pub fn apply(&mut self, cmd: &Command) -> Outcome {
@@ -121,21 +184,51 @@ pub struct DurableModel {
     pub index: u64,
     has_applied: bool,
     pub metadata: Option<serde_json::Value>,
+    snapshot_payload: RefCell<Vec<u8>>,
+    application_checkpoint_bytes: u64,
 }
 impl DurableModel {
     pub fn open(path: &Path) -> Result<Self> {
-        let (journal, batches) = Journal::open::<Vec<Applied>>(path)?;
+        let (journal, records) = Journal::open::<ApplicationRecord>(path)?;
         let mut s = Self {
             journal,
             model: Model::default(),
             index: 0,
             has_applied: false,
             metadata: None,
+            snapshot_payload: RefCell::new(Vec::with_capacity(4 * 1024)),
+            application_checkpoint_bytes: DEFAULT_APPLICATION_JOURNAL_CHECKPOINT_BYTES,
         };
-        for batch in batches {
-            s.replay(&batch)?;
+        for record in records {
+            match record {
+                ApplicationRecord::Entries(batch) => {
+                    s.replay(&batch)?;
+                }
+                ApplicationRecord::Snapshot(snapshot) => s.restore_snapshot(snapshot)?,
+            }
         }
         Ok(s)
+    }
+    fn restore_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
+        snapshot.validate()?;
+        if self.has_applied && snapshot.applied_index < self.index {
+            bail!(
+                "application snapshot index regression: {} < {}",
+                snapshot.applied_index,
+                self.index
+            );
+        }
+        if self.has_applied
+            && snapshot.applied_index == self.index
+            && (snapshot.model != self.model || snapshot.metadata != self.metadata)
+        {
+            bail!("application snapshot conflicts at index {}", self.index);
+        }
+        self.index = snapshot.applied_index;
+        self.has_applied = true;
+        self.model = snapshot.model;
+        self.metadata = snapshot.metadata;
+        Ok(())
     }
     fn replay(&mut self, entries: &[Applied]) -> Result<Vec<Option<Outcome>>> {
         let mut out = Vec::new();
@@ -168,21 +261,127 @@ impl DurableModel {
             index = e.index;
             any = true;
         }
-        self.journal.append(&entries)?;
+        self.journal.append(entries)?;
         self.replay(entries)
     }
+    pub fn snapshot(&self) -> ApplicationSnapshot {
+        ApplicationSnapshot {
+            snapshot_schema: APPLICATION_SNAPSHOT_SCHEMA,
+            applied_index: self.index,
+            model: self.model.clone(),
+            metadata: self.metadata.clone(),
+        }
+    }
+    /// Encodes the same snapshot format without cloning the application model.
+    pub fn encode_snapshot(&self) -> Result<EncodedApplicationSnapshot> {
+        let snapshot = BorrowedApplicationSnapshot {
+            snapshot_schema: APPLICATION_SNAPSHOT_SCHEMA,
+            applied_index: self.index,
+            model: &self.model,
+            metadata: &self.metadata,
+        };
+        let mut payload = std::mem::take(&mut *self.snapshot_payload.borrow_mut());
+        if let Err(error) = serde_json::to_writer(&mut payload, &snapshot) {
+            self.recycle_snapshot_payload(payload);
+            return Err(error.into());
+        }
+        Ok(EncodedApplicationSnapshot {
+            applied_index: self.index,
+            payload,
+        })
+    }
+    pub(crate) fn recycle_snapshot_payload(&self, mut payload: Vec<u8>) {
+        payload.clear();
+        if payload.capacity() <= RETAINED_SNAPSHOT_CAPACITY {
+            *self.snapshot_payload.borrow_mut() = payload;
+        }
+    }
+    /// Atomically replaces prior application history with this durable state.
+    pub fn checkpoint_snapshot(&mut self, snapshot: &EncodedApplicationSnapshot) -> Result<()> {
+        if snapshot.applied_index == 0 || snapshot.applied_index != self.index {
+            bail!(
+                "application checkpoint boundary mismatch: snapshot {}, durable {}",
+                snapshot.applied_index,
+                self.index
+            );
+        }
+        self.journal.checkpoint_payload(&snapshot.payload)
+    }
+    pub(crate) fn maintain_checkpoint_snapshot(
+        &mut self,
+        snapshot: &EncodedApplicationSnapshot,
+    ) -> Result<()> {
+        self.checkpoint_snapshot_if_larger_than(snapshot, self.application_checkpoint_bytes)
+    }
+    fn checkpoint_snapshot_if_larger_than(
+        &mut self,
+        snapshot: &EncodedApplicationSnapshot,
+        maximum_bytes: u64,
+    ) -> Result<()> {
+        if self.journal.physical_len()? > maximum_bytes {
+            self.checkpoint_snapshot(snapshot)?;
+        }
+        Ok(())
+    }
+    /// Durably replaces application state with an authoritative Raft snapshot.
+    pub fn install_snapshot(&mut self, snapshot: ApplicationSnapshot) -> Result<()> {
+        snapshot.validate()?;
+        if self.has_applied && snapshot.applied_index < self.index {
+            bail!(
+                "application snapshot index regression: {} < {}",
+                snapshot.applied_index,
+                self.index
+            );
+        }
+        if self.has_applied
+            && snapshot.applied_index == self.index
+            && snapshot.model == self.model
+            && snapshot.metadata == self.metadata
+        {
+            return Ok(());
+        }
+        if self.has_applied && snapshot.applied_index == self.index {
+            bail!("application snapshot conflicts at index {}", self.index);
+        }
+        self.journal.append(&snapshot)?;
+        self.restore_snapshot(snapshot)
+    }
     pub fn set_diagnostics(&mut self, diagnostics: crate::diagnostics::Diagnostics) {
+        for metric in [
+            "journal_checkpoint_write_ns",
+            "journal_checkpoint_sync_ns",
+            "journal_checkpoint_publish_ns",
+        ] {
+            diagnostics.declare(metric);
+        }
         self.journal.diagnostics = diagnostics;
+    }
+    pub(crate) fn set_application_checkpoint_bytes(&mut self, maximum_bytes: u64) {
+        self.application_checkpoint_bytes = maximum_bytes;
     }
     pub fn stats(&self) -> serde_json::Value {
         serde_json::json!({"applied_index":self.index,"keys":self.model.values.len(),
             "sessions":self.model.sessions(),"application_syncs":self.journal.syncs,
-            "application_bytes":self.journal.bytes,"diagnostics":self.journal.diagnostics.snapshot()})
+            "application_bytes":self.journal.bytes,
+            "application_checkpoint_bytes":self.application_checkpoint_bytes,
+            "diagnostics":self.journal.diagnostics.snapshot()})
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
+
+    fn path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "raft-bench-model-{label}-{}-{}",
+            std::process::id(),
+            NEXT_PATH.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
     fn command(n: u64, kind: &str, value: &str) -> Command {
         Command {
             client: "c".into(),
@@ -214,5 +413,297 @@ mod tests {
         m.apply(&command(1, "put", "a"));
         assert_eq!(m.apply(&command(2, "get", "")).value.as_deref(), Some("a"));
         assert_eq!(m.apply(&command(3, "cas", "b")).swapped, Some(false));
+    }
+
+    #[test]
+    fn installed_snapshot_and_following_entries_survive_reopen() {
+        let source_path = path("snapshot-source");
+        let target_path = path("snapshot-target");
+        let mut source = DurableModel::open(&source_path).unwrap();
+        source
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "before")),
+                metadata: None,
+            }])
+            .unwrap();
+        let owned = source.snapshot();
+        let encoded = source.encode_snapshot().unwrap();
+        assert_eq!(encoded.applied_index, owned.applied_index);
+        assert_eq!(encoded.payload, owned.encode().unwrap());
+        let expected = encoded.payload.clone();
+        let capacity = encoded.payload.capacity();
+        let snapshot = ApplicationSnapshot::decode(&encoded.payload).unwrap();
+        source.recycle_snapshot_payload(encoded.payload);
+        assert_eq!(source.snapshot_payload.borrow().capacity(), capacity);
+        let repeated = source.encode_snapshot().unwrap();
+        assert_eq!(repeated.payload, expected);
+        assert_eq!(repeated.payload.capacity(), capacity);
+
+        let mut target = DurableModel::open(&target_path).unwrap();
+        target.install_snapshot(snapshot).unwrap();
+        target
+            .apply(&[Applied {
+                index: 2,
+                command: Some(command(2, "put", "after")),
+                metadata: None,
+            }])
+            .unwrap();
+        drop(target);
+
+        let reopened = DurableModel::open(&target_path).unwrap();
+        assert_eq!(reopened.index, 2);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("after")
+        );
+        std::fs::remove_file(source_path).unwrap();
+        std::fs::remove_file(target_path).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_bounds_history_and_preserves_following_entries() {
+        let model_path = path("checkpoint");
+        let mut model = DurableModel::open(&model_path).unwrap();
+        for index in 1..=32 {
+            model
+                .apply(&[Applied {
+                    index,
+                    command: Some(command(index, "put", &format!("value-{index}"))),
+                    metadata: (index == 32).then(|| serde_json::json!({"term": 1})),
+                }])
+                .unwrap();
+        }
+        let before = std::fs::metadata(&model_path).unwrap().len();
+        let snapshot = model.encode_snapshot().unwrap();
+        model.checkpoint_snapshot(&snapshot).unwrap();
+        let checkpointed = std::fs::metadata(&model_path).unwrap().len();
+        assert!(checkpointed < before);
+        model
+            .apply(&[Applied {
+                index: 33,
+                command: Some(command(33, "put", "after")),
+                metadata: None,
+            }])
+            .unwrap();
+        drop(model);
+
+        let reopened = DurableModel::open(&model_path).unwrap();
+        assert_eq!(reopened.index, 33);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("after")
+        );
+        assert_eq!(reopened.metadata, Some(serde_json::json!({"term": 1})));
+        std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_buffer_retention_is_bounded() {
+        let model_path = path("snapshot-buffer-bound");
+        let model = DurableModel::open(&model_path).unwrap();
+        let initial_capacity = model.snapshot_payload.borrow().capacity();
+        model.recycle_snapshot_payload(Vec::with_capacity(RETAINED_SNAPSHOT_CAPACITY + 1));
+        assert_eq!(model.snapshot_payload.borrow().capacity(), initial_capacity);
+        std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn maintenance_checkpoint_skips_small_durable_journal() {
+        let model_path = path("maintenance-checkpoint-small");
+        let mut model = DurableModel::open(&model_path).unwrap();
+        model
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "durable")),
+                metadata: None,
+            }])
+            .unwrap();
+        let snapshot = model.encode_snapshot().unwrap();
+        let before = std::fs::metadata(&model_path).unwrap().len();
+        model
+            .checkpoint_snapshot_if_larger_than(&snapshot, u64::MAX)
+            .unwrap();
+        assert_eq!(std::fs::metadata(&model_path).unwrap().len(), before);
+        drop(model);
+
+        let reopened = DurableModel::open(&model_path).unwrap();
+        assert_eq!(reopened.index, 1);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("durable")
+        );
+        std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn maintenance_checkpoint_replaces_oversized_history() {
+        let model_path = path("maintenance-checkpoint-large");
+        let mut model = DurableModel::open(&model_path).unwrap();
+        model
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "durable")),
+                metadata: None,
+            }])
+            .unwrap();
+        let snapshot = model.encode_snapshot().unwrap();
+        let checkpointed_len = 8 + snapshot.payload.len() as u64;
+        model
+            .checkpoint_snapshot_if_larger_than(&snapshot, 0)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&model_path).unwrap().len(),
+            checkpointed_len
+        );
+        drop(model);
+
+        let reopened = DurableModel::open(&model_path).unwrap();
+        assert_eq!(reopened.index, 1);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("durable")
+        );
+        std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_install_refuses_application_regression() {
+        let older_path = path("snapshot-older");
+        let newer_path = path("snapshot-newer");
+        let mut older = DurableModel::open(&older_path).unwrap();
+        older
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "old")),
+                metadata: None,
+            }])
+            .unwrap();
+        let snapshot = older.snapshot();
+
+        let mut newer = DurableModel::open(&newer_path).unwrap();
+        newer
+            .apply(&[
+                Applied {
+                    index: 1,
+                    command: Some(command(1, "put", "old")),
+                    metadata: None,
+                },
+                Applied {
+                    index: 2,
+                    command: Some(command(2, "put", "new")),
+                    metadata: None,
+                },
+            ])
+            .unwrap();
+        assert!(newer.install_snapshot(snapshot).is_err());
+        assert_eq!(newer.index, 2);
+        assert_eq!(newer.model.values.get("k").map(String::as_str), Some("new"));
+        std::fs::remove_file(older_path).unwrap();
+        std::fs::remove_file(newer_path).unwrap();
+    }
+
+    #[test]
+    fn conflicting_equal_index_snapshot_does_not_touch_journal() {
+        let source_path = path("snapshot-conflict-source");
+        let target_path = path("snapshot-conflict-target");
+        let mut source = DurableModel::open(&source_path).unwrap();
+        source
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "source")),
+                metadata: None,
+            }])
+            .unwrap();
+        let mut target = DurableModel::open(&target_path).unwrap();
+        target
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "target")),
+                metadata: None,
+            }])
+            .unwrap();
+        let before = std::fs::metadata(&target_path).unwrap().len();
+        assert!(target.install_snapshot(source.snapshot()).is_err());
+        assert_eq!(std::fs::metadata(&target_path).unwrap().len(), before);
+        drop(target);
+        assert_eq!(
+            DurableModel::open(&target_path).unwrap().model.values["k"],
+            "target"
+        );
+        std::fs::remove_file(source_path).unwrap();
+        std::fs::remove_file(target_path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_decoder_rejects_unknown_schema() {
+        let source_path = path("snapshot-schema");
+        let mut source = DurableModel::open(&source_path).unwrap();
+        source
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "value")),
+                metadata: None,
+            }])
+            .unwrap();
+        let mut value = serde_json::to_value(source.snapshot()).unwrap();
+        value["snapshot_schema"] = 2.into();
+        assert!(ApplicationSnapshot::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+        std::fs::remove_file(source_path).unwrap();
+    }
+
+    #[test]
+    fn ordinary_application_record_retains_legacy_array_payload() {
+        let model_path = path("legacy-entry-payload");
+        let mut model = DurableModel::open(&model_path).unwrap();
+        let entries = vec![Applied {
+            index: 1,
+            command: Some(command(1, "put", "value")),
+            metadata: None,
+        }];
+        model.apply(&entries).unwrap();
+        drop(model);
+
+        let bytes = std::fs::read(&model_path).unwrap();
+        let payload_len = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
+        assert_eq!(payload_len, bytes.len() - 8);
+        assert_eq!(&bytes[8..], serde_json::to_vec(&entries).unwrap());
+        std::fs::remove_file(model_path).unwrap();
+    }
+
+    #[test]
+    fn application_snapshot_record_retains_legacy_object_payload() {
+        let source_path = path("snapshot-payload-source");
+        let target_path = path("snapshot-payload-target");
+        let mut source = DurableModel::open(&source_path).unwrap();
+        source
+            .apply(&[Applied {
+                index: 1,
+                command: Some(command(1, "put", "value")),
+                metadata: Some(serde_json::json!({"term": 1})),
+            }])
+            .unwrap();
+        let snapshot = source.snapshot();
+        let expected = serde_json::to_vec(&ApplicationRecord::Snapshot(snapshot.clone())).unwrap();
+        assert_eq!(expected, serde_json::to_vec(&snapshot).unwrap());
+
+        let mut target = DurableModel::open(&target_path).unwrap();
+        target.install_snapshot(snapshot).unwrap();
+        drop(target);
+        let bytes = std::fs::read(&target_path).unwrap();
+        let payload_len = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
+        assert_eq!(payload_len, bytes.len() - 8);
+        assert_eq!(&bytes[8..], expected);
+        let reopened = DurableModel::open(&target_path).unwrap();
+        assert_eq!(reopened.index, 1);
+        assert_eq!(
+            reopened.model.values.get("k").map(String::as_str),
+            Some("value")
+        );
+        assert_eq!(reopened.metadata, Some(serde_json::json!({"term": 1})));
+        drop(reopened);
+
+        std::fs::remove_file(source_path).unwrap();
+        std::fs::remove_file(target_path).unwrap();
     }
 }

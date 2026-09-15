@@ -1,0 +1,847 @@
+{
+  "evidence": {
+    "consensus_in_memory": {
+      "artifact_path": "results/microbench",
+      "href": "https://github.com/zraftz/benchmarks/actions/runs/34654362991",
+      "label": "In-memory evidence",
+      "local_root": null
+    }
+  },
+  "evidence_status": {
+    "complete_durable_service": "not measured",
+    "consensus_in_memory": "passed",
+    "durable_replication": "not measured"
+  },
+  "interpretation": {
+    "roughly_level_percent": 3.0,
+    "rule": "Differences within \u00b13% are roughly level; comparisons fail closed across incompatible evidence."
+  },
+  "normalized_results": {
+    "complete_durable_service": [],
+    "consensus_in_memory": [
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24 (features: storage-v2; current-thread tokio)"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 22794.5
+          },
+          "throughput_ops_s": {
+            "max": 769,
+            "median": 764,
+            "min": 757
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-openraft.json",
+          "run-2-bench-openraft.json",
+          "run-3-bench-openraft.json",
+          "run-4-bench-openraft.json",
+          "run-5-bench-openraft.json",
+          "run-6-bench-openraft.json",
+          "run-7-bench-openraft.json"
+        ],
+        "workload": {
+          "max_in_flight": 16,
+          "payload_bytes": 524224,
+          "proposals": 256,
+          "workload": "large_payload"
+        }
+      },
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24 (features: storage-v2; current-thread tokio)"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 264.1
+          },
+          "throughput_ops_s": {
+            "max": 270065,
+            "median": 269262,
+            "min": 264465
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-openraft.json",
+          "run-2-bench-openraft.json",
+          "run-3-bench-openraft.json",
+          "run-4-bench-openraft.json",
+          "run-5-bench-openraft.json",
+          "run-6-bench-openraft.json",
+          "run-7-bench-openraft.json"
+        ],
+        "workload": {
+          "max_in_flight": 64,
+          "payload_bytes": 512,
+          "proposals": 20000,
+          "workload": "pipelined"
+        }
+      },
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "OpenRaft",
+        "engine": {
+          "name": "openraft",
+          "version": "0.9.24 (features: storage-v2; current-thread tokio)"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 41.3
+          },
+          "throughput_ops_s": {
+            "max": 44989,
+            "median": 44552,
+            "min": 43652
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-openraft.json",
+          "run-2-bench-openraft.json",
+          "run-3-bench-openraft.json",
+          "run-4-bench-openraft.json",
+          "run-5-bench-openraft.json",
+          "run-6-bench-openraft.json",
+          "run-7-bench-openraft.json"
+        ],
+        "workload": {
+          "max_in_flight": 1,
+          "payload_bytes": 512,
+          "proposals": 2000,
+          "workload": "serial"
+        }
+      },
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "raft-rs",
+        "engine": {
+          "name": "raft-rs",
+          "version": "0.7.0 (crate `raft`, prost-codec)"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 15756.0
+          },
+          "throughput_ops_s": {
+            "max": 1026,
+            "median": 1009,
+            "min": 976
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-raft-rs.json",
+          "run-2-bench-raft-rs.json",
+          "run-3-bench-raft-rs.json",
+          "run-4-bench-raft-rs.json",
+          "run-5-bench-raft-rs.json",
+          "run-6-bench-raft-rs.json",
+          "run-7-bench-raft-rs.json"
+        ],
+        "workload": {
+          "max_in_flight": 16,
+          "payload_bytes": 524224,
+          "proposals": 256,
+          "workload": "large_payload"
+        }
+      },
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "raft-rs",
+        "engine": {
+          "name": "raft-rs",
+          "version": "0.7.0 (crate `raft`, prost-codec)"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 217.4
+          },
+          "throughput_ops_s": {
+            "max": 321319,
+            "median": 318128,
+            "min": 304762
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-raft-rs.json",
+          "run-2-bench-raft-rs.json",
+          "run-3-bench-raft-rs.json",
+          "run-4-bench-raft-rs.json",
+          "run-5-bench-raft-rs.json",
+          "run-6-bench-raft-rs.json",
+          "run-7-bench-raft-rs.json"
+        ],
+        "workload": {
+          "max_in_flight": 64,
+          "payload_bytes": 512,
+          "proposals": 20000,
+          "workload": "pipelined"
+        }
+      },
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "raft-rs",
+        "engine": {
+          "name": "raft-rs",
+          "version": "0.7.0 (crate `raft`, prost-codec)"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 11.3
+          },
+          "throughput_ops_s": {
+            "max": 198917,
+            "median": 196551,
+            "min": 194784
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-raft-rs.json",
+          "run-2-bench-raft-rs.json",
+          "run-3-bench-raft-rs.json",
+          "run-4-bench-raft-rs.json",
+          "run-5-bench-raft-rs.json",
+          "run-6-bench-raft-rs.json",
+          "run-7-bench-raft-rs.json"
+        ],
+        "workload": {
+          "max_in_flight": 1,
+          "payload_bytes": 512,
+          "proposals": 2000,
+          "workload": "serial"
+        }
+      },
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "Rafter",
+        "engine": {
+          "name": "rafter",
+          "version": "3f2cdc956eaa35b546fec623a15a0285efdb0dbc"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 4203.3
+          },
+          "throughput_ops_s": {
+            "max": 4325,
+            "median": 4170,
+            "min": 4113
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-rafter.json",
+          "run-2-bench-rafter.json",
+          "run-3-bench-rafter.json",
+          "run-4-bench-rafter.json",
+          "run-5-bench-rafter.json",
+          "run-6-bench-rafter.json",
+          "run-7-bench-rafter.json"
+        ],
+        "workload": {
+          "max_in_flight": 16,
+          "payload_bytes": 524224,
+          "proposals": 256,
+          "workload": "large_payload"
+        }
+      },
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "Rafter",
+        "engine": {
+          "name": "rafter",
+          "version": "3f2cdc956eaa35b546fec623a15a0285efdb0dbc"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 184.3
+          },
+          "throughput_ops_s": {
+            "max": 910529,
+            "median": 889845,
+            "min": 859785
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-rafter.json",
+          "run-2-bench-rafter.json",
+          "run-3-bench-rafter.json",
+          "run-4-bench-rafter.json",
+          "run-5-bench-rafter.json",
+          "run-6-bench-rafter.json",
+          "run-7-bench-rafter.json"
+        ],
+        "workload": {
+          "max_in_flight": 64,
+          "payload_bytes": 512,
+          "proposals": 20000,
+          "workload": "pipelined"
+        }
+      },
+      {
+        "completion_boundary": "proposal submitted -> reference application operation completes on leader",
+        "configuration": {
+          "storage": "memory",
+          "transport": "in_process"
+        },
+        "display_name": "Rafter",
+        "engine": {
+          "name": "rafter",
+          "version": "3f2cdc956eaa35b546fec623a15a0285efdb0dbc"
+        },
+        "environment": {
+          "benchmark_source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+          "logical_cpus": 4,
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+          "topology": "three voters in one process"
+        },
+        "layer": "consensus_in_memory",
+        "measurement_mode": "timing",
+        "metric_definitions": {
+          "aggregate": "median and range across isolated process repetitions; percentiles are not pooled",
+          "client_p99_us": "submission to shared leader-side reference application completion; median per-run p99",
+          "throughput_ops_s": "proposals completed per elapsed benchmark second"
+        },
+        "metrics": {
+          "client_p99_us": {
+            "median": 8.3
+          },
+          "throughput_ops_s": {
+            "max": 353659,
+            "median": 347506,
+            "min": 329434
+          }
+        },
+        "qualification": "passed",
+        "qualification_errors": [],
+        "repetitions": 7,
+        "source_cases": [
+          "run-1-bench-rafter.json",
+          "run-2-bench-rafter.json",
+          "run-3-bench-rafter.json",
+          "run-4-bench-rafter.json",
+          "run-5-bench-rafter.json",
+          "run-6-bench-rafter.json",
+          "run-7-bench-rafter.json"
+        ],
+        "workload": {
+          "max_in_flight": 1,
+          "payload_bytes": 512,
+          "proposals": 2000,
+          "workload": "serial"
+        }
+      }
+    ],
+    "durable_replication": []
+  },
+  "principle": "Where Rafter demonstrably leads, where evidence is mixed, and what remains unmeasured.",
+  "report_generator": {
+    "source_digest": "9272922fbf5bc62b44d7a35a2e302b673fc8f9a99d78ee01f944533d31ca8258",
+    "uses_llm": false
+  },
+  "schema": 2,
+  "sections": [
+    {
+      "completion_boundaries": [
+        "proposal submitted -> reference application operation completes on leader"
+      ],
+      "conditions": "Three voters in one process, in-memory stores, no disk synchronization or TCP. Workloads use submission bursts, not a continuously replenished concurrency window.",
+      "details": [
+        "All adapters execute the same leader-side reference application operation; 7 repetitions."
+      ],
+      "id": "consensus-in-memory",
+      "question": "How quickly can the implementation replicate and commit without disks or sockets?",
+      "result": "Rafter leads 12 of 12 qualified throughput and p99 comparisons with no measured regressions.",
+      "rows": [
+        {
+          "max_in_flight": 16,
+          "openraft_ops_s": 764,
+          "openraft_p99_us": 22794.5,
+          "p99_vs_openraft": {
+            "advantage_percent": 81.56002544473448,
+            "change_percent": -81.56002544473448,
+            "equivalence_percent": 3.0,
+            "higher_is_better": false,
+            "label": "measured lead",
+            "left": 4203.3,
+            "metric": "client_p99_us",
+            "ratio": 0.18439974555265526,
+            "right": 22794.5
+          },
+          "p99_vs_raft_rs": {
+            "advantage_percent": 73.32254379284082,
+            "change_percent": -73.32254379284082,
+            "equivalence_percent": 3.0,
+            "higher_is_better": false,
+            "label": "measured lead",
+            "left": 4203.3,
+            "metric": "client_p99_us",
+            "ratio": 0.2667745620715918,
+            "right": 15756.0
+          },
+          "payload_bytes": 524224,
+          "raft_rs_ops_s": 1009,
+          "raft_rs_p99_us": 15756.0,
+          "rafter_ops_s": 4170,
+          "rafter_p99_us": 4203.3,
+          "repetitions": 7,
+          "throughput_vs_openraft": {
+            "advantage_percent": 445.8115183246074,
+            "change_percent": 445.8115183246074,
+            "equivalence_percent": 3.0,
+            "higher_is_better": true,
+            "label": "measured lead",
+            "left": 4170,
+            "metric": "throughput_ops_s",
+            "ratio": 5.458115183246074,
+            "right": 764
+          },
+          "throughput_vs_raft_rs": {
+            "advantage_percent": 313.28047571853324,
+            "change_percent": 313.28047571853324,
+            "equivalence_percent": 3.0,
+            "higher_is_better": true,
+            "label": "measured lead",
+            "left": 4170,
+            "metric": "throughput_ops_s",
+            "ratio": 4.132804757185332,
+            "right": 1009
+          },
+          "workload": "large_payload"
+        },
+        {
+          "max_in_flight": 64,
+          "openraft_ops_s": 269262,
+          "openraft_p99_us": 264.1,
+          "p99_vs_openraft": {
+            "advantage_percent": 30.215827338129497,
+            "change_percent": -30.215827338129497,
+            "equivalence_percent": 3.0,
+            "higher_is_better": false,
+            "label": "measured lead",
+            "left": 184.3,
+            "metric": "client_p99_us",
+            "ratio": 0.697841726618705,
+            "right": 264.1
+          },
+          "p99_vs_raft_rs": {
+            "advantage_percent": 15.22539098436062,
+            "change_percent": -15.22539098436062,
+            "equivalence_percent": 3.0,
+            "higher_is_better": false,
+            "label": "measured lead",
+            "left": 184.3,
+            "metric": "client_p99_us",
+            "ratio": 0.8477460901563938,
+            "right": 217.4
+          },
+          "payload_bytes": 512,
+          "raft_rs_ops_s": 318128,
+          "raft_rs_p99_us": 217.4,
+          "rafter_ops_s": 889845,
+          "rafter_p99_us": 184.3,
+          "repetitions": 7,
+          "throughput_vs_openraft": {
+            "advantage_percent": 230.47552198230719,
+            "change_percent": 230.47552198230719,
+            "equivalence_percent": 3.0,
+            "higher_is_better": true,
+            "label": "measured lead",
+            "left": 889845,
+            "metric": "throughput_ops_s",
+            "ratio": 3.304755219823072,
+            "right": 269262
+          },
+          "throughput_vs_raft_rs": {
+            "advantage_percent": 179.71288286475885,
+            "change_percent": 179.71288286475885,
+            "equivalence_percent": 3.0,
+            "higher_is_better": true,
+            "label": "measured lead",
+            "left": 889845,
+            "metric": "throughput_ops_s",
+            "ratio": 2.7971288286475886,
+            "right": 318128
+          },
+          "workload": "pipelined"
+        },
+        {
+          "max_in_flight": 1,
+          "openraft_ops_s": 44552,
+          "openraft_p99_us": 41.3,
+          "p99_vs_openraft": {
+            "advantage_percent": 79.90314769975785,
+            "change_percent": -79.90314769975785,
+            "equivalence_percent": 3.0,
+            "higher_is_better": false,
+            "label": "measured lead",
+            "left": 8.3,
+            "metric": "client_p99_us",
+            "ratio": 0.20096852300242135,
+            "right": 41.3
+          },
+          "p99_vs_raft_rs": {
+            "advantage_percent": 26.54867256637168,
+            "change_percent": -26.54867256637168,
+            "equivalence_percent": 3.0,
+            "higher_is_better": false,
+            "label": "measured lead",
+            "left": 8.3,
+            "metric": "client_p99_us",
+            "ratio": 0.7345132743362832,
+            "right": 11.3
+          },
+          "payload_bytes": 512,
+          "raft_rs_ops_s": 196551,
+          "raft_rs_p99_us": 11.3,
+          "rafter_ops_s": 347506,
+          "rafter_p99_us": 8.3,
+          "repetitions": 7,
+          "throughput_vs_openraft": {
+            "advantage_percent": 680.0008978272581,
+            "change_percent": 680.0008978272581,
+            "equivalence_percent": 3.0,
+            "higher_is_better": true,
+            "label": "measured lead",
+            "left": 347506,
+            "metric": "throughput_ops_s",
+            "ratio": 7.80000897827258,
+            "right": 44552
+          },
+          "throughput_vs_raft_rs": {
+            "advantage_percent": 76.80194962121791,
+            "change_percent": 76.80194962121791,
+            "equivalence_percent": 3.0,
+            "higher_is_better": true,
+            "label": "measured lead",
+            "left": 347506,
+            "metric": "throughput_ops_s",
+            "ratio": 1.7680194962121791,
+            "right": 196551
+          },
+          "workload": "serial"
+        }
+      ],
+      "source_cases": [
+        {
+          "case": "run-1-bench-openraft.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-1-bench-raft-rs.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-1-bench-rafter.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-2-bench-openraft.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-2-bench-raft-rs.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-2-bench-rafter.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-3-bench-openraft.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-3-bench-raft-rs.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-3-bench-rafter.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-4-bench-openraft.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-4-bench-raft-rs.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-4-bench-rafter.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-5-bench-openraft.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-5-bench-raft-rs.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-5-bench-rafter.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-6-bench-openraft.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-6-bench-raft-rs.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-6-bench-rafter.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-7-bench-openraft.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-7-bench-raft-rs.json",
+          "evidence": "consensus_in_memory"
+        },
+        {
+          "case": "run-7-bench-rafter.json",
+          "evidence": "consensus_in_memory"
+        }
+      ],
+      "status": "measured lead",
+      "title": "Consensus in memory"
+    },
+    {
+      "comparison_kind": "internal optimization",
+      "conditions": null,
+      "id": "durable-replication",
+      "not_measured": [
+        "Combined WAL component comparison"
+      ],
+      "question": "How efficiently does Rafter make consensus state survive a restart?",
+      "result": "No component evidence selected.",
+      "rows": [],
+      "source_cases": [],
+      "status": "not measured",
+      "sync_probes": {},
+      "title": "Durable replication"
+    },
+    {
+      "capacity": {
+        "boundaries": [],
+        "objective": {
+          "evaluation": "Every repetition must meet the rate and tail limits; accounting is summed without survivor filtering.",
+          "maximum_p999_ms": 50.0,
+          "maximum_p99_ms": 20.0,
+          "minimum_achieved_percent": 99.0,
+          "require_zero_errors_unknown_and_unsent": true
+        },
+        "result": "No common fixed-rate capacity curve was selected.",
+        "rows": [],
+        "source_cases": [],
+        "status": "not measured"
+      },
+      "comparison_kind": "competitor comparison",
+      "conditions": null,
+      "id": "complete-durable-service",
+      "internal_comparisons": [],
+      "question": "How many durable writes can an application complete, and how long do clients wait?",
+      "result": "No durable-service evidence selected.",
+      "rows": [],
+      "source_cases": [],
+      "status": "not measured",
+      "title": "Complete durable service"
+    },
+    {
+      "checks": [],
+      "history": [],
+      "id": "failure-and-sustained-operation",
+      "not_measured": [
+        "comparative leader-loss performance",
+        "comparative slow-follower performance",
+        "storage-stall recovery performance",
+        "snapshot/compaction soak and physical reclamation"
+      ],
+      "question": "Does performance remain useful during failures and over long runs?",
+      "result": "Comparative fault performance has not been measured.",
+      "source_cases": [],
+      "status": "not measured",
+      "title": "Failure and sustained operation"
+    }
+  ],
+  "title": "Rafter implementation performance"
+}

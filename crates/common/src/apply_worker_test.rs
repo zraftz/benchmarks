@@ -1,7 +1,11 @@
 //! Delayed and failed application persistence never becomes a completion early.
 use super::*;
 use crate::model::Command;
-use std::{path::PathBuf, sync::atomic::AtomicUsize, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{atomic::AtomicUsize, mpsc},
+    time::Duration,
+};
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Store {
     model: DurableModel,
@@ -70,6 +74,104 @@ fn completion(worker: &ApplyWorker) -> Result<Completion> {
     }
 }
 #[test]
+fn timing_mode_retains_no_per_entry_diagnostic_queue_state() {
+    let path = std::env::temp_dir().join(format!(
+        "apply-worker-timing-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let worker = ApplyWorker::start(
+        DurableModel::open(&path).unwrap(),
+        Diagnostics::default(),
+        || {},
+    );
+    assert!(worker.queued.is_none());
+    assert!(worker.try_submit(vec![entry(1)]).unwrap());
+    let completed = completion(&worker).unwrap();
+    assert_eq!(completed.entries[0].index, 1);
+    assert!(completed.queued.is_none());
+    assert!(worker.queued.is_none());
+    drop(worker);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn submissions_preserve_entry_and_byte_batch_limits() {
+    let path = std::env::temp_dir().join(format!(
+        "apply-worker-batches-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let worker = ApplyWorker::start(
+        DurableModel::open(&path).unwrap(),
+        Diagnostics::default(),
+        || {},
+    );
+
+    assert!(worker.try_submit(vec![entry(1), entry(2)]).unwrap());
+    assert_eq!(
+        completion(&worker)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    let mut third = entry(3);
+    third.command.as_mut().unwrap().kind = "cas".into();
+    third.command.as_mut().unwrap().value = "x".repeat(64 * 1024);
+    third.command.as_mut().unwrap().expected = Some("x".repeat(64 * 1024));
+    let mut fourth = entry(4);
+    fourth.command.as_mut().unwrap().kind = "cas".into();
+    fourth.command.as_mut().unwrap().value = "y".repeat(64 * 1024);
+    fourth.command.as_mut().unwrap().expected = Some("y".repeat(64 * 1024));
+    assert!(payload_bytes(&third) < BATCH_BYTES);
+    assert!(payload_bytes(&third) + payload_bytes(&fourth) > BATCH_BYTES);
+    assert!(worker.try_submit(vec![third, fourth]).unwrap());
+    assert_eq!(completion(&worker).unwrap().entries[0].index, 3);
+    assert_eq!(completion(&worker).unwrap().entries[0].index, 4);
+
+    drop(worker);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn idle_worker_installs_snapshot_and_accepts_the_contiguous_suffix() {
+    let source_path = std::env::temp_dir().join(format!(
+        "apply-worker-snapshot-source-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let target_path = std::env::temp_dir().join(format!(
+        "apply-worker-snapshot-target-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut source = DurableModel::open(&source_path).unwrap();
+    source.apply(&[entry(1)]).unwrap();
+    let snapshot = source.snapshot();
+
+    let mut worker = ApplyWorker::start(
+        DurableModel::open(&target_path).unwrap(),
+        Diagnostics::default(),
+        || {},
+    );
+    worker.install_snapshot(snapshot.clone()).unwrap();
+    assert_eq!(worker.applied_index(), 1);
+    assert_eq!(worker.snapshot().unwrap(), Some(snapshot));
+    assert!(worker.try_submit(vec![entry(2)]).unwrap());
+    assert_eq!(worker.complete().unwrap().entries[0].index, 2);
+    drop(worker);
+
+    let reopened = DurableModel::open(&target_path).unwrap();
+    assert_eq!(reopened.index, 2);
+    assert_eq!(reopened.model.values["k"], "2");
+    std::fs::remove_file(source_path).unwrap();
+    std::fs::remove_file(target_path).unwrap();
+}
+#[test]
 fn delayed_sync_keeps_completions_and_durable_position_behind() {
     let (path, worker, waiting, release) = paused(false);
     assert!(worker.try_submit(vec![entry(1)]).unwrap());
@@ -82,6 +184,7 @@ fn delayed_sync_keeps_completions_and_durable_position_behind() {
     release.send(()).unwrap();
     let first = completion(&worker).unwrap();
     assert_eq!(first.entries[0].index, 1);
+    assert_eq!(first.queued.as_ref().unwrap().len(), 1);
     let next = completion(&worker).unwrap();
     assert_eq!(
         next.entries
@@ -135,6 +238,14 @@ fn worker_failure_returns_no_success_or_later_apply() {
     release.send(()).unwrap();
     assert!(completion(&worker).is_err());
     assert_eq!(worker.applied_index(), 0);
+    let (reply, _) = oneshot::channel();
+    assert!(worker
+        .query(Query {
+            reply,
+            dump: false,
+            response: Reply::status("ok"),
+        })
+        .is_err());
     drop(worker);
     let recovered = DurableModel::open(&path).unwrap();
     assert_eq!(recovered.index, 0);
@@ -182,6 +293,7 @@ fn status_queries_read_the_worker_after_its_durable_fence() {
         Err(oneshot::error::TryRecvError::Empty)
     ));
     release.send(()).unwrap();
+    let _ = completion(&worker).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let status = loop {
         if let Ok(result) = response.try_recv() {

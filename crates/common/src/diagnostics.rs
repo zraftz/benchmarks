@@ -53,6 +53,22 @@ impl InFlightTimeline {
         let application_dispatched = self.application_dispatched?;
         let application_started = self.application_started?;
         let application_durable = self.application_durable?;
+        let ordered = [
+            self.ingress,
+            self.owner_admitted,
+            proposal_submitted,
+            commit.at,
+            application_dispatched,
+            application_started,
+            application_durable,
+            client_completion,
+        ];
+        if !ordered.windows(2).all(|pair| pair[0] <= pair[1]) {
+            // A retry can share a command identity with an older, already
+            // committed duplicate log entry. Do not publish a timeline whose
+            // stages cannot be attributed to one operation generation.
+            return None;
+        }
         let mut points_ns = BTreeMap::new();
         points_ns.insert("client_ingress", 0);
         points_ns.insert(
@@ -141,6 +157,9 @@ impl Diagnostics {
     pub fn start(&self) -> Option<Instant> {
         self.enabled.then(Instant::now)
     }
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
     pub fn elapsed(&self, name: &str, start: Option<Instant>) {
         if let Some(start) = start {
             self.observe(
@@ -160,6 +179,16 @@ impl Diagnostics {
         metric.max = metric.max.max(value);
         metric.buckets_log2.resize(64, 0);
         metric.buckets_log2[63 - value.max(1).leading_zeros() as usize] += 1;
+    }
+    /// Declares a metric before its optional path first executes.
+    pub fn declare(&self, name: &str) {
+        if self.enabled {
+            self.metrics
+                .lock()
+                .unwrap()
+                .entry(name.to_owned())
+                .or_default();
+        }
     }
     pub fn admit_operation(&self, command: &Command, ingress: Option<Instant>) {
         if !self.enabled {
@@ -279,6 +308,9 @@ impl Diagnostics {
         }
     }
     pub fn client_completed(&self, command: &Command) {
+        if !self.enabled {
+            return;
+        }
         self.client_completed_at(command, Instant::now());
     }
     pub fn client_completed_at(&self, command: &Command, client_completion: Instant) {

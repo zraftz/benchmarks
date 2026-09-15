@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 mode="${1:-all}"
 case "$mode" in all|tooling|rust) ;; *) echo "usage: scripts/check [all|tooling|rust]" >&2; exit 2 ;; esac
 if [[ "$mode" != rust ]]; then
-  bash -n scripts/check scripts/test.sh scripts/smoke
+  bash -n scripts/check scripts/test.sh scripts/smoke scripts/snapshot-smoke
   unformatted="$(cd loadgen && gofmt -l .)"
   if [[ -n "$unformatted" ]]; then
     echo "Run gofmt on: $unformatted" >&2

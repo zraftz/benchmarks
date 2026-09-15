@@ -39,13 +39,20 @@ def render(suite: Path, destination: Path) -> None:
             latency(r, "success_latency"), latency(r, "success_execution_latency"),
             latency(r, "worker_start_lateness"), r["errors"], r["unknown"], r["not_issued"], label)) + "</tr>")
         if checked["status"] == "passed" and not manifest["smoke"]:
-            variant = json.dumps({"backend": (manifest.get("build_receipt") or {}).get("rafter_hard_state_backend", "replace"),
+            variant = json.dumps({"variant": manifest["options"].get("variant", manifest["implementation"]),
+                "backend": (manifest.get("build_receipt") or {}).get("rafter_hard_state_backend", "replace"),
                 "peer_batch_size": manifest["options"].get("peer_batch_size", 1),
                 "batch_size": manifest["options"].get("batch_size", 64),
+                "max_speculative_proposals": manifest["options"].get("max_speculative_proposals", 1),
+                "max_inflight_appends": manifest["options"].get("max_inflight_appends", 8),
                 "network_delay_ms": manifest["options"].get("network_delay_ms", 0),
                 "ordered_apply": manifest["options"].get("ordered_apply", False),
                 "peer_message_stream": manifest["options"].get("peer_message_stream", False),
                 "pipelined_durability": manifest["options"].get("pipelined_durability", False),
+                "combine_peer_proposals": manifest["options"].get("combine_peer_proposals", False),
+                "durable_completion_priority": manifest["options"].get("durable_completion_priority", False),
+                "openraft_async_flush": manifest["options"].get("openraft_async_flush", False),
+                "snapshot_interval_entries": manifest["options"].get("snapshot_interval_entries", 0),
                 "peer_group_commit": (manifest.get("build_receipt") or {}).get("peer_group_commit", False),
                 "diagnostics": manifest["options"].get("diagnostics", False)}, sort_keys=True)
             key = (manifest["implementation"], revision, variant, manifest["scenario"], r["config"]["rate"],
@@ -60,8 +67,24 @@ def render(suite: Path, destination: Path) -> None:
         mode = "diagnostics" if settings["diagnostics"] else "timing"
         apply = "worker" if settings["ordered_apply"] else "inline/native"
         transport = "messages" if settings["peer_message_stream"] else "RPC"
-        persistence = "pipelined" if settings["pipelined_durability"] else "synchronous"
-        detail = f"{persistence} · {settings['backend']} · peers ≤{settings['peer_batch_size']} · {apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
+        if engine == "openraft":
+            persistence = ("callback-driven async log flush" if settings["openraft_async_flush"]
+                           else "synchronous log flush")
+        else:
+            persistence = "pipelined" if settings["pipelined_durability"] else "synchronous"
+        combine = (("combined ack+proposal" if settings["combine_peer_proposals"] else "separate ack/proposal")
+                   + " · " if engine == "rafter" else "")
+        completion_priority = (("commit-first" if settings["durable_completion_priority"] else "FIFO")
+                               + " · " if engine == "rafter" else "")
+        tuning = (f"speculative ≤{settings['max_speculative_proposals']} · "
+                  f"append window ≤{settings['max_inflight_appends']} · "
+                  if engine == "rafter" else "")
+        snapshots = (
+            f"snapshot interval {settings['snapshot_interval_entries']:,} · "
+            if settings["snapshot_interval_entries"]
+            else "snapshots off · "
+        )
+        detail = f"{settings['variant']} · {persistence} · {settings['backend']} · {snapshots}peers ≤{settings['peer_batch_size']} · {tuning}{combine}{completion_priority}{apply} · {transport} · netem {settings['network_delay_ms']}ms · {mode}"
         config = f"{scenario} · {detail} · {payload} bytes · {concurrency} clients · {reads}% reads · {cas}% CAS"
         fields = (engine, revision[:12], config, rate, len(values), f"{median(rates):.1f}",
                   f"{min(rates):.1f}–{max(rates):.1f}", median_latency(values, "success_latency"),

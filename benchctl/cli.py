@@ -5,12 +5,136 @@ import json
 import math
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import uuid
 from .evidence import ROOT, digest, source_digest, verify, write_json
-from .build import IMPLEMENTATIONS, build
+from .build import IMPLEMENTATIONS, PUBLIC_APPLICATION_WORKER, build
+from .cluster import DEFAULT_APPLICATION_CHECKPOINT_BYTES, DEFAULT_WAL_RECLAMATION_BYTES
+
+
+CAPACITY_RATES = "1000,2000,3000,4000,6000,8000,10000,12000"
+PIPELINE_THRESHOLD_RATES = "0,1000"
+RECLAMATION_LOAD_RATES = "3000,0"
+CAPACITY_RUNS = 4
+PIPELINE_THRESHOLD_RUNS = 6
+RECLAMATION_LOAD_RUNS = 3
+RECLAMATION_SNAPSHOT_INTERVALS = "10000,100000"
+
+
+def exact_rafter_sha(options) -> str:
+    sha = options.rafter_sha.lower()
+    if len(sha) != 40 or any(character not in "0123456789abcdef" for character in sha):
+        raise ValueError("--rafter-sha must be an exact 40-character hexadecimal commit")
+    return sha
+
+
+def exact_benchmark_sha(options) -> str:
+    sha = options.benchmark_sha.lower()
+    if len(sha) != 40 or any(character not in "0123456789abcdef" for character in sha):
+        raise ValueError("--benchmark-sha must be an exact 40-character hexadecimal commit")
+    return sha
+
+
+def capacity_command(options) -> list[str]:
+    sha = exact_rafter_sha(options)
+    benchmark_sha = exact_benchmark_sha(options)
+    return [
+        sys.executable,
+        "-m",
+        "benchctl.paired",
+        "--prior", sha,
+        "--candidate", sha,
+        "--benchmark-sha", benchmark_sha,
+        "--prior-hard-state", "wal",
+        "--candidate-hard-state", "wal",
+        "--prior-mode", "pipeline",
+        "--candidate-mode", "pipeline",
+        "--prior-peer-batch-size", "32",
+        "--peer-batch-sizes", "32",
+        "--prior-max-speculative-proposals", "1",
+        "--candidate-max-speculative-proposals", "1",
+        "--prior-max-inflight-appends", "8",
+        "--candidate-max-inflight-appends", "8",
+        "--candidate-durable-completion-priority",
+        "--runs", str(CAPACITY_RUNS),
+        "--rates", options.rates,
+        "--diagnostic-rates", options.diagnostic_rates,
+        "--network-delays-ms", "0",
+        "--openraft-controls", "synchronous,async",
+        "--qualify-machine",
+        "--data-root", str(options.data_root),
+        "--output", str(options.output),
+    ]
+
+
+def pipeline_threshold_command(options) -> list[str]:
+    sha = exact_rafter_sha(options)
+    benchmark_sha = exact_benchmark_sha(options)
+    return [
+        sys.executable,
+        "-m",
+        "benchctl.paired",
+        "--prior", sha,
+        "--candidate", sha,
+        "--benchmark-sha", benchmark_sha,
+        "--prior-hard-state", "wal",
+        "--candidate-hard-state", "wal",
+        "--prior-mode", "pipeline",
+        "--candidate-mode", "pipeline",
+        "--prior-peer-batch-size", "32",
+        "--peer-batch-sizes", "32",
+        "--prior-max-speculative-proposals", "1",
+        "--candidate-max-speculative-proposals", "1,2,4,8",
+        "--prior-max-inflight-appends", "8",
+        "--candidate-max-inflight-appends", "8",
+        "--prior-durable-completion-priority",
+        "--candidate-durable-completion-priority",
+        "--runs", str(PIPELINE_THRESHOLD_RUNS),
+        "--rates", options.rates,
+        "--diagnostic-rates", options.diagnostic_rates,
+        "--network-delays-ms", "0",
+        "--openraft-controls", "synchronous",
+        "--qualify-machine",
+        "--data-root", str(options.data_root),
+        "--output", str(options.output),
+    ]
+
+
+def reclamation_load_command(options) -> list[str]:
+    sha = exact_rafter_sha(options)
+    benchmark_sha = exact_benchmark_sha(options)
+    return [
+        sys.executable,
+        "-m",
+        "benchctl.paired",
+        "--prior", sha,
+        "--candidate", sha,
+        "--benchmark-sha", benchmark_sha,
+        "--prior-hard-state", "wal",
+        "--candidate-hard-state", "wal",
+        "--prior-mode", "pipeline",
+        "--candidate-mode", "pipeline",
+        "--prior-peer-batch-size", "32",
+        "--peer-batch-sizes", "32",
+        "--prior-max-speculative-proposals", "1",
+        "--candidate-max-speculative-proposals", "1",
+        "--prior-max-inflight-appends", "8",
+        "--candidate-max-inflight-appends", "8",
+        "--prior-durable-completion-priority",
+        "--candidate-durable-completion-priority",
+        "--prior-snapshot-interval-entries", "0",
+        "--candidate-snapshot-interval-entries", options.snapshot_intervals,
+        "--runs", str(RECLAMATION_LOAD_RUNS),
+        "--rates", options.rates,
+        "--diagnostic-rates", options.diagnostic_rates,
+        "--network-delays-ms", "0",
+        "--openraft-controls", "none",
+        "--suite-kind", "reclamation-under-load",
+        "--qualify-machine",
+        "--data-root", str(options.data_root),
+        "--output", str(options.output),
+    ]
 
 
 def run(options) -> None:
@@ -25,8 +149,27 @@ def run(options) -> None:
         if implementations != ["rafter"]:
             raise ValueError("pipelined durability requires --implementations rafter")
         options.ordered_apply = options.peer_message_stream = True
+    if options.combine_peer_proposals and not options.pipelined_durability:
+        raise ValueError("combined peer/proposal steps require --pipelined-durability")
+    if options.durable_completion_priority and not options.pipelined_durability:
+        raise ValueError("durable completion priority requires --pipelined-durability")
+    if options.durable_completion_priority and options.combine_peer_proposals:
+        raise ValueError("select only one mixed-input pipeline policy")
     if options.peer_message_stream and "openraft" in implementations:
         raise ValueError("OpenRaft uses actual request/reply RPCs; select message engines explicitly")
+    if options.openraft_async_flush and implementations != ["openraft"]:
+        raise ValueError("the async OpenRaft control requires --implementations openraft")
+    if options.snapshot_interval_entries:
+        if implementations != ["rafter"] or not options.pipelined_durability:
+            raise ValueError("snapshot compaction requires one Rafter pipeline implementation")
+        if not 1 <= options.snapshot_interval_entries <= 1_000_000_000:
+            raise ValueError("snapshot interval entries must be 1..1000000000")
+    if not 1 <= options.application_checkpoint_bytes <= 1024 * 1024 * 1024:
+        raise ValueError("application checkpoint bytes must be 1..1073741824")
+    if not 1 <= options.wal_reclamation_bytes <= 1024 * 1024 * 1024:
+        raise ValueError("WAL reclamation bytes must be 1..1073741824")
+    if options.scenario == "snapshot-catchup" and not options.snapshot_interval_entries:
+        raise ValueError("snapshot-catchup requires a nonzero snapshot interval")
     rates = [float(r) for r in options.rates.split(",")]
     if not rates or any(not math.isfinite(r) or r < 0 or r > 1e7 for r in rates):
         raise ValueError("rates must be finite numbers from 0 to 10000000")
@@ -43,6 +186,10 @@ def run(options) -> None:
         raise ValueError("invalid workload sizes")
     if not 1 <= options.peer_batch_size <= 64:
         raise ValueError("peer batch size must be 1..64")
+    if not 1 <= options.max_speculative_proposals <= 64:
+        raise ValueError("max speculative proposals must be 1..64")
+    if not 1 <= options.max_inflight_appends <= 64:
+        raise ValueError("max inflight appends must be 1..64")
     if not 1 <= options.batch_size <= 64 or not 0 < options.timeout <= 60 or options.read_percent < 0 or options.cas_percent < 0 or options.read_percent + options.cas_percent > 100:
         raise ValueError("invalid batch size, timeout or mix")
     if not options.data_root and not options.smoke:
@@ -55,8 +202,14 @@ def run(options) -> None:
         raise RuntimeError("peer batching requires a build with --peer-group-commit")
     if "rafter" in implementations and options.ordered_apply and not receipt.get("ordered_apply"):
         raise RuntimeError("ordered application requires a build with --ordered-apply")
+    if ("rafter" in implementations and options.ordered_apply
+            and receipt.get("rafter_application_worker") != PUBLIC_APPLICATION_WORKER):
+        raise RuntimeError("ordered application build does not identify Rafter's public application worker")
     if options.pipelined_durability and not receipt.get("pipelined_durability"):
         raise RuntimeError("pipelined durability requires a build with --pipelined-durability")
+    if (options.snapshot_interval_entries
+            and receipt.get("rafter_hard_state_backend") != "wal"):
+        raise RuntimeError("snapshot reclamation qualification requires a WAL build receipt")
     if receipt.get("source_digest") != source_digest():
         raise RuntimeError("sources changed since build receipt; rebuild")
     for implementation in implementations:
@@ -86,6 +239,9 @@ def run(options) -> None:
                 print(f"Running {name}", flush=True)
                 try:
                     run_case(implementation, suite / name, data_root / name, options)
+                    checked = verify(suite / name)
+                    if checked["status"] != "passed":
+                        raise RuntimeError(f"evidence verification failed: {checked}")
                 except Exception as exc:
                     failures.append({"case": name, "error": str(exc)})
                     print(f"FAILED {name}: {exc}", file=sys.stderr)
@@ -113,7 +269,45 @@ def node_configs(inventory_path: Path, destination: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="raft-bench: protocol diagnostics and durable networked embedding baselines")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("doctor", help="show required tools; makes no installations")
+    sub.add_parser("doctor", help="verify required tool versions; makes no installations")
+    p = sub.add_parser("machine-profile", help="record and assess the fixed benchmark host while idle")
+    p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--duration", type=float, default=15)
+    p.add_argument("--interval", type=float, default=1)
+    p.add_argument("--record-only", action="store_true",
+                   help="retain a failed or incomplete observation without returning a failing status")
+    p = sub.add_parser(
+        "capacity",
+        help="run the predeclared same-SHA fixed-machine service capacity curve",
+    )
+    p.add_argument("--rafter-sha", required=True)
+    p.add_argument("--benchmark-sha", required=True)
+    p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--rates", default=CAPACITY_RATES)
+    p.add_argument("--diagnostic-rates", default="1000")
+    p = sub.add_parser(
+        "pipeline-thresholds",
+        help="sweep predeclared speculative limits on one exact Rafter SHA",
+    )
+    p.add_argument("--rafter-sha", required=True)
+    p.add_argument("--benchmark-sha", required=True)
+    p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--rates", default=PIPELINE_THRESHOLD_RATES)
+    p.add_argument("--diagnostic-rates", default=PIPELINE_THRESHOLD_RATES)
+    p = sub.add_parser(
+        "reclamation-load",
+        help="compare live WAL reclamation intervals against the same-code no-snapshot control",
+    )
+    p.add_argument("--rafter-sha", required=True)
+    p.add_argument("--benchmark-sha", required=True)
+    p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--rates", default=RECLAMATION_LOAD_RATES)
+    p.add_argument("--diagnostic-rates", default=RECLAMATION_LOAD_RATES)
+    p.add_argument("--snapshot-intervals", default=RECLAMATION_SNAPSHOT_INTERVALS)
     p = sub.add_parser("build", help="test and build all durable adapters with locked dependencies")
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
     p.add_argument("--rafter-hard-state", choices=("replace", "journal", "wal"), default="replace", help="journal and wal require a Rafter revision supporting that backend")
@@ -124,12 +318,12 @@ def main() -> None:
     p.add_argument("ref")
     p = sub.add_parser("microbench", help="run the in-memory benchmark suite")
     p.add_argument("--mode", choices=("full", "rafter-only"), default="full")
-    p.add_argument("--runs", type=int, default=3)
+    p.add_argument("--runs", type=int, default=7)
     p.add_argument("--rafter-ref", help="select a Rafter branch, tag, or commit before building")
     p.add_argument("--output", type=Path)
     p = sub.add_parser("run")
     p.add_argument("--implementations", default=",".join(IMPLEMENTATIONS))
-    p.add_argument("--scenario", choices=("durable-kv", "leader-loss", "follower-catchup"), default="durable-kv")
+    p.add_argument("--scenario", choices=("durable-kv", "leader-loss", "follower-catchup", "snapshot-catchup"), default="durable-kv")
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--duration", type=float, default=60)
     p.add_argument("--warmup", type=float, default=10)
@@ -145,6 +339,24 @@ def main() -> None:
     p.add_argument("--peer-batch-size", type=int, default=1)
     p.add_argument("--peer-message-stream", action="store_true")
     p.add_argument("--pipelined-durability", action="store_true", help="Rafter only; enables ordered apply and message transport")
+    p.add_argument("--max-speculative-proposals", type=int, default=1,
+                   help="Rafter pipeline only; largest ready proposal batch eligible for speculative replication")
+    p.add_argument("--max-inflight-appends", type=int, default=8,
+                   help="Rafter only; bounded unacknowledged append batches per follower")
+    p.add_argument("--combine-peer-proposals", action="store_true",
+                   help="Rafter pipeline only; combine safe peer acknowledgments with already-ready proposals")
+    p.add_argument("--durable-completion-priority", action="store_true",
+                   help="Rafter pipeline only; prioritize safe acknowledgments and ready durable application completions")
+    p.add_argument("--openraft-async-flush", action="store_true",
+                   help="OpenRaft only; return append after staging and complete durability through its callback")
+    p.add_argument("--snapshot-interval-entries", type=int, default=0,
+                   help="Rafter pipeline only; durably snapshot and reclaim the Raft WAL after this many applied entries")
+    p.add_argument("--application-checkpoint-bytes", type=int,
+                   default=DEFAULT_APPLICATION_CHECKPOINT_BYTES,
+                   help="Rafter only; checkpoint durable application history after it exceeds this many bytes")
+    p.add_argument("--wal-reclamation-bytes", type=int,
+                   default=DEFAULT_WAL_RECLAMATION_BYTES,
+                   help="Rafter WAL only; physically reclaim at the next snapshot after its active segment reaches this many bytes")
     p.add_argument("--diagnostics", action="store_true", help="separate instrumented run; do not pool with timing results")
     p.add_argument("--timeout", type=float, default=2)
     p.add_argument("--seed-base", type=int, default=1)
@@ -158,11 +370,15 @@ def main() -> None:
     p = sub.add_parser("summary", help="generate one layered HTML, Markdown, and JSON performance report")
     p.add_argument("--durable-suite", type=Path)
     p.add_argument("--storage-suite", type=Path)
+    p.add_argument("--wal-reclamation-suite", type=Path)
     p.add_argument("--microbench", type=Path)
     p.add_argument("--history-suite", type=Path, action="append", default=[])
     p.add_argument("--headline-variant", help="explicit Rafter variant when a suite contains multiple candidate arms")
+    p.add_argument("--headline-control-variant",
+                   help="explicit OpenRaft variant when a suite contains multiple control arms")
     p.add_argument("--durable-url")
     p.add_argument("--storage-url")
+    p.add_argument("--wal-reclamation-url")
     p.add_argument("--micro-url")
     p.add_argument("--history-url", action="append", default=[])
     p.add_argument("--output", type=Path, required=True)
@@ -174,7 +390,27 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "doctor":
-            print(json.dumps({t: shutil.which(t) for t in ("cargo", "rustc", "go", "protoc", "git", "python3")}, indent=2))
+            from .doctor import inspect
+            verdict = inspect()
+            print(json.dumps(verdict, indent=2))
+            if verdict["status"] != "passed":
+                raise RuntimeError("benchmark toolchain preflight failed")
+        elif args.command == "machine-profile":
+            from .machine import capture_profile
+            verdict = capture_profile(args.data_root, args.output,
+                                      duration_seconds=args.duration,
+                                      interval_seconds=args.interval)
+            print(json.dumps(verdict, indent=2))
+            if verdict["status"] != "passed" and not args.record_only:
+                raise RuntimeError(
+                    "fixed-machine idle objective did not pass; evidence was retained"
+                )
+        elif args.command == "capacity":
+            subprocess.run(capacity_command(args), cwd=ROOT, check=True)
+        elif args.command == "pipeline-thresholds":
+            subprocess.run(pipeline_threshold_command(args), cwd=ROOT, check=True)
+        elif args.command == "reclamation-load":
+            subprocess.run(reclamation_load_command(args), cwd=ROOT, check=True)
         elif args.command == "select-rafter":
             from .selection import select_rafter
             select_rafter(args.ref)
@@ -198,13 +434,18 @@ def main() -> None:
             from .report import render
             render(args.suite, args.output)
         elif args.command == "summary":
-            if not any((args.durable_suite, args.storage_suite, args.microbench)):
+            if not any((args.durable_suite, args.storage_suite,
+                        args.wal_reclamation_suite, args.microbench)):
                 raise ValueError("summary requires at least one primary evidence suite")
             from .summary import generate
             generate(destination=args.output, durable_path=args.durable_suite,
-                     storage_path=args.storage_suite, micro_path=args.microbench,
+                     storage_path=args.storage_suite,
+                     reclamation_path=args.wal_reclamation_suite,
+                     micro_path=args.microbench,
                      history_paths=args.history_suite, headline_variant=args.headline_variant,
+                     headline_control_variant=args.headline_control_variant,
                      durable_url=args.durable_url, storage_url=args.storage_url,
+                     reclamation_url=args.wal_reclamation_url,
                      micro_url=args.micro_url, history_urls=args.history_url)
             print(f"Summary: {args.output / 'report.html'}")
         elif args.command == "node-configs":

@@ -1,41 +1,66 @@
 //! Only bounded application proposals can prepare speculative replication work.
-use super::worker::{Counters, Worker};
 use crate::storage;
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use rafter::{ClientProposalInput, Input, NodeId, Output, Role, Term};
-use rafter_runtime::pipelined::PreparedProposals;
-
-/// Speculate only when the ready queue cannot already amortize persistence.
-///
-/// A larger ready batch takes the ordinary synchronous group-commit path. This
-/// introduces no timer and keeps the runtime's single-owner durability fence.
-pub(super) const MAX_SPECULATIVE_PROPOSALS: usize = 1;
+use rafter_runtime::pipelined::{
+    PersistenceWorkerOptions, PersistenceWorkerTelemetry, ThreadedPersistenceDisposition,
+};
+use std::collections::BTreeMap;
 
 pub struct Pipeline {
     pub node: storage::Pipeline,
-    worker: Worker,
     pub term: Term,
     pub role: Role,
     pub leader: Option<NodeId>,
-    pub counters: Counters,
+    pub counters: PersistenceWorkerTelemetry,
     pub submitted: u64,
     pub completed: u64,
     pub synchronous_proposal_batches: u64,
     pub synchronous_proposals: u64,
+    pub speculative_proposal_batches: u64,
+    pub speculative_proposals: u64,
+    pub combined_peer_proposal_batches: u64,
+    pub combined_peer_first_batches: u64,
+    pub combined_proposal_first_batches: u64,
+    pub combined_peer_events: u64,
+    pub combined_peer_proposals: u64,
+    pub proposal_batch_sizes: BTreeMap<usize, u64>,
+    pub max_speculative_proposals: usize,
+    diagnostics: bool,
 }
 impl Pipeline {
-    pub fn new(node: storage::Node, diagnostics: bool) -> Result<Self> {
+    pub fn new(
+        node: storage::Node,
+        diagnostics: bool,
+        max_speculative_proposals: usize,
+    ) -> Result<Self> {
+        if !(1..=64).contains(&max_speculative_proposals) {
+            bail!("max speculative proposals must be 1..64")
+        }
         Ok(Self {
             term: node.current_term(),
             role: node.role(),
             leader: node.leader_hint(),
-            node: storage::Pipeline::new(node),
-            worker: Worker::start(diagnostics)?,
+            node: storage::Pipeline::start(
+                node,
+                PersistenceWorkerOptions::new().with_storage_telemetry(diagnostics),
+            )
+            .map_err(|error| anyhow!("{error}"))?,
             counters: Vec::new(),
             submitted: 0,
             completed: 0,
             synchronous_proposal_batches: 0,
             synchronous_proposals: 0,
+            speculative_proposal_batches: 0,
+            speculative_proposals: 0,
+            combined_peer_proposal_batches: 0,
+            combined_peer_first_batches: 0,
+            combined_proposal_first_batches: 0,
+            combined_peer_events: 0,
+            combined_peer_proposals: 0,
+            proposal_batch_sizes: BTreeMap::new(),
+            max_speculative_proposals,
+            diagnostics,
         })
     }
     fn refresh(&mut self) {
@@ -46,12 +71,17 @@ impl Pipeline {
         }
     }
     pub fn step(&mut self, inputs: Vec<Input>) -> Result<Vec<Output>> {
-        let proposal_count = (!inputs.is_empty()
-            && inputs
-                .iter()
-                .all(|input| matches!(input, Input::ClientProposal { .. })))
-        .then_some(inputs.len());
-        let outputs = if proposal_count.is_some_and(|count| count <= MAX_SPECULATIVE_PROPOSALS) {
+        let input_count = inputs.len();
+        let proposal_first = matches!(inputs.first(), Some(Input::ClientProposal { .. }));
+        let proposal_count = inputs
+            .iter()
+            .filter(|input| matches!(input, Input::ClientProposal { .. }))
+            .count();
+        let proposals_only = proposal_count != 0 && proposal_count == inputs.len();
+        if self.diagnostics && proposal_count != 0 {
+            *self.proposal_batch_sizes.entry(proposal_count).or_default() += 1;
+        }
+        let outputs = if proposals_only && proposal_count <= self.max_speculative_proposals {
             let proposals = inputs
                 .into_iter()
                 .map(|input| {
@@ -64,22 +94,43 @@ impl Pipeline {
                     }
                 })
                 .collect();
-            match self.node.prepare_proposals(proposals)? {
-                PreparedProposals::Durable(outputs) => outputs,
-                PreparedProposals::Pending { replication, work } => {
-                    self.worker.submit(work)?;
-                    self.submitted += 1;
-                    replication
-                }
-                _ => bail!("unsupported persistence preparation result"),
+            let prepared = self.node.step_proposal_batch(proposals)?;
+            let disposition = prepared.persistence();
+            let outputs = prepared.into_outputs();
+            if disposition == ThreadedPersistenceDisposition::Pending {
+                self.submitted += 1;
+                self.speculative_proposal_batches =
+                    self.speculative_proposal_batches.saturating_add(1);
+                self.speculative_proposals = self
+                    .speculative_proposals
+                    .saturating_add(proposal_count as u64);
             }
+            outputs
         } else {
             let outputs = self.node.step_batch(inputs)?;
-            if let Some(count) = proposal_count {
+            if proposal_count != 0 {
                 self.synchronous_proposal_batches =
                     self.synchronous_proposal_batches.saturating_add(1);
-                self.synchronous_proposals =
-                    self.synchronous_proposals.saturating_add(count as u64);
+                self.synchronous_proposals = self
+                    .synchronous_proposals
+                    .saturating_add(proposal_count as u64);
+                if !proposals_only {
+                    self.combined_peer_proposal_batches =
+                        self.combined_peer_proposal_batches.saturating_add(1);
+                    if proposal_first {
+                        self.combined_proposal_first_batches =
+                            self.combined_proposal_first_batches.saturating_add(1);
+                    } else {
+                        self.combined_peer_first_batches =
+                            self.combined_peer_first_batches.saturating_add(1);
+                    }
+                    self.combined_peer_events = self
+                        .combined_peer_events
+                        .saturating_add((input_count - proposal_count) as u64);
+                    self.combined_peer_proposals = self
+                        .combined_peer_proposals
+                        .saturating_add(proposal_count as u64);
+                }
             }
             outputs
         };
@@ -87,12 +138,14 @@ impl Pipeline {
         Ok(outputs)
     }
     pub fn complete(&mut self) -> Result<Option<Vec<Output>>> {
-        if self.node.pending_operation().is_none() {
+        if !self.node.persistence_pending() {
             return Ok(None);
         }
-        let (completion, counters) = self.worker.complete()?;
-        // The runtime checks generation and operation before restoring consensus ownership.
-        let outputs = self.node.complete(completion)?;
+        let (outputs, counters) = self
+            .node
+            .complete()?
+            .expect("pending pipeline must return one completion")
+            .into_parts();
         self.counters = counters;
         self.completed += 1;
         self.refresh();

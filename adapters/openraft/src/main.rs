@@ -118,7 +118,10 @@ async fn main() -> Result<()> {
     }
 
     let _lock = config.lock_directory("openraft")?;
-    let logs = storage::LogStore::open(&config.data_dir.join("raft.wal"))?;
+    let logs = storage::LogStore::open(
+        &config.data_dir.join("raft.wal"),
+        config.openraft_async_flush,
+    )?;
     let diagnostics = Diagnostics::new(config.diagnostics);
     let app = storage::StateMachine::open(
         &config.data_dir.join("application.wal"),

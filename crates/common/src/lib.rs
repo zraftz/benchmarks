@@ -44,6 +44,22 @@ pub struct Config {
     pub peer_message_stream: bool,
     #[serde(default)]
     pub pipelined_durability: bool,
+    #[serde(default = "max_speculative_proposals")]
+    pub max_speculative_proposals: usize,
+    #[serde(default = "max_inflight_appends")]
+    pub max_inflight_appends: usize,
+    #[serde(default)]
+    pub combine_peer_proposals: bool,
+    #[serde(default)]
+    pub durable_completion_priority: bool,
+    #[serde(default)]
+    pub openraft_async_flush: bool,
+    #[serde(default)]
+    pub snapshot_interval_entries: u64,
+    #[serde(default = "application_checkpoint_bytes")]
+    pub application_checkpoint_bytes: u64,
+    #[serde(default = "wal_reclamation_bytes")]
+    pub wal_reclamation_bytes: u64,
 }
 fn peer_batch_size() -> usize {
     1
@@ -56,6 +72,18 @@ fn capacity() -> usize {
 }
 fn batch_size() -> usize {
     64
+}
+fn max_speculative_proposals() -> usize {
+    1
+}
+fn max_inflight_appends() -> usize {
+    8
+}
+fn application_checkpoint_bytes() -> u64 {
+    crate::model::DEFAULT_APPLICATION_JOURNAL_CHECKPOINT_BYTES
+}
+fn wal_reclamation_bytes() -> u64 {
+    64 * 1024 * 1024
 }
 impl Config {
     pub fn load() -> Result<Self> {
@@ -76,8 +104,22 @@ impl Config {
             || c.batch_size > 64
             || c.peer_batch_size == 0
             || c.peer_batch_size > 64
+            || c.max_speculative_proposals == 0
+            || c.max_speculative_proposals > 64
+            || c.max_inflight_appends == 0
+            || c.max_inflight_appends > 64
+            || (c.combine_peer_proposals && !c.pipelined_durability)
+            || (c.durable_completion_priority && !c.pipelined_durability)
+            || (c.durable_completion_priority && c.combine_peer_proposals)
+            || (c.snapshot_interval_entries > 0
+                && (!c.ordered_apply || !c.peer_message_stream || !c.pipelined_durability))
+            || c.snapshot_interval_entries > 1_000_000_000
+            || c.application_checkpoint_bytes == 0
+            || c.application_checkpoint_bytes > 1024 * 1024 * 1024
+            || c.wal_reclamation_bytes == 0
+            || c.wal_reclamation_bytes > 1024 * 1024 * 1024
         {
-            bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, batch size 1..64");
+            bail!("v1 requires voters 1,2,3, 20 ms ticks, capacity <= 65536, batch and inflight limits in 1..64, application checkpoint and WAL reclamation bytes in 1..1073741824, pipeline-only scheduling options, one mixed-input policy, and full pipeline mode for snapshot compaction");
         }
         if c.peers.get(&c.id) != Some(&c.peer) {
             bail!("own peer address does not match peers map");

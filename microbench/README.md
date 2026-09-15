@@ -1,7 +1,7 @@
 # In-memory benchmarks
 
 ```sh
-./raft-bench microbench --runs 3
+./raft-bench microbench --runs 7
 ./raft-bench microbench --mode rafter-only --rafter-ref <branch-or-SHA>
 ```
 

@@ -1,5 +1,6 @@
 //! Actor ordering tests use a controlled persistence completion and real peer framing.
 use super::*;
+use crate::apply_worker::ApplyWorker;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use tokio::{net::TcpListener, time::timeout};
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -105,6 +106,14 @@ fn state(engine: PendingEngine, outbound: OutboundPeers) -> State<PendingEngine>
             ordered_apply: false,
             peer_message_stream: true,
             pipelined_durability: false,
+            max_speculative_proposals: 1,
+            max_inflight_appends: 8,
+            combine_peer_proposals: false,
+            durable_completion_priority: false,
+            openraft_async_flush: false,
+            snapshot_interval_entries: 0,
+            application_checkpoint_bytes: 64 * 1024 * 1024,
+            wal_reclamation_bytes: 64 * 1024 * 1024,
         },
         name: "test",
         engine,
@@ -119,6 +128,16 @@ fn state(engine: PendingEngine, outbound: OutboundPeers) -> State<PendingEngine>
         peer_batches: 0,
         peer_events: 0,
         peer_batch_sizes: BTreeMap::new(),
+        prioritized_peer_batches: 0,
+        prioritized_peer_events: 0,
+        prioritized_client_inputs_bypassed: 0,
+        pre_persistence_client_completions: 0,
+        snapshot_compactions: 0,
+        snapshot_compaction_total_ns: 0,
+        snapshot_compaction_max_ns: 0,
+        snapshot_compaction_buckets_log2: vec![0; 64],
+        snapshot_payload_bytes: 0,
+        application_snapshots_installed: 0,
     }
 }
 fn engine() -> (PendingEngine, mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -252,4 +271,60 @@ fn an_apply_effect_cannot_escape_while_local_persistence_is_pending() {
     assert_eq!(recovered.index, 0);
     drop(recovered);
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn completion_priority_releases_older_durable_application_before_newer_raft_wait() {
+    let application_path = std::env::temp_dir().join(format!(
+        "priority-application-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let worker = ApplyWorker::start(
+        DurableModel::open(&application_path).unwrap(),
+        Diagnostics::default(),
+        || {},
+    );
+    let old = command();
+    worker
+        .try_submit(vec![Applied {
+            index: 1,
+            command: Some(old.clone()),
+            metadata: None,
+        }])
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while worker.applied_index() != 1 {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+
+    let (mut engine, entered, release) = engine();
+    engine.pending = true;
+    let mut state = state(engine, BTreeMap::new());
+    let owner_path = state.config.data_dir.clone();
+    state.config.ordered_apply = true;
+    state.config.pipelined_durability = true;
+    state.config.durable_completion_priority = true;
+    state.application = application::Application::Worker(worker);
+    let (reply, mut response) = oneshot::channel();
+    state.pending.insert(old.identity(), (old, vec![reply]));
+    state.pending_count = 1;
+    let (tx, rx) = mpsc::sync_channel(1);
+    tx.send(Input::Wake).unwrap();
+    let owner = std::thread::spawn(move || {
+        let result = state.run(rx);
+        (state, result)
+    });
+
+    entered.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(response.try_recv().unwrap().status, "ok");
+    release.send(()).unwrap();
+    drop(tx);
+    let (state, result) = owner.join().unwrap();
+    result.unwrap();
+    assert_eq!(state.pre_persistence_client_completions, 1);
+    drop(state);
+    std::fs::remove_file(owner_path).unwrap();
+    std::fs::remove_file(application_path).unwrap();
 }

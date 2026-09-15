@@ -1,5 +1,5 @@
 //! Independent bounded peer writers. Socket delivery is never Raft durability.
-use super::{write_frame, Rpc};
+use super::{prepare_peer_frame, release_oversized_peer_frame, Rpc};
 use crate::{diagnostics::Diagnostics, FRAME_LIMIT};
 use anyhow::{bail, Result};
 use std::{
@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
+    io::AsyncWriteExt,
     net::TcpStream,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
     time::timeout,
@@ -115,6 +116,7 @@ async fn run(
         address,
         from,
         stream: None,
+        frame: Vec::new(),
     };
     let mut connection_generation = 0;
     while let Some(packet) = rx.recv().await {
@@ -156,26 +158,26 @@ struct MessageConnection {
     address: String,
     from: u64,
     stream: Option<TcpStream>,
+    frame: Vec<u8>,
 }
 impl MessageConnection {
     async fn send(&mut self, bytes: &[u8]) -> Result<()> {
+        prepare_peer_frame(&mut self.frame, self.from, bytes)?;
         let result = timeout(MAX_AGE, async {
             if self.stream.is_none() {
                 let stream = TcpStream::connect(&self.address).await?;
                 stream.set_nodelay(true)?;
                 self.stream = Some(stream);
             }
-            let mut packet = Vec::with_capacity(8 + bytes.len());
-            packet.extend_from_slice(&self.from.to_be_bytes());
-            packet.extend_from_slice(bytes);
-            write_frame(self.stream.as_mut().unwrap(), &packet).await
+            self.stream.as_mut().unwrap().write_all(&self.frame).await
         })
         .await;
+        release_oversized_peer_frame(&mut self.frame);
         match result {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => {
                 self.stream = None;
-                Err(error)
+                Err(error.into())
             }
             Err(error) => {
                 self.stream = None;

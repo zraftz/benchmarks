@@ -7,10 +7,13 @@ impl<E: Engine> State<E> {
         if !self.engine.persistence_pending() {
             return Ok(());
         }
+        let blocked = self.diagnostics.start();
         let effects = self
             .engine
             .complete_persistence()?
             .ok_or_else(|| anyhow::anyhow!("pending Raft persistence produced no completion"))?;
+        self.diagnostics
+            .elapsed("owner_persistence_blocked_ns", blocked);
         if self.engine.persistence_pending() {
             bail!("Raft persistence completion did not release consensus ownership")
         }

@@ -21,23 +21,33 @@ class IntegrationTests(unittest.TestCase):
     def case(self,scenario,rate):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            options=SimpleNamespace(scenario=scenario,smoke=True,batch_size=64,duration=2.4,warmup=.1,
+            # Leave enough measured-load time for both controller transitions even
+            # when leader discovery contends with the load generator on a busy host.
+            options=SimpleNamespace(scenario=scenario,smoke=True,batch_size=64,duration=6.0,warmup=.1,
                 concurrency=4,payload=128,rate=rate,keyspace=32,seed=7,read_percent=20,cas_percent=10,timeout=1.5)
             run_case("test-fixture",root/"case",root/"data",options,
                 command=[sys.executable,str(ROOT/"tests/fake_node.py")],
                 build_receipt={"binaries": {"test-fixture": digest(Path(sys.executable))},
                     "implementations": {"test-fixture": {"purpose": "tooling test only"}}})
+            load_environment=json.loads((root/"case/load-environment.json").read_text())
+            self.assertEqual(load_environment["nominal_sample_interval_seconds"],1.0)
             check=verify(root/"case")
-            self.assertEqual(check["status"],"passed",check)
+            self.assertEqual(check["status"],"passed",{
+                "verification":check,"load_environment":load_environment})
             r=json.loads((root/"case/measurement.json").read_text())
             self.assertGreater(r["ok"],0)
-            self.assertEqual(r["schema"],2)
+            self.assertEqual(r["schema"],3)
             self.assertEqual(r["success_execution_histogram"]["count"],r["ok"])
             self.assertEqual(r["all_execution_histogram"]["count"],r["attempted"])
+            self.assertEqual(r["worker_start_lateness_histogram"]["count"],r["attempted"])
+            expected_dispatches = r["offered"] if rate > 0 else 0
+            self.assertEqual(r["scheduler_lateness_histogram"]["count"],expected_dispatches)
             self.assertEqual(r["offered"],r["attempted"]+r["not_issued"])
             m=json.loads((root/"case/manifest.json").read_text())
             self.assertEqual(m["implementation"],"test-fixture")
             self.assertTrue(m["smoke"])
+            self.assertEqual(load_environment["coverage"]["status"],"passed")
+            self.assertGreater(load_environment["summary"]["sample_count"],1)
             fault=json.loads((root/"case/fault.json").read_text())
             self.assertEqual(len(fault["events"]),0 if scenario=="durable-kv" else 2)
     def test_closed_loop_end_to_end(self):self.case("durable-kv",0)

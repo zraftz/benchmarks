@@ -89,7 +89,11 @@ def verify_report(directory: Path) -> None:
         for binary in run["execution_order"]:
             if binary not in provenance["binaries"]:
                 raise ValueError("unknown benchmark binary")
-            reports.append(json.loads((directory / f'run-{run["run"]}-{binary}.json').read_text()))
+            raw = json.loads((directory / f'run-{run["run"]}-{binary}.json').read_text())
+            if (raw.get("library", "").startswith("rafter")
+                    and raw.get("version") != provenance["rafter"]["rev"]):
+                raise ValueError("Rafter benchmark identity does not match selected provenance")
+            reports.append(raw)
         replay.append({**run, "results": reports})
     if report["results"] != summarize(replay) or report["runs"] != replay:
         raise ValueError("microbenchmark aggregate does not match raw reports")

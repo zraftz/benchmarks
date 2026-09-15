@@ -96,7 +96,7 @@ fn proposal() -> Vec<Input> {
 fn native_pipeline_fences_quorum_and_reopens_after_durable_application_completion() {
     let directory = Directory::new();
     let (leader, mut follower) = elected(&directory.0);
-    let mut pipeline = Pipeline::new(leader, true).unwrap();
+    let mut pipeline = Pipeline::new(leader, true, 1).unwrap();
     let replicated = pipeline.step(proposal()).unwrap();
     assert!(pipeline.node.ready_node().is_none());
     assert_eq!(pipeline.node.progress().accepted, LogIndex(2));
@@ -163,14 +163,77 @@ fn native_pipeline_fences_quorum_and_reopens_after_durable_application_completio
     assert_eq!(recovered.commit_index(), LogIndex(2));
     assert_eq!(recovered.last_log_index(), LogIndex(2));
 }
+
+fn combined_ack_and_proposal_share_one_synchronous_wal_step(peer_first: bool) {
+    let directory = Directory::new();
+    let (leader, mut follower) = elected(&directory.0);
+    let mut pipeline = Pipeline::new(leader, true, 8).unwrap();
+    let replicated = pipeline.step(proposal()).unwrap();
+    let response = follower
+        .step(Input::Message {
+            from: NodeId(1),
+            message: to(&replicated, 2),
+        })
+        .unwrap();
+    let ack = Input::Message {
+        from: NodeId(2),
+        message: to(&response, 1),
+    };
+    pipeline.complete().unwrap().unwrap();
+
+    let inputs = if peer_first {
+        vec![ack.clone(), ack, proposal_at(2)]
+    } else {
+        vec![proposal_at(2), ack.clone(), ack]
+    };
+    let outputs = pipeline.step(inputs).unwrap();
+
+    assert!(pipeline.node.ready_node().is_some());
+    assert!(!pipeline.node.persistence_pending());
+    assert_eq!(pipeline.node.progress().durable, LogIndex(3));
+    assert_eq!(pipeline.node.progress().committed, LogIndex(2));
+    assert!(outputs
+        .iter()
+        .any(|output| matches!(output, Output::Apply { index, .. } if *index == LogIndex(2))));
+    assert!(outputs
+        .iter()
+        .any(|output| matches!(output, Output::Send { .. })));
+    assert_eq!(pipeline.combined_peer_proposal_batches, 1);
+    assert_eq!(pipeline.combined_peer_first_batches, u64::from(peer_first));
+    assert_eq!(
+        pipeline.combined_proposal_first_batches,
+        u64::from(!peer_first)
+    );
+    assert_eq!(pipeline.combined_peer_events, 2);
+    assert_eq!(pipeline.combined_peer_proposals, 1);
+    assert_eq!(pipeline.synchronous_proposal_batches, 1);
+    assert_eq!(pipeline.synchronous_proposals, 1);
+    assert_eq!(pipeline.proposal_batch_sizes, BTreeMap::from([(1, 2)]));
+    drop(pipeline);
+    drop(follower);
+    let recovered = node(&directory.0, 1, LogIndex::ZERO);
+    assert_eq!(recovered.last_log_index(), LogIndex(3));
+    assert_eq!(recovered.commit_index(), LogIndex(2));
+}
+
+#[test]
+fn same_term_ack_then_ready_proposal_share_one_synchronous_wal_step() {
+    combined_ack_and_proposal_share_one_synchronous_wal_step(true);
+}
+
+#[test]
+fn ready_proposal_then_same_term_ack_share_one_synchronous_wal_step() {
+    combined_ack_and_proposal_share_one_synchronous_wal_step(false);
+}
+
 #[test]
 fn ready_multi_proposal_batch_uses_synchronous_group_commit() {
     let directory = Directory::new();
     let (leader, follower) = elected(&directory.0);
-    let mut pipeline = Pipeline::new(leader, true).unwrap();
+    let mut pipeline = Pipeline::new(leader, true, 1).unwrap();
     let outputs = pipeline.step(vec![proposal_at(1), proposal_at(2)]).unwrap();
     assert!(pipeline.node.ready_node().is_some());
-    assert!(pipeline.node.pending_operation().is_none());
+    assert!(!pipeline.node.persistence_pending());
     assert_eq!(pipeline.node.progress().accepted, LogIndex(3));
     assert_eq!(pipeline.node.progress().durable, LogIndex(3));
     assert!(outputs
@@ -187,12 +250,32 @@ fn ready_multi_proposal_batch_uses_synchronous_group_commit() {
     assert_eq!(recovered.commit_index(), LogIndex(1));
 }
 #[test]
+fn configured_multi_proposal_batch_uses_one_speculative_operation() {
+    let directory = Directory::new();
+    let (leader, follower) = elected(&directory.0);
+    let mut pipeline = Pipeline::new(leader, true, 2).unwrap();
+    let outputs = pipeline.step(vec![proposal_at(1), proposal_at(2)]).unwrap();
+    assert!(pipeline.node.ready_node().is_none());
+    assert!(pipeline.node.persistence_pending());
+    assert!(outputs
+        .iter()
+        .any(|output| matches!(output, Output::Send { .. })));
+    assert_eq!(pipeline.submitted, 1);
+    assert_eq!(pipeline.speculative_proposal_batches, 1);
+    assert_eq!(pipeline.speculative_proposals, 2);
+    assert_eq!(pipeline.proposal_batch_sizes, BTreeMap::from([(2, 1)]));
+    assert_eq!(pipeline.synchronous_proposal_batches, 0);
+    pipeline.complete().unwrap().unwrap();
+    drop(pipeline);
+    drop(follower);
+}
+#[test]
 fn shutdown_joins_outstanding_native_persistence_without_publishing_a_commit() {
     let directory = Directory::new();
     let (leader, follower) = elected(&directory.0);
-    let mut pipeline = Pipeline::new(leader, false).unwrap();
+    let mut pipeline = Pipeline::new(leader, false, 1).unwrap();
     pipeline.step(proposal()).unwrap();
-    assert!(pipeline.node.pending_operation().is_some());
+    assert!(pipeline.node.persistence_pending());
     // Drop joins the single worker; its unconsumed completion cannot release outputs.
     drop(pipeline);
     drop(follower);

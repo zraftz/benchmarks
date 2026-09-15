@@ -1,22 +1,94 @@
 //! Rafter native durable stores + shared client/transport/application embedding.
 mod diagnostics;
 mod driver;
+mod retirement;
 
 use anyhow::Result;
 use bench_common::{
     actor::{Actor, Effect, Engine},
-    model::{Applied, Command, DurableModel},
+    model::{ApplicationSnapshot, Applied, Command, DurableModel},
     net, Config,
 };
-use rafter::{Input, LogIndex, Message, NodeConfig, NodeId, Output, Role};
+use rafter::{
+    ApplicationSnapshotKind, ApplicationSnapshotMetadata, ApplicationSnapshotVersion, Input,
+    LogIndex, Message, NodeConfig, NodeId, Output, RaftSnapshot, RaftSnapshotMetadata, Role,
+    SnapshotChunkRequest, SnapshotChunkSource, SnapshotGroupId,
+};
+use rafter_storage::SnapshotRetention;
 mod storage;
-use storage::{Node, NodeStores, HARD_STATE_BACKEND};
+use storage::{Node, HARD_STATE_BACKEND};
 struct Rafter {
     node: driver::Driver,
+    node_id: NodeId,
+    snapshot_group: SnapshotGroupId,
     ordered_apply: bool,
+    retirement: retirement::Retirement,
     empty_appends: diagnostics::EmptyAppends,
+    replication_windows: diagnostics::ReplicationWindows,
 }
-fn effects(outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
+const APPLICATION_SNAPSHOT_KIND: &str = "raft-bench-durable-model";
+const APPLICATION_SNAPSHOT_VERSION: u16 = 1;
+const SNAPSHOT_CHUNK_BYTES: u64 = 64 * 1024;
+const MAX_APPLICATION_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
+
+struct BorrowedSnapshotPayload<'a> {
+    snapshot: &'a RaftSnapshot,
+    payload: &'a [u8],
+}
+
+impl SnapshotChunkSource for BorrowedSnapshotPayload<'_> {
+    fn snapshot_chunk(&self, request: SnapshotChunkRequest<'_>) -> Option<Vec<u8>> {
+        if request.transfer_id != self.snapshot.transfer_id()
+            || request.metadata != &self.snapshot.metadata
+            || request.total_payload_len != self.snapshot.application_payload_len
+            || request.application_payload_crc32 != self.snapshot.application_payload_crc32
+        {
+            return None;
+        }
+        let start = usize::try_from(request.offset).ok()?;
+        let end = start.checked_add(request.len as usize)?;
+        self.payload.get(start..end).map(Vec::from)
+    }
+}
+fn can_batch_same_term_append_responses(
+    role: Role,
+    term: rafter::Term,
+    peers: &[(NodeId, Message)],
+) -> bool {
+    role == Role::Leader
+        && peers.iter().all(|(_, message)| {
+            matches!(message, Message::AppendEntriesResponse(response) if response.term == term)
+        })
+}
+fn read_snapshot_payload(node: &Node, snapshot: &RaftSnapshot) -> Result<Vec<u8>> {
+    if snapshot.application_payload_len > MAX_APPLICATION_SNAPSHOT_BYTES {
+        anyhow::bail!("application snapshot exceeds benchmark adapter bound")
+    }
+    let mut payload = Vec::with_capacity(snapshot.application_payload_len as usize);
+    let mut offset = 0_u64;
+    while offset < snapshot.application_payload_len {
+        let len = (snapshot.application_payload_len - offset).min(SNAPSHOT_CHUNK_BYTES) as u32;
+        let chunk = node
+            .snapshot_store()
+            .snapshot_chunk(SnapshotChunkRequest {
+                transfer_id: snapshot.transfer_id(),
+                metadata: &snapshot.metadata,
+                total_payload_len: snapshot.application_payload_len,
+                application_payload_crc32: snapshot.application_payload_crc32,
+                offset,
+                len,
+            })
+            .ok_or_else(|| anyhow::anyhow!("promoted snapshot payload is unavailable"))?;
+        if chunk.len() != len as usize {
+            anyhow::bail!("snapshot source returned a short chunk")
+        }
+        payload.extend_from_slice(&chunk);
+        offset += u64::from(len);
+    }
+    Ok(payload)
+}
+
+fn effects(node: Option<&Node>, outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
     let mut result = Vec::new();
     for output in outputs {
         match output {
@@ -32,6 +104,24 @@ fn effects(outputs: Vec<Output>, ordered: bool) -> Result<Vec<Effect>> {
                     Some(serde_json::from_slice(payload.as_ref())?)
                 },
             }),
+            Output::ApplySnapshot { snapshot } => {
+                if snapshot.metadata.application.kind.as_str() != APPLICATION_SNAPSHOT_KIND
+                    || snapshot.metadata.application.version.get() != APPLICATION_SNAPSHOT_VERSION
+                {
+                    anyhow::bail!("unsupported application snapshot format")
+                }
+                let node = node.ok_or_else(|| {
+                    anyhow::anyhow!("snapshot application output escaped pending persistence")
+                })?;
+                let application =
+                    ApplicationSnapshot::decode(&read_snapshot_payload(node, &snapshot)?)?;
+                if application.applied_index != snapshot.metadata.last_included_index.0 {
+                    anyhow::bail!("application snapshot boundary differs from Raft metadata")
+                }
+                result.push(Effect::InstallSnapshot {
+                    snapshot: application,
+                });
+            }
             _ => {} // Static membership, no reads outside the log, no snapshot/compaction triggers.
         }
     }
@@ -43,6 +133,30 @@ type PeerGate = rafter_runtime::PeerBatchGate;
 type PeerGate = ();
 
 impl Rafter {
+    fn translate_outputs(&mut self, outputs: Vec<Output>) -> Result<Vec<Effect>> {
+        let installed_snapshot = outputs
+            .iter()
+            .any(|output| matches!(output, Output::ApplySnapshot { .. }));
+        let ready = (!self.node.pending()).then(|| self.node.ready());
+        let translated = effects(ready, outputs, self.ordered_apply)?;
+        if installed_snapshot {
+            if self.node.pending() {
+                anyhow::bail!("snapshot application output escaped pending persistence")
+            }
+            self.node
+                .ready_mut()
+                .prune_snapshot_files(SnapshotRetention::CurrentOnly)?;
+        }
+        Ok(translated)
+    }
+
+    fn observe_replication_windows(&mut self) {
+        if !self.replication_windows.enabled() {
+            return;
+        }
+        let windows = self.node.ready().leader_replication_windows();
+        self.replication_windows.observe(windows);
+    }
     fn drive(&mut self, inputs: Vec<Input>) -> Result<Vec<Effect>> {
         let origin = inputs
             .first()
@@ -56,7 +170,10 @@ impl Rafter {
         if let Some(origin) = origin {
             self.empty_appends.record(&outputs, origin, &progress);
         }
-        effects(outputs, self.ordered_apply)
+        if !self.node.pending() {
+            self.observe_replication_windows();
+        }
+        self.translate_outputs(outputs)
     }
 }
 impl Engine for Rafter {
@@ -64,10 +181,12 @@ impl Engine for Rafter {
         self.node.pending()
     }
     fn complete_persistence(&mut self) -> Result<Option<Vec<Effect>>> {
-        self.node
-            .complete()?
-            .map(|outputs| effects(outputs, self.ordered_apply))
-            .transpose()
+        let Some(outputs) = self.node.complete()? else {
+            return Ok(None);
+        };
+        let completed = self.translate_outputs(outputs)?;
+        self.observe_replication_windows();
+        Ok(Some(completed))
     }
     fn term(&self) -> u64 {
         self.node.current_term().0
@@ -79,9 +198,17 @@ impl Engine for Rafter {
         rafter_storage::telemetry::set_enabled(diagnostics);
         #[cfg(not(feature = "peer-group-commit"))]
         let _ = diagnostics;
+        self.observe_replication_windows();
     }
     fn decode_peer(&self, from: u64, data: &[u8]) -> Result<Self::Peer> {
         Ok((NodeId(from), rafter_codec::decode_message(data)?))
+    }
+    fn peer_queue_metric(peer: &Self::Peer) -> Option<&'static str> {
+        matches!(
+            peer.1,
+            Message::AppendEntriesResponse(_) | Message::InstallSnapshotResponse(_)
+        )
+        .then_some("owner_replication_ack_queue_ns")
     }
     fn peer_gate(&self, max_events: usize, max_bytes: usize) -> PeerGate {
         #[cfg(feature = "peer-group-commit")]
@@ -109,6 +236,53 @@ impl Engine for Rafter {
     }
     fn last_index(&self) -> u64 {
         self.node.ready().last_log_index().0
+    }
+    fn snapshot_compaction_supported(&self) -> bool {
+        true
+    }
+    fn snapshot_index(&self) -> u64 {
+        self.node.ready().snapshot_index().0
+    }
+    fn compact_snapshot(&mut self, applied_index: u64, payload: &[u8]) -> Result<()> {
+        if self.node.pending() {
+            anyhow::bail!("cannot compact while persistence owns the Raft node")
+        }
+        if payload.len() as u64 > MAX_APPLICATION_SNAPSHOT_BYTES {
+            anyhow::bail!("application snapshot exceeds benchmark adapter bound")
+        }
+        let node = self.node.ready_mut();
+        let applied = LogIndex(applied_index);
+        let term = node
+            .term_at_index(applied)
+            .ok_or_else(|| anyhow::anyhow!("snapshot boundary term is unavailable"))?;
+        let metadata = RaftSnapshotMetadata::new(
+            self.snapshot_group.clone(),
+            self.node_id,
+            applied,
+            term,
+            node.current_term(),
+            ApplicationSnapshotMetadata::new(
+                ApplicationSnapshotKind::new(APPLICATION_SNAPSHOT_KIND)?,
+                ApplicationSnapshotVersion::new(APPLICATION_SNAPSHOT_VERSION)?,
+            ),
+        )?;
+        let snapshot = RaftSnapshot::new(
+            metadata,
+            payload.len() as u64,
+            rafter_storage::crc32(payload),
+        );
+        let source = BorrowedSnapshotPayload {
+            snapshot: &snapshot,
+            payload,
+        };
+        let retired =
+            node.compact_log_with_streamed_snapshot_deferred_drop(snapshot.clone(), &source)?;
+        self.retirement.retire(retired);
+        self.node
+            .ready_mut()
+            .prune_snapshot_files(SnapshotRetention::CurrentOnly)?;
+        self.observe_replication_windows();
+        Ok(())
     }
     fn committed_entries(&self, after: u64, count: usize, bytes: usize) -> Result<Vec<Applied>> {
         #[cfg(feature = "ordered-apply")]
@@ -171,6 +345,57 @@ impl Engine for Rafter {
         )
     }
 
+    fn can_batch_proposals_with_peer(&self, peers: &[Self::Peer]) -> bool {
+        can_batch_same_term_append_responses(self.node.role(), self.node.current_term(), peers)
+    }
+
+    fn can_prioritize_peer_before_proposals(&self, peers: &[Self::Peer]) -> bool {
+        can_batch_same_term_append_responses(self.node.role(), self.node.current_term(), peers)
+    }
+
+    fn peer_batch_and_propose(
+        &mut self,
+        peers: Vec<Self::Peer>,
+        commands: Vec<Command>,
+    ) -> Result<Vec<Effect>> {
+        let mut inputs = peers
+            .into_iter()
+            .map(|(from, message)| Input::Message { from, message })
+            .collect::<Vec<_>>();
+        inputs.extend(
+            commands
+                .into_iter()
+                .map(|command| {
+                    Ok(Input::ClientProposal {
+                        payload: serde_json::to_vec(&command)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        self.drive(inputs)
+    }
+
+    fn propose_and_peer_batch(
+        &mut self,
+        commands: Vec<Command>,
+        peers: Vec<Self::Peer>,
+    ) -> Result<Vec<Effect>> {
+        let mut inputs = commands
+            .into_iter()
+            .map(|command| {
+                Ok(Input::ClientProposal {
+                    payload: serde_json::to_vec(&command)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        inputs.extend(
+            peers
+                .into_iter()
+                .map(|(from, message)| Input::Message { from, message }),
+        );
+        self.drive(inputs)
+    }
+
     fn propose(&mut self, commands: Vec<Command>) -> Result<Vec<Effect>> {
         let inputs = commands
             .iter()
@@ -200,7 +425,8 @@ impl Engine for Rafter {
         let persistence = serde_json::Value::Null;
         serde_json::json!({"term":self.node.current_term().0,
         "commit_index":self.node.ready().commit_index().0,"last_log_index":self.node.ready().last_log_index().0,
-        "empty_appends_by_reason":self.empty_appends.snapshot(),"persistence_pipeline":self.node.stats(),
+        "empty_appends_by_reason":self.empty_appends.snapshot(),"replication_windows":self.replication_windows.snapshot(),
+        "persistence_pipeline":self.node.stats(),"log_retirement":self.retirement.stats(),
         "persistence_diagnostics":persistence,"peer_group_commit_available":cfg!(feature = "peer-group-commit"),
         "storage":"rafter native file stores","hard_state_backend":HARD_STATE_BACKEND,"election_ticks":"50 + 7*(node_id-1)"})
     }
@@ -222,7 +448,7 @@ async fn main() -> Result<()> {
     let raft_dir = config.data_dir.join("raft");
     std::fs::create_dir_all(&raft_dir)?;
     std::fs::File::open(&config.data_dir)?.sync_all()?;
-    let (hard, log, snap) = NodeStores::open(&raft_dir)?.into_parts();
+    let (hard, log, snap) = storage::open(&raft_dir, config.wal_reclamation_bytes)?.into_parts();
     let peers = config
         .peers
         .keys()
@@ -230,7 +456,8 @@ async fn main() -> Result<()> {
         .filter(|&id| id != config.id)
         .map(NodeId)
         .collect();
-    let node_config = NodeConfig::new(NodeId(config.id), peers, 50 + 7 * (config.id - 1))?;
+    let node_config = NodeConfig::new(NodeId(config.id), peers, 50 + 7 * (config.id - 1))?
+        .with_max_inflight_appends(config.max_inflight_appends);
     let recovered = Node::recover_with_storage_and_snapshot_store_applied_through(
         node_config,
         hard,
@@ -239,16 +466,67 @@ async fn main() -> Result<()> {
         LogIndex(model.index),
     )?;
     let (node, outputs) = recovered.into_parts();
+    let snapshot_group = SnapshotGroupId::new(config.cluster.clone())?;
+    let driver = driver::Driver::new(
+        node,
+        config.pipelined_durability,
+        config.diagnostics,
+        config.max_speculative_proposals,
+    )?;
+    let retirement = retirement::Retirement::start(config.snapshot_interval_entries != 0)?;
+    let recovered_effects = effects(Some(driver.ready()), outputs, config.ordered_apply)?;
     let handler = Actor::start(
         config.clone(),
         "rafter",
         Rafter {
-            node: driver::Driver::new(node, config.pipelined_durability, config.diagnostics)?,
+            node: driver,
+            node_id: NodeId(config.id),
+            snapshot_group,
             ordered_apply: config.ordered_apply,
+            retirement,
             empty_appends: diagnostics::EmptyAppends::new(config.diagnostics),
+            replication_windows: diagnostics::ReplicationWindows::new(config.diagnostics),
         },
         model,
-        effects(outputs, config.ordered_apply)?,
+        recovered_effects,
     );
     net::serve(config, handler).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rafter::{AppendEntriesResponse, LogIndex, Term};
+
+    fn response(term: u64) -> (NodeId, Message) {
+        (
+            NodeId(2),
+            Message::AppendEntriesResponse(AppendEntriesResponse {
+                term: Term(term),
+                follower_id: NodeId(2),
+                success: true,
+                match_index: LogIndex(1),
+                sequence: 1,
+            }),
+        )
+    }
+
+    #[test]
+    fn only_same_term_leader_append_responses_admit_ready_proposals() {
+        assert!(can_batch_same_term_append_responses(
+            Role::Leader,
+            Term(3),
+            &[response(3)]
+        ));
+        assert!(!can_batch_same_term_append_responses(
+            Role::Follower,
+            Term(3),
+            &[response(3)]
+        ));
+        assert!(!can_batch_same_term_append_responses(
+            Role::Leader,
+            Term(3),
+            &[response(4)]
+        ));
+    }
 }
