@@ -181,19 +181,27 @@ jobs:
           from pathlib import Path
           Path('results/request.json').write_text(json.dumps({key: os.environ[key] for key in ('RAFTER_REF', 'RAFTER_HARD_STATE', 'SUITE', 'SCENARIO', 'PRIOR_REF', 'PRIOR_HARD_STATE', 'PRIOR_MODE', 'CANDIDATE_MODE', 'PRIOR_BATCH', 'CANDIDATE_BATCHES', 'PRIOR_SPECULATIVE', 'CANDIDATE_SPECULATIVE', 'PRIOR_INFLIGHT', 'CANDIDATE_INFLIGHT', 'PRIOR_COMBINE', 'CANDIDATE_COMBINE', 'PRIOR_COMPLETION_PRIORITY', 'CANDIDATE_COMPLETION_PRIORITY', 'PAIRED_RATES', 'PAIRED_DIAGNOSTIC_RATES', 'SNAPSHOT_INTERVALS', 'NETWORK_DELAYS', 'OPENRAFT_CONTROLS', 'HEADLINE_OPENRAFT_CONTROL', 'GITHUB_SHA')}, indent=2))
           PY
-          if [[ -n "$RAFTER_REF" && "$SUITE" != reclamation ]]; then
+          if [[ -n "$RAFTER_REF" && -z "$PRIOR_REF" && "$SUITE" != reclamation ]]; then
             ./raft-bench select-rafter "$RAFTER_REF" 2>&1 | tee results/selection.log
           fi
           cp implementations.lock.json results/implementations.lock.json
           python3 - <<'PY'
           import json, os
+          from pathlib import Path
+          from benchctl.selection import resolve_ref
           with open('implementations.lock.json') as stream:
               pin = json.load(stream)['rafter']
-          requested = os.environ['RAFTER_REF'].strip().lower()
+          requested = os.environ['RAFTER_REF'].strip()
+          paired = bool(os.environ['PRIOR_REF'].strip())
           reclamation = os.environ['SUITE'] == 'reclamation'
-          revision = requested if reclamation and requested else pin['rev']
+          if paired and requested:
+              revision = resolve_ref(requested, Path('.cache/rafter-refs.git'))
+          elif reclamation and requested:
+              revision = requested.lower()
+          else:
+              revision = pin['rev']
           if len(revision) != 40 or any(character not in '0123456789abcdef' for character in revision):
-              raise SystemExit('the reclamation suite requires an exact 40-character Rafter SHA')
+              raise SystemExit('the selected Rafter revision must be an exact 40-character SHA')
           hard_state = 'wal' if reclamation else os.environ['RAFTER_HARD_STATE']
           with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
               stream.write(f"revision={revision}\n")

@@ -21,6 +21,19 @@ class PairedTests(unittest.TestCase):
         ).read_text()
         self.assertIn('--benchmark-sha "$GITHUB_SHA"', workflow)
 
+    def test_hosted_paired_run_resolves_candidate_without_dirtying_checkout(self):
+        workflow = (
+            Path(__file__).parents[1] / ".github/workflows/baseline.yml"
+        ).read_text()
+        self.assertIn(
+            'if [[ -n "$RAFTER_REF" && -z "$PRIOR_REF" && "$SUITE" != reclamation ]]',
+            workflow,
+        )
+        self.assertIn(
+            "revision = resolve_ref(requested, Path('.cache/rafter-refs.git'))",
+            workflow,
+        )
+
     def test_hosted_reclamation_run_is_same_code_and_bound_to_workflow_sha(self):
         workflow = (
             Path(__file__).parents[1] / ".github/workflows/baseline.yml"
