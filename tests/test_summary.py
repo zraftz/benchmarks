@@ -294,6 +294,13 @@ def write_wal_reclamation(root):
 
 
 class SummaryTests(unittest.TestCase):
+    def test_markdown_has_no_trailing_whitespace(self):
+        rendered = render_markdown(build_summary(durable=durable_data()), {})
+        self.assertEqual(
+            rendered.splitlines(),
+            [line.rstrip() for line in rendered.splitlines()],
+        )
+
     def test_volatile_filesystem_space_does_not_split_repetitions(self):
         manifest = {
             "topology": "three processes on one host",

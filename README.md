@@ -1,8 +1,13 @@
 # Raft benchmarks
 
-Current qualified evidence: [one-minute summary](reports/qualified-34904893568-wal-34907033422/summary.md) ·
-[static HTML](reports/qualified-34904893568-wal-34907033422/report.html) ·
-[normalized JSON](reports/qualified-34904893568-wal-34907033422/summary.json)
+Current qualified durable-service evidence: [one-minute summary](reports/qualified-35386922113/summary.md) ·
+[static HTML](reports/qualified-35386922113/report.html) ·
+[normalized JSON](reports/qualified-35386922113/summary.json)
+
+That report retains benchmark source `ff5c1253dcae6734b080731ddbea41c7e8818cdd`
+and Rafter `88d43848e460187cfb80a15a28c3ef855b20595b` exactly as measured.
+Benchmark commit `8ee6e2c1f6f396f9b1212ba7aae8a0f7a0a3bad7` has the same Git tree as
+the recorded benchmark source; the archived report does not relabel the run.
 
 Qualified in-memory evidence: [summary](reports/qualified-in-memory-34654362991/summary.md) ·
 [HTML](reports/qualified-in-memory-34654362991/report.html) ·

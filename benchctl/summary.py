@@ -1233,7 +1233,7 @@ def render_markdown(summary: dict, evidence: dict) -> str:
                       "| ---: | ---: | ---: | ---: |"]
             for row in section["rows"]:
                 lines.append(f"| {row['network_delay_ms']} ms | **{_fmt_ops(row['rafter_throughput_ops_s'])} writes/s** | "
-                             f"{_fmt_ops(row['openraft_throughput_ops_s'])} writes/s | **{row['throughput_ratio']:.2f}×** | "
+                             f"{_fmt_ops(row['openraft_throughput_ops_s'])} writes/s | **{row['throughput_ratio']:.2f}×** |"
                              )
             lines += ["", "| Added egress | Offered rate | Rafter p99 | OpenRaft p99 | Rafter p99.9 | OpenRaft p99.9 |",
                       "| ---: | ---: | ---: | ---: | ---: | ---: |"]
