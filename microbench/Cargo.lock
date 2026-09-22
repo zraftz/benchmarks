@@ -1007,12 +1007,12 @@ dependencies = [
 [[package]]
 name = "rafter"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 
 [[package]]
 name = "rafter-app"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 dependencies = [
  "rafter",
  "rafter-runtime-api",
@@ -1021,7 +1021,7 @@ dependencies = [
 [[package]]
 name = "rafter-codec"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 dependencies = [
  "rafter",
  "rafter-crc32",
@@ -1030,12 +1030,12 @@ dependencies = [
 [[package]]
 name = "rafter-crc32"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 
 [[package]]
 name = "rafter-multiraft"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 dependencies = [
  "rafter-app",
  "rafter-runtime-api",
@@ -1044,7 +1044,7 @@ dependencies = [
 [[package]]
 name = "rafter-runtime"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 dependencies = [
  "rafter",
  "rafter-runtime-api",
@@ -1054,7 +1054,7 @@ dependencies = [
 [[package]]
 name = "rafter-runtime-api"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 dependencies = [
  "rafter",
 ]
@@ -1062,7 +1062,7 @@ dependencies = [
 [[package]]
 name = "rafter-service"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 dependencies = [
  "rafter",
  "rafter-app",
@@ -1072,7 +1072,7 @@ dependencies = [
 [[package]]
 name = "rafter-storage"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 dependencies = [
  "fs4",
  "rafter",
@@ -1082,7 +1082,7 @@ dependencies = [
 [[package]]
 name = "rafter-transport-tls"
 version = "0.0.2-alpha.1"
-source = "git+https://github.com/zsumz/rafter?rev=88d43848e460187cfb80a15a28c3ef855b20595b#88d43848e460187cfb80a15a28c3ef855b20595b"
+source = "git+https://github.com/zsumz/rafter?rev=021f4f9bb2f6960cb75b24f5a627f1872a12d430#021f4f9bb2f6960cb75b24f5a627f1872a12d430"
 dependencies = [
  "fs4",
  "rafter",
